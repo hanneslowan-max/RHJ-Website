@@ -435,12 +435,15 @@
     <div class="layar-mark">PT Roda Hammerindo Jaya</div>
     <h1>Belum tersambung<br>ke database</h1>
     <p>Aplikasi ini butuh satu kali setup Supabase. Buka <code>PANDUAN-SETUP.md</code> yang
-       disertakan bersama berkas ini, lalu isi dua baris di blok <code>CONFIG</code>
-       pada bagian atas <code>&lt;script&gt;</code> berkas ini:</p>
+       disertakan bersama berkas ini, lalu isi blok <code>SITUS</code> pada bagian atas
+       <code>&lt;script&gt;</code> berkas ini — satu baris per alamat:</p>
     <ol>
-      <li><code>SUPABASE_URL</code> — alamat project Anda</li>
-      <li><code>SUPABASE_KEY</code> — kunci <code>publishable</code></li>
+      <li><code>url</code> — alamat project Supabase, mis. <code>https://abcdefghijk.supabase.co</code></li>
+      <li><code>key</code> — kunci <code>publishable</code> project itu</li>
     </ol>
+    <p>Kalau alamat yang Anda buka sekarang belum terdaftar di blok <code>SITUS</code>,
+       layar inilah yang muncul. Tambahkan barisnya, atau isi <code>CONFIG</code> di bawahnya
+       kalau memang cuma dipakai di satu alamat.</p>
     <p style="margin-top:18px">Selama dua baris itu kosong, aplikasi tidak menampilkan data apa pun
        — tidak ada contoh, tidak ada angka karangan.</p>
   </div>
@@ -550,12 +553,47 @@
    Langkahnya ada di PANDUAN-SETUP.md.
    ═══════════════════════════════════════════════════════════════════════ */
 const CONFIG = {
-  SUPABASE_URL: "https://hyjiuefqnsrofpebaydt.supabase.co",     
-  SUPABASE_KEY: "sb_publishable_7bF4OffT81tgonwbIMYGMA_MAtg0q_m",    // kunci publishable (sb_publishable_...). Aman ditaruh di sini:
+  SUPABASE_URL: "",     // contoh: "https://abcdefghijk.supabase.co"
+  SUPABASE_KEY: "",     // kunci publishable (sb_publishable_...). Aman ditaruh di sini:
                         // yang menjaga data adalah Row Level Security di database,
                         // bukan kerahasiaan kunci ini.
   TARGET_HARI_BAYAR: 10 // dipakai untuk peringatan "barang tiba tapi belum dibayar"
 };
+
+/* ═══════════════════════════════════════════════════════════════════════
+   SITUS — satu berkas, dua alamat.
+
+   Sejak ada dev dan produksi, mengisi CONFIG tangan tiap kali unggah itu
+   undangan buat celaka: berkas yang sama dipakai dua tempat, dan kalau
+   keliru, aplikasinya tetap jalan normal — cuma mengubah database yang
+   salah. Jadi alamatnya yang menentukan, bukan ingatan.
+
+   Isi sekali, commit, dan berkas ini bisa dipakai di dev maupun produksi
+   tanpa diedit lagi. Merge dev → main pun tidak bisa menimpa config
+   produksi, karena config-nya memang sama di dua-duanya.
+
+   Kunci publishable aman ditulis di sini — memang dirancang untuk terlihat.
+   Yang menjaga data adalah Row Level Security di database.
+   ═══════════════════════════════════════════════════════════════════════ */
+const SITUS = {
+  // PRODUKSI — nilai ini disalin dari index.html Anda yang sekarang.
+  // Cocokkan sekali dengan berkas lama sebelum diunggah.
+  "admin.palletmeshindonesia.com": {
+    url: "https://hyjiuefqnsrofpebaydt.supabase.co",
+    key: "sb_publishable_7bF4OffT81tgonwbIMYGMA_MAtg0q_m"
+  },
+  // DEV — biarkan kosong sampai domain dev-nya benar-benar dibuat.
+  // Selama kosong, alamat dev akan menampilkan layar setup, BUKAN
+  // diam-diam menyambung ke database produksi.
+  "dev.palletmeshindonesia.com": 
+  { url: "https://eesdtbcualkdawhykchj.supabase.co", 
+    key: "sb_publishable_fzNCswmuARH7pISUVl5-yg_aeJwTA8u" 
+  }
+};
+(function(){
+  var s = SITUS[String(location.hostname || "").toLowerCase()];
+  if (s && s.url && s.key) { CONFIG.SUPABASE_URL = s.url; CONFIG.SUPABASE_KEY = s.key; }
+})();
 
 /* ═══════════════════════════════════════════════════════════════════════
    Di bawah ini tidak perlu diubah.
@@ -890,7 +928,7 @@ function muatSemua(){
   /* Kolom disebut satu per satu, bukan select=*. `catatan` bebas isi dan
      bisa saja suatu hari memuat harga beli atau nama pabrik — sementara
      tabel ini boleh dibaca sales. Yang tidak diminta tidak bisa bocor. */
-  minta("produk", "/products?select=id,id_lama,kode,brand,kelompok,fungsi,satuan,"
+  minta("produk", "/products?select=id,id_lama,kode,brand,kelompok,fungsi,satuan,bahan,"
                 + "diameter_mm,hal_katalog,yakin,sumber_barang,aktif"
                 + "&order=brand.asc,kode.asc");
   minta("harga",  "/price_list?select=*&order=berlaku_dari.desc");
@@ -973,6 +1011,15 @@ var UKURAN_BAKU = [[25,'1" (25mm)'],[32,'1¼" (32mm)'],[38,'1½" (38mm)'],[40,'1
 var URUT_UKURAN = ['1" (25mm)','1¼" (32mm)','1½" (38mm)','2" (50mm)','2½" (65mm)','3" (75mm)',
   '4" (100mm)','5" (125mm)','6" (150mm)','8" (200mm)','10" (250mm)','12" (300mm)'];
 
+/* Angka mm → label ember baku yang sama dengan hasil pembacaan kode, supaya
+   ukuran yang diisi tangan dan yang dibaca otomatis jatuh di ember yang sama. */
+function labelUkuran(mm){
+  if (!isFinite(mm) || mm <= 0) return null;
+  var pilih = null, jarak = 1e9;
+  UKURAN_BAKU.forEach(function(u){ var d = Math.abs(u[0] - mm); if (d < jarak) { jarak = d; pilih = u; } });
+  return jarak <= 7 ? pilih[1] : (Math.round(mm) + "mm");
+}
+
 function ukuranProduk(kode, kelompok){
   var s = String(kode || "") + " " + String(kelompok || ""), m, mm = null;
   if ((m = s.match(/(\d+(?:[.,]\d+)?)\s*"/)) || (m = s.match(/(\d+(?:[.,]\d+)?)\s*inch/i)))
@@ -1015,14 +1062,22 @@ function daftarUkuran(){  return urutEmber(nilaiUnik(function(p){ return p._ukur
 /* Bracket, bahan, dan ukuran ditaruh dalam SATU kolom, bukan tiga.
    Tiga kolom terpisah membuat tabel jadi 1728px — HPP, Margin, dan Status
    terdorong ke luar layar bahkan di monitor 1920, dan justru itu kolom yang
-   paling dilihat owner. Fungsi ditulis tegas karena tersimpan di database;
-   bahan dan ukuran redup karena diturunkan dari nama kode. */
+   paling dilihat owner.
+
+   Yang TERSIMPAN di database ditulis tegas, yang cuma dibaca dari kode
+   produk ditulis redup. Bedanya sekarang kelihatan karena bahan dan ukuran
+   sudah bisa diisi tangan — jadi sekilas ketahuan mana yang sudah dipastikan
+   orang dan mana yang masih tebakan aplikasi. */
 function spekProduk(p){
   var a = p.fungsi ? esc(p.fungsi) : '<span class="muted">—</span>';
-  var b = (p._bahan  && p._bahan.charAt(0)  !== "\u2014") ? esc(p._bahan)  : null;
-  var c = (p._ukuran && p._ukuran.charAt(0) !== "\u2014") ? esc(p._ukuran) : null;
-  var sisa = [b, c].filter(Boolean).join(" \u00b7 ");
-  return a + (sisa ? '<br><span class="muted" style="font-size:11.5px">' + sisa + '</span>' : '');
+  var adaBahan  = p._bahan  && p._bahan.charAt(0)  !== "\u2014";
+  var adaUkuran = p._ukuran && p._ukuran.charAt(0) !== "\u2014";
+  var sisa = [];
+  if (adaBahan)  sisa.push(p.bahan ? '<b style="font-weight:600">' + esc(p._bahan) + '</b>' : esc(p._bahan));
+  if (adaUkuran) sisa.push((p.diameter_mm !== null && p.diameter_mm !== undefined && p.diameter_mm !== "")
+                             ? '<b style="font-weight:600">' + esc(p._ukuran) + '</b>' : esc(p._ukuran));
+  return a + (sisa.length ? '<br><span class="muted" style="font-size:11.5px">'
+                            + sisa.join(" \u00b7 ") + '</span>' : '');
 }
 
 /* Ember sisa ditampilkan redup supaya jelas itu bukan data, tapi tetap
@@ -1164,8 +1219,13 @@ function hitungProduk(){
     p._margin     = (p._harga && p._hpp) ? p._harga / p._hpp : null;
     p._gm         = (p._harga && p._hpp) ? (p._harga - p._hpp) / p._harga * 100 : null;
     p._bracket = p.fungsi || TAK_DIISI;
-    p._bahan   = bahanProduk(p.kode, p.kelompok)  || TAK_TERBACA;
-    p._ukuran  = ukuranProduk(p.kode, p.kelompok) || TAK_TERBACA;
+    /* Kolom bahan dan diameter_mm itu PENIMPA: kalau diisi tangan, itu yang
+       dipakai; kalau kosong, dibaca dari kode produk seperti selama ini.
+       Jadi 645 produk yang sudah kebaca sendiri tidak perlu diisi apa-apa. */
+    p._bahan   = p.bahan || bahanProduk(p.kode, p.kelompok) || TAK_TERBACA;
+    p._ukuran  = (p.diameter_mm !== null && p.diameter_mm !== undefined && p.diameter_mm !== ""
+                    ? labelUkuran(Number(p.diameter_mm))
+                    : ukuranProduk(p.kode, p.kelompok)) || TAK_TERBACA;
     p._cari = (p.kode + " " + (p.brand||"") + " " + (p.kelompok||"") + " " + (p.fungsi||"") + " " +
                p._bahan + " " + p._ukuran + " " +
                p._kodePabrik.map(function(k){ return k.kode_pabrik; }).join(" ")).toLowerCase().replace(/["”]/g,"");
@@ -2545,9 +2605,13 @@ function panelHarga(){
   var berharga = hasil.filter(function(p){ return p._harga !== null; });
   var total = berharga.reduce(function(a,p){ return a + p._harga; }, 0);
 
+  /* Dua tombol massal duduk di sini, bukan di tab Produk: finance boleh
+     mengubah HPP tapi tidak punya tab Produk sama sekali. Di halaman ini
+     harga jual dan HPP dua-duanya kelihatan, jadi memang tempatnya. */
   $("head-aksi").innerHTML =
       '<button class="btn" id="btn-pl-customer" type="button">Buat untuk customer</button>'
-    + (bolehUbahHarga() ? '<button class="btn utama" id="btn-harga-massal" type="button">Ubah harga</button>' : '');
+    + (bolehUbahHpp()   ? '<button class="btn" id="btn-hpp-massal" type="button">Ubah HPP massal</button>' : '')
+    + (bolehUbahHarga() ? '<button class="btn utama" id="btn-harga-massal" type="button">Ubah harga massal</button>' : '');
   var h = '';
 
   /* Tile menggambarkan SELURUH katalog, bukan hasil saringan — jumlah hasil
@@ -2638,7 +2702,8 @@ function panelHarga(){
   pasangSaringUmum("harga", "harga", panelHarga);
   $("s-harga").addEventListener("change", function(e){ saring.harga.st = e.target.value; panelHarga(); });
   $("btn-pl-customer").addEventListener("click", formPriceListCustomer);
-  if (bolehUbahHarga()) $("btn-harga-massal").addEventListener("click", function(){ formHargaMassal(); });
+  if (bolehUbahHarga()) $("btn-harga-massal").addEventListener("click", function(){ formEditMassal("harga"); });
+  if (bolehUbahHpp())   $("btn-hpp-massal").addEventListener("click", function(){ formEditMassal("hpp"); });
   if (bolehUbahHarga() || bolehUbahHpp())
     Array.prototype.forEach.call($("p-harga").querySelectorAll("tr[data-produk]"), function(tr){
       var buka = function(){ formHargaHpp(PRODUK.filter(function(p){ return p.id == tr.dataset.produk; })[0]); };
@@ -2718,74 +2783,483 @@ function simpanHargaHpp(p){
 }
 
 /* ubah harga banyak produk sekaligus, berdasarkan saringan yang sedang aktif */
-function formHargaMassal(){
-  var hasil = saringHarga().filter(function(p){ return p._harga !== null; });
+/* ════════════════════════════════════════════════════════════════════
+   EDIT MASSAL — harga jual, HPP, dan empat kolom keterangan produk
+
+   Kumpulan kerjanya = hasil saringan yang sedang tampil. Saring dulu
+   sampai isinya benar, baru dikerjakan sekaligus.
+
+   Nilai barunya TIDAK dihitung di sini. Aplikasi cuma mengirim aturannya
+   dan database yang menghitung — pratinjau maupun penyimpanan memakai
+   fungsi yang sama, jadi tidak mungkin yang tersimpan berbeda dari yang
+   diperlihatkan.
+
+   Dua jalur, karena bentuk datanya memang beda:
+     harga & HPP  → tabel riwayat; batalkan = hapus baris yang ditambahkan
+     empat kolom  → ditimpa di tempat; nilai lamanya disimpan supaya bisa
+                    dikembalikan, dan yang sudah diubah orang lain sesudah
+                    itu tidak ikut ditarik balik
+   ════════════════════════════════════════════════════════════════════ */
+var BRACKET_SAH = ["Hidup / Swivel","Mati / Rigid","Rem / Brake"];
+var BAHAN_SAH   = ["CB","Karet","Nylon","Polyurethane"];
+
+var JENIS_MASSAL = [
+  {v:"harga",    l:"Harga jual",       num:true },
+  {v:"hpp",      l:"HPP",              num:true },
+  {v:"kelompok", l:"Kelompok / seri",  num:false},
+  {v:"bracket",  l:"Bracket",          num:false},
+  {v:"bahan",    l:"Bahan roda",       num:false},
+  {v:"ukuran",   l:"Ukuran roda",      num:false}
+];
+var CARA_ANGKA = [
+  {v:"persen", l:"Naik / turun sekian persen"},
+  {v:"rupiah", l:"Naik / turun sekian rupiah"},
+  {v:"tetap",  l:"Jadikan satu nilai yang sama"},
+  {v:"tempel", l:"Tempel dari Excel (kode + nilai)"}
+];
+var CARA_KOLOM = [
+  {v:"tetap",     l:"Jadikan satu nilai yang sama"},
+  {v:"auto",      l:"Isi otomatis dari kode produk"},
+  {v:"tempel",    l:"Tempel dari Excel (kode + nilai)"},
+  {v:"kosongkan", l:"Kosongkan"}
+];
+var BULAT_MASSAL = [{v:"0",l:"tidak dibulatkan"},{v:"100",l:"kelipatan Rp100"},
+  {v:"500",l:"kelipatan Rp500"},{v:"1000",l:"kelipatan Rp1.000"},{v:"10000",l:"kelipatan Rp10.000"}];
+var TANDA_MASSAL = {
+  ok:          {l:"berubah",        k:"p-lunas"},
+  baru:        {l:"nilai pertama",  k:"p-jalan"},
+  isi:         {l:"diisi",          k:"p-lunas"},
+  timpa:       {l:"ditimpa",        k:"p-sebagian"},
+  sama:        {l:"sudah segitu",   k:"p-none"},
+  lonjakan:    {l:"lonjakan",       k:"p-sebagian"},
+  di_bawah_hpp:{l:"di bawah HPP",   k:"p-belum"},
+  tak_sah:     {l:"nilai tak sah",  k:"p-belum"},
+  lewat:       {l:"dilewati",       k:"p-none"}
+};
+
+function jenisAngka(j){ return ["harga","hpp"].indexOf(j) > -1; }
+function bolehMassal(jenis){
+  if (jenis === "harga") return bolehUbahHarga();
+  if (jenis === "hpp")   return bolehUbahHpp();
+  return bolehUbahProduk();
+}
+function jenisMassalSaya(){ return JENIS_MASSAL.filter(function(j){ return bolehMassal(j.v); }); }
+
+/* nilai yang bisa dibaca dari kode produk — dipakai "Isi otomatis" */
+function nilaiOtomatis(jenis, p){
+  if (jenis === "bahan")  return bahanProduk(p.kode, p.kelompok);
+  if (jenis === "ukuran") {
+    var u = ukuranProduk(p.kode, p.kelompok);
+    if (!u) return null;
+    var m = String(u).match(/(\d+)\s*mm/i);
+    return m ? m[1] : null;
+  }
+  return null;
+}
+function nilaiTersimpan(jenis, p){
+  if (jenis === "kelompok") return p.kelompok;
+  if (jenis === "bracket")  return p.fungsi;
+  if (jenis === "bahan")    return p.bahan;
+  if (jenis === "ukuran")   return (p.diameter_mm === null || p.diameter_mm === undefined || p.diameter_mm === "")
+                                    ? null : String(Number(p.diameter_mm));
+  return null;
+}
+
+function formEditMassal(jenis, daftar){
+  var pilihanJenis = jenisMassalSaya();
+  if (!pilihanJenis.length) return;
+  if (!bolehMassal(jenis)) jenis = pilihanJenis[0].v;
+  var f = tabAktif === "produk" ? saring.produk : saring.harga;
+  var hasil = daftar || (tabAktif === "produk" ? saringProduk() : saringHarga());
+  var ids = hasil.map(function(p){ return p.id; });
+  var pratinjauTerakhir = null;
+
+  var rincian = [];
+  if (f.brand   && f.brand   !== "SEMUA") rincian.push("merek <b>"+esc(f.brand)+"</b>");
+  if (f.kel     && f.kel     !== "SEMUA") rincian.push("kelompok <b>"+esc(f.kel)+"</b>");
+  if (f.bracket && f.bracket !== "SEMUA") rincian.push("bracket <b>"+esc(f.bracket)+"</b>");
+  if (f.bahan   && f.bahan   !== "SEMUA") rincian.push("bahan <b>"+esc(f.bahan)+"</b>");
+  if (f.uk      && f.uk      !== "SEMUA") rincian.push("ukuran <b>"+esc(f.uk)+"</b>");
+  if (f.q) rincian.push('cocok dengan "<b>'+esc(f.q)+'</b>"');
+
   var h = '<fieldset><legend>Yang akan diubah</legend>'
-    + '<p style="margin:4px 0 0;font-size:13.5px;color:var(--ink-soft)"><b>'+hasil.length+' produk</b> '
-    + 'yang sedang tampil di layar dan sudah punya harga'
-    + (saring.harga.brand !== "SEMUA" ? ' · merek <b>'+esc(saring.harga.brand)+'</b>' : '')
-    + (saring.harga.q ? ' · cocok dengan "'+esc(saring.harga.q)+'"' : '') + '.</p>'
-    + '<span class="bantu" style="display:block;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)">'
-    + 'Persempit dulu saringannya di halaman kalau yang mau diubah cuma sebagian.</span></fieldset>';
+    + '<p style="margin:4px 0 0;font-size:13.5px"><b>'+hasil.length.toLocaleString("id-ID")+' produk</b> '
+    + 'yang sedang tampil di layar'
+    + (rincian.length ? ' — ' + rincian.join(" · ") : ' (seluruh katalog, tanpa saringan)') + '.</p>'
+    + '<span class="bantu" style="display:block;margin-top:6px">Persempit dulu saringannya di halaman '
+    + 'kalau yang mau diubah cuma sebagian. Tutup laci ini, saring, lalu buka lagi.</span>'
+    + '<div style="margin-top:12px">' + field({nama:"jenis", label:"Kolom yang diubah", jenis:"select",
+        pilihan:pilihanJenis.map(function(j){ return {v:j.v, l:j.l}; }), nilai:jenis}) + '</div>'
+    + '</fieldset>';
+
   h += '<fieldset><legend>Perubahan</legend>'
-    + field({nama:"cara", label:"Cara", jenis:"select", pilihan:[
-        {v:"persen", l:"Naik / turun sekian persen"}, {v:"rupiah", l:"Naik / turun sekian rupiah"}]})
-    + '<div class="baris">'
-    + field({nama:"besar", label:"Besarnya", jenis:"angka", tempel:"5  (boleh minus)"})
-    + field({nama:"bulat", label:"Bulatkan ke atas", jenis:"select", pilihan:[
-        {v:"100", l:"kelipatan Rp100"}, {v:"500", l:"kelipatan Rp500"},
-        {v:"1000", l:"kelipatan Rp1.000"}, {v:"0", l:"tidak dibulatkan"}]})
+    + '<div id="kotak-cara"></div>'
+    + '<div id="kotak-nilai"></div>'
+    + '<label class="f" id="kotak-tempel" hidden><span>Tempel dari Excel</span>'
+    +   '<textarea id="f_tempel" rows="6"></textarea>'
+    +   '<span class="bantu" id="b_tempel">Dua kolom: kode internal lalu nilainya. Salin langsung '
+    +   'dari Excel — pemisahnya tab. Kode yang tidak dikenal dilaporkan, tidak diam-diam dilewati.</span></label>'
+    + '<div class="baris" id="kotak-tanggal">'
+    +   field({nama:"mulai", label:"Berlaku dari", jenis:"date", nilai:hariIni(),
+              bantu:"Tidak boleh mundur — riwayat yang sudah lewat tidak disisipi."})
+    +   field({nama:"sumber", label:"Sumber HPP", tempel:"mis. perkiraan, beli lokal"})
     + '</div>'
-    + field({nama:"mulai", label:"Berlaku dari", jenis:"date", nilai:hariIni()})
     + field({nama:"catat", label:"Catatan", tempel:"mis. penyesuaian kurs September"})
-    + '<div id="pratinjau"></div></fieldset>';
+    + '</fieldset>';
+
+  h += '<fieldset id="kotak-pratinjau"><legend>Pratinjau</legend>'
+    + '<p class="bantu" id="pratinjau-kosong" style="margin:2px 0 0">Belum dihitung. '
+    + 'Tekan <b>Lihat pratinjau</b> — perhitungannya dilakukan database, jadi yang tampil '
+    + 'di sini persis yang akan tersimpan.</p>'
+    + '<div id="hasil-pratinjau"></div></fieldset>';
+
+  h += '<fieldset><legend>Riwayat edit massal</legend><div id="riwayat-massal">'
+    + '<p class="bantu" style="margin:2px 0 0">Memuat…</p></div></fieldset>';
+
   $("laci-form").innerHTML = h;
-  $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-simpan" type="button">Simpan '+hasil.length+' harga</button>'
+  $("laci-kaki").innerHTML =
+      '<button class="btn utama" id="btn-pratinjau" type="button">Lihat pratinjau</button>'
+    + '<button class="btn" id="btn-terap" type="button" disabled>Terapkan</button>'
     + '<button class="btn" id="btn-batal" type="button">Batal</button>';
 
-  function hitungBaru(p){
-    var b = angkaForm("besar"); if (b === null) return null;
-    var v = nilaiForm("cara") === "persen" ? p._harga * (1 + b/100) : p._harga + b;
-    var k = parseInt(nilaiForm("bulat") || "0", 10);
-    if (k > 0) v = Math.ceil(v / k) * k;
-    return Math.max(0, Math.round(v));
+  function jenisKini(){ return nilaiForm("jenis") || jenis; }
+  function caraKini(){ return nilaiForm("cara") || (jenisAngka(jenisKini()) ? "persen" : "tetap"); }
+
+  /* ── medan berubah mengikuti kolom dan cara yang dipilih ───────── */
+  function gambarCara(){
+    var j = jenisKini();
+    var daftarCara = jenisAngka(j) ? CARA_ANGKA
+                   : CARA_KOLOM.filter(function(c){
+                       return c.v !== "auto" || j === "bahan" || j === "ukuran"; });
+    $("kotak-cara").innerHTML = field({nama:"cara", label:"Caranya", jenis:"select", pilihan:daftarCara});
+    $("f_cara").addEventListener("change", function(){ gambarNilai(); matikanTerap(); });
   }
-  function pratinjau(){
-    var b = angkaForm("besar"), el = $("pratinjau");
-    if (b === null) { el.innerHTML = ""; return; }
-    var contoh = hasil.slice(0, 5).map(function(p){
-      return '<tr><td class="l">'+esc(p.kode)+'</td><td>'+rp(p._harga)+'</td><td>→</td><td>'+rp(hitungBaru(p))+'</td></tr>';
-    }).join("");
-    var totalLama = hasil.reduce(function(a,p){ return a + p._harga; }, 0);
-    var totalBaru = hasil.reduce(function(a,p){ return a + hitungBaru(p); }, 0);
-    var turun = hasil.filter(function(p){ return p._hpp !== null && hitungBaru(p) < p._hpp; }).length;
-    el.innerHTML = '<div class="tw" style="margin-top:10px"><table><thead><tr><th class="l">Contoh 5 pertama</th>'
-      + '<th>Sekarang</th><th></th><th>Jadi</th></tr></thead><tbody>'+contoh+'</tbody>'
-      + '<tfoot><tr><td class="l">Jumlah '+hasil.length+' produk</td><td>'+rp(totalLama)+'</td><td>→</td><td>'+rp(totalBaru)+'</td></tr></tfoot></table></div>'
-      + (turun ? '<div class="flag merah" style="margin-top:8px"><span class="f-ico">!</span><div><b>'+turun
-                 + ' produk jadi di bawah HPP-nya</b> kalau ini disimpan.</div></div>' : '');
+  function gambarNilai(){
+    var j = jenisKini(), c = caraKini(), el = $("kotak-nilai");
+    $("kotak-tempel").hidden   = c !== "tempel";
+    $("kotak-tanggal").hidden  = !jenisAngka(j);
+    var s = $("f_sumber"); if (s) s.closest("label").hidden = j !== "hpp";
+    var bt = $("b_tempel");
+    if (bt) bt.innerHTML = "Dua kolom: kode internal lalu " +
+      (j === "ukuran" ? "ukurannya dalam mm (mis. <code>125</code>)."
+       : j === "bahan" ? "bahannya (" + BAHAN_SAH.join(", ") + ")."
+       : j === "bracket" ? "bracketnya (" + BRACKET_SAH.join(", ") + ")."
+       : j === "kelompok" ? "nama kelompoknya." : "nilainya.")
+      + " Salin langsung dari Excel — pemisahnya tab. Kode yang tidak dikenal dilaporkan.";
+
+    if (c === "tempel" || c === "kosongkan") { el.innerHTML = ""; return; }
+    if (c === "auto") {
+      var bisa = hasil.filter(function(p){
+        return !nilaiTersimpan(j, p) && nilaiOtomatis(j, p); }).length;
+      el.innerHTML = '<div class="flag"><span class="f-ico">i</span><div>'
+        + '<b>' + bisa.toLocaleString("id-ID") + ' produk</b> bisa dibaca ' + (j === "bahan" ? "bahannya" : "ukurannya")
+        + ' dari kode produknya dan <b>belum diisi tangan</b>. Aplikasi yang mengusulkan; '
+        + 'Anda tinggal melihat pratinjaunya sebelum disimpan. '
+        + 'Yang sudah diisi tangan tidak disentuh.</div></div>';
+      return;
+    }
+    /* cara "tetap" — bentuk medannya ikut kolomnya */
+    if (jenisAngka(j)) {
+      el.innerHTML = '<div class="baris">'
+        + field({nama:"besar", label:"Besarnya", jenis:"angka", tempel:"5  (boleh minus)"})
+        + field({nama:"bulat", label:"Pembulatan", jenis:"select", pilihan:BULAT_MASSAL})
+        + '</div>';
+    } else if (j === "bracket") {
+      el.innerHTML = field({nama:"besar", label:"Bracket baru", jenis:"select", pilihan:BRACKET_SAH});
+    } else if (j === "bahan") {
+      el.innerHTML = field({nama:"besar", label:"Bahan roda baru", jenis:"select", pilihan:BAHAN_SAH});
+    } else if (j === "ukuran") {
+      el.innerHTML = field({nama:"besar", label:"Ukuran baru", jenis:"select",
+        pilihan:UKURAN_BAKU.filter(function(u,i,a){
+          return a.findIndex(function(x){ return x[1]===u[1]; }) === i; })
+          .map(function(u){ return {v:String(u[0]), l:u[1]}; })});
+    } else {
+      el.innerHTML = '<datalist id="dl-kelompok">'
+        + daftarKelompok().map(function(k){ return '<option value="'+esc(k)+'">'; }).join("")
+        + '</datalist>'
+        + field({nama:"besar", label:"Kelompok / seri baru", daftar:"dl-kelompok",
+                 tempel:"mis. Caster PU Heavy Duty"});
+    }
+    var b = $("f_besar");
+    if (b) { b.addEventListener("input", matikanTerap); b.addEventListener("change", matikanTerap); }
+    var bl = $("f_bulat"); if (bl) bl.addEventListener("change", matikanTerap);
   }
-  ["besar","cara","bulat"].forEach(function(n){
-    var el = $("f_"+n); el.addEventListener("input", pratinjau); el.addEventListener("change", pratinjau);
-  });
-  $("btn-batal").addEventListener("click", tutupLaci);
-  $("btn-simpan").addEventListener("click", function(){
-    var b = angkaForm("besar");
-    if (b === null) { tampilPesan("Besarnya perubahan belum diisi."); return; }
-    if (!hasil.length) { tampilPesan("Tidak ada produk yang kena saringan ini."); return; }
-    if (!confirm("Simpan harga baru untuk " + hasil.length + " produk?\n\nHarga lama tetap tersimpan sebagai riwayat.")) return;
-    var baris = hasil.map(function(p){
-      return { product_id: p.id, harga: hitungBaru(p), berlaku_dari: nilaiForm("mulai") || hariIni(),
-               catatan: nilaiForm("catat") };
+  function sesuaikan(){ gambarCara(); gambarNilai(); matikanTerap(); }
+  function matikanTerap(){
+    pratinjauTerakhir = null;
+    $("btn-terap").disabled = true;
+    $("hasil-pratinjau").innerHTML = "";
+    if ($("pratinjau-kosong")) $("pratinjau-kosong").hidden = false;
+  }
+
+  function bacaTempel(){
+    var t = ($("f_tempel") ? $("f_tempel").value : "") || "";
+    var peta = {};
+    PRODUK.forEach(function(p){ peta[kunciKode(p.kode)] = p.id; });
+    var pasang = [], tidakDikenal = [];
+    t.split(/\r?\n/).forEach(function(garis){
+      if (!garis.trim()) return;
+      var bagian = garis.split(/\t|;|\s{2,}/).map(function(x){ return x.trim(); }).filter(Boolean);
+      if (bagian.length < 2) { tidakDikenal.push(garis.trim()); return; }
+      var nilai = bagian[bagian.length - 1];
+      var kode  = bagian.slice(0, -1).join(" ");
+      var id = peta[kunciKode(kode)];
+      if (!id) tidakDikenal.push(garis.trim());
+      else pasang.push({ product_id:id, nilai:nilai });
     });
-    sibuk(true, "Menyimpan "+baris.length+" harga…");
-    api("POST", "/price_list", baris, "return=minimal")
-      .then(function(){ return muatSemua(); })
-      .then(function(){ tutupLaci(); gambar(); toast(baris.length+" harga diperbarui."); })
+    return { pasang:pasang, tidakDikenal:tidakDikenal };
+  }
+  function usulanOtomatis(j){
+    var out = [];
+    hasil.forEach(function(p){
+      if (nilaiTersimpan(j, p)) return;              /* yang diisi tangan tidak disentuh */
+      var v = nilaiOtomatis(j, p);
+      if (v) out.push({ product_id:p.id, nilai:String(v) });
+    });
+    return out;
+  }
+
+  function mintaPratinjau(){
+    var j = jenisKini(), c = caraKini(), angka = jenisAngka(j);
+    var tempel = null, idsPakai = ids, caraKirim = c;
+
+    if (c === "tempel") {
+      var t = bacaTempel();
+      if (!t.pasang.length) { tampilPesan("Belum ada baris yang bisa dibaca dari tempelan."); return; }
+      tempel = angka ? t.pasang.map(function(x){ return { product_id:x.product_id, nilai:angka1(x.nilai) }; })
+                     : t.pasang;
+      idsPakai = t.pasang.map(function(x){ return x.product_id; });
+      if (t.tidakDikenal.length) {
+        tampilPesan(t.tidakDikenal.length + " baris tidak dikenal dan tidak akan ikut disimpan: <code>"
+          + esc(t.tidakDikenal.slice(0,3).join(" | ")) + (t.tidakDikenal.length>3?" …":"") + "</code>");
+      }
+    } else if (c === "auto") {
+      tempel = usulanOtomatis(j);
+      if (!tempel.length) { tampilPesan("Tidak ada yang bisa dibaca dari kode produk di saringan ini."); return; }
+      idsPakai = tempel.map(function(x){ return x.product_id; });
+      caraKirim = "tempel";                          /* usulan dikirim sebagai tempelan biasa */
+    } else if (c !== "kosongkan" && (nilaiForm("besar") === null || nilaiForm("besar") === "")) {
+      tampilPesan("Nilainya belum diisi."); return;
+    }
+    if (!idsPakai.length) { tampilPesan("Tidak ada produk yang kena saringan ini."); return; }
+
+    sibuk(true, "Menghitung " + idsPakai.length + " baris…");
+    var janji = angka
+      ? api("POST", "/rpc/hitung_edit_massal", {
+          p_jenis:j, p_cara:caraKirim,
+          p_nilai: caraKirim === "tempel" ? null : angkaForm("besar"),
+          p_pembulatan: parseInt(nilaiForm("bulat") || "0", 10),
+          p_produk:idsPakai, p_tempel:tempel })
+      : api("POST", "/rpc/hitung_kolom_massal", {
+          p_jenis:j, p_cara:caraKirim,
+          p_nilai: (caraKirim === "tempel" || caraKirim === "kosongkan") ? null : nilaiForm("besar"),
+          p_produk:idsPakai, p_tempel:tempel });
+
+    janji.then(function(baris){
+      sibuk(false);
+      pratinjauTerakhir = { jenis:j, cara:caraKirim, baris:baris, ids:idsPakai, tempel:tempel, angka:angka };
+      gambarPratinjau(baris, j, angka);
+    }).catch(function(e){ sibuk(false); matikanTerap(); tampilPesan(esc(e.message)); });
+  }
+
+  function gambarPratinjau(baris, j, angka){
+    var n = {};
+    Object.keys(TANDA_MASSAL).forEach(function(k){ n[k] = 0; });
+    baris.forEach(function(b){ n[b.tanda] = (n[b.tanda] || 0) + 1; });
+    var berubah  = angka ? n.ok + n.baru + n.lonjakan + n.di_bawah_hpp : n.isi + n.timpa;
+    var tertahan = angka ? n.lonjakan + n.di_bawah_hpp : n.timpa;
+    var mentok   = angka ? 0 : n.tak_sah;
+    var bolehPaksa = angka ? setaraOwner() : true;
+
+    var h = '<div class="tiles" style="margin-top:12px">'
+      + (angka
+          ? tile("Akan berubah", berubah.toLocaleString("id-ID"), j === "harga" ? "harga jual" : "HPP")
+            + tile("Sudah segitu", n.sama.toLocaleString("id-ID"), "tidak ditulis ulang")
+            + tile("Belum punya nilai", n.baru.toLocaleString("id-ID"), "jadi nilai pertamanya")
+            + tile("Dilewati", n.lewat.toLocaleString("id-ID"), "tidak ada nilai lama untuk dihitung")
+          : tile("Diisi", n.isi.toLocaleString("id-ID"), "yang tadinya kosong")
+            + tile("Ditimpa", n.timpa.toLocaleString("id-ID"), "sudah punya nilai lain", n.timpa ? "alert" : "")
+            + tile("Sudah segitu", n.sama.toLocaleString("id-ID"), "tidak ditulis ulang")
+            + tile("Dilewati", n.lewat.toLocaleString("id-ID"), "tidak ada nilai untuk diisi"))
+      + '</div>';
+
+    if (mentok) {
+      h += '<div class="flag merah" style="margin-top:12px"><span class="f-ico">!</span><div>'
+        + '<b>Ditolak: ' + mentok + ' baris berisi nilai yang tidak sah.</b> '
+        + 'Nilai di luar daftar tidak bisa disimpan — dipaksa pun tidak. Perbaiki dulu nilainya.'
+        + '</div></div>';
+    } else if (tertahan) {
+      h += '<div class="flag merah" style="margin-top:12px"><span class="f-ico">!</span><div>'
+        + '<b>Ditahan: ' + tertahan + ' baris perlu dilihat dulu.</b> '
+        + (angka
+            ? (n.di_bawah_hpp ? n.di_bawah_hpp + ' produk jadi <b>di bawah HPP</b>-nya. ' : '')
+              + (n.lonjakan ? n.lonjakan + ' produk berubah <b>lebih dari 50%</b>. ' : '')
+              + 'Biasanya yang salah aturannya, bukan baris-baris itu — coba periksa lagi angkanya.'
+            : n.timpa + ' produk <b>sudah punya nilai lain</b> dan akan tertimpa. '
+              + 'Mengisi yang kosong itu biasa; menimpa yang sudah terisi biasanya tandanya '
+              + 'saringannya kelewat lebar.')
+        + '</div></div>';
+      if (bolehPaksa) {
+        h += '<label class="f" style="margin-top:10px"><span>Tetap terapkan</span>'
+          +  '<span style="display:flex;align-items:center;gap:9px;padding:8px 0">'
+          +  '<input type="checkbox" id="f_paksa" style="width:auto"> '
+          +  '<span style="font-size:13.5px">Saya sudah memeriksanya, terapkan apa adanya</span></span>'
+          +  '<span class="bantu">Tercatat sebagai penerapan paksa, lengkap dengan nama Anda.</span></label>';
+      } else {
+        h += '<p class="bantu" style="margin-top:8px">Hanya owner atau GM yang bisa menerapkan '
+          +  'perubahan yang tertahan seperti ini.</p>';
+      }
+    }
+
+    var tampil = baris.filter(function(b){ return b.tanda !== "sama" && b.tanda !== "lewat"; }).slice(0, 12);
+    if (tampil.length) {
+      h += '<div class="tw" style="margin-top:12px"><table><thead><tr><th class="l">Kode internal</th>'
+        + '<th' + (angka ? '' : ' class="l"') + '>Sekarang</th>'
+        + '<th' + (angka ? '' : ' class="l"') + '>Jadi</th>'
+        + '<th class="l">Tanda</th></tr></thead><tbody>';
+      tampil.forEach(function(b){
+        var t = TANDA_MASSAL[b.tanda] || TANDA_MASSAL.ok;
+        var lama, baru;
+        if (angka) {
+          var pn = b.ubah_persen === null ? "" :
+            '<span class="bantu" style="display:block;font-size:11px;margin-top:2px">'
+            + (Number(b.ubah_persen) > 0 ? "+" : "") + Number(b.ubah_persen) + '%</span>';
+          lama = '<td>' + (b.lama === null ? '<span class="num0">—</span>' : rp(Number(b.lama))) + '</td>';
+          baru = '<td>' + rp(Number(b.baru)) + pn + '</td>';
+        } else {
+          var tampilNilai = function(v){
+            if (v === null || v === "") return '<span class="muted">— kosong —</span>';
+            return j === "ukuran" ? esc(labelUkuran(Number(v)) || (v + "mm")) : esc(v);
+          };
+          lama = '<td class="l">' + tampilNilai(b.lama) + '</td>';
+          baru = '<td class="l">' + tampilNilai(b.baru) + '</td>';
+        }
+        h += '<tr><td class="l">'+esc(b.kode)+'</td>' + lama + baru
+          + '<td class="l"><span class="pill '+t.k+'">'+t.l+'</span></td></tr>';
+      });
+      h += '</tbody></table></div>';
+      if (berubah > tampil.length)
+        h += '<p class="bantu" style="margin-top:8px">Menampilkan '+tampil.length+' dari '
+          +  berubah.toLocaleString("id-ID")+' baris yang berubah.</p>';
+    }
+
+    $("hasil-pratinjau").innerHTML = h;
+    if ($("pratinjau-kosong")) $("pratinjau-kosong").hidden = true;
+    var paksaEl = $("f_paksa");
+    var siap = function(){
+      $("btn-terap").disabled = berubah === 0 || mentok > 0
+        || (tertahan > 0 && !(paksaEl && paksaEl.checked));
+    };
+    if (paksaEl) paksaEl.addEventListener("change", siap);
+    siap();
+    $("btn-terap").textContent = "Terapkan ke " + berubah.toLocaleString("id-ID") + " produk";
+  }
+
+  function terapkan(){
+    if (!pratinjauTerakhir) { tampilPesan("Lihat pratinjau dulu."); return; }
+    var p = pratinjauTerakhir;
+    var berubah = p.baris.filter(function(b){
+      return ["ok","baru","lonjakan","di_bawah_hpp","isi","timpa"].indexOf(b.tanda) > -1; }).length;
+    var paksa = !!($("f_paksa") && $("f_paksa").checked);
+    if (!confirm("Terapkan ke " + berubah + " produk?\n\n"
+      + "Nilai lama tetap tersimpan, dan seluruh batch ini bisa dibatalkan sekaligus.")) return;
+
+    sibuk(true, "Menyimpan " + berubah + " baris…");
+    var janji = p.angka
+      ? api("POST", "/rpc/terapkan_edit_massal", {
+          p_jenis:p.jenis, p_cara:p.cara,
+          p_nilai: p.cara === "tempel" ? null : angkaForm("besar"),
+          p_pembulatan: parseInt(nilaiForm("bulat") || "0", 10),
+          p_produk:p.ids, p_berlaku: nilaiForm("mulai") || hariIni(),
+          p_catatan: nilaiForm("catat"),
+          p_sumber: p.jenis === "hpp" ? nilaiForm("sumber") : null,
+          p_tempel:p.tempel, p_paksa:paksa })
+      : api("POST", "/rpc/terapkan_kolom_massal", {
+          p_jenis:p.jenis, p_cara:p.cara,
+          p_nilai: (p.cara === "tempel" || p.cara === "kosongkan") ? null : nilaiForm("besar"),
+          p_produk:p.ids, p_catatan: nilaiForm("catat"),
+          p_tempel:p.tempel, p_paksa:paksa });
+
+    janji.then(function(){ return muatSemua(); })
+      .then(function(){
+        tutupLaci(); gambar();
+        var nama = (JENIS_MASSAL.filter(function(x){ return x.v === p.jenis; })[0] || {}).l || p.jenis;
+        toast(berubah + " produk diperbarui (" + nama + "). Bisa dibatalkan lewat tombol Ubah massal.");
+      })
       .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
+  }
+
+  function muatRiwayat(){
+    api("GET", "/edit_massal?select=*&order=id.desc&limit=8").then(function(baris){
+      var el = $("riwayat-massal"); if (!el) return;
+      if (!baris || !baris.length) {
+        el.innerHTML = '<p class="bantu" style="margin:2px 0 0">Belum pernah ada edit massal.</p>'; return;
+      }
+      var h = '<div class="tw"><table><thead><tr><th class="l">Kapan</th><th class="l">Apa</th>'
+        + '<th>Baris</th><th></th></tr></thead><tbody>';
+      baris.forEach(function(b){
+        var nama = (JENIS_MASSAL.filter(function(x){ return x.v === b.jenis; })[0] || {}).l || b.jenis;
+        var judul = nama + " · " +
+          ({persen:"persen", rupiah:"rupiah", tetap:"satu nilai", tempel:"tempel",
+            kosongkan:"dikosongkan"}[b.cara] || b.cara)
+          + (b.nilai !== null && b.nilai !== undefined ? " " + b.nilai
+             : (b.nilai_teks ? " " + b.nilai_teks : ""));
+        h += '<tr><td class="l">'+esc((b.dibuat_pada||"").slice(0,10))+'</td>'
+          + '<td class="l wrap">'+esc(judul)+(b.dipaksa?' <span class="pill p-sebagian">paksa</span>':'')
+          +   (b.catatan ? '<span class="bantu" style="display:block;font-size:11.5px;margin-top:2px">'
+                           + esc(b.catatan) + '</span>' : '')
+          + '</td>'
+          + '<td>'+b.jumlah_baris+'</td>'
+          + '<td style="text-align:right">'
+          +   (b.dibatalkan_pada
+                ? '<span class="pill p-none">dibatalkan</span>'
+                : (bolehMassal(b.jenis)
+                    ? '<button type="button" class="btn kecil bahaya" data-batal="'+b.id+'">Batalkan</button>'
+                    : ''))
+          + '</td></tr>';
+      });
+      el.innerHTML = h + '</tbody></table></div>'
+        + '<p class="bantu" style="margin-top:8px">Membatalkan mengembalikan nilai sebelum batch itu. '
+        + 'Produk yang sesudahnya sudah diubah lagi tidak ikut ditarik balik.</p>';
+      Array.prototype.forEach.call(el.querySelectorAll("button[data-batal]"), function(b){
+        b.addEventListener("click", function(){ batalkanBatch(+b.dataset.batal); });
+      });
+    }).catch(function(e){
+      var el = $("riwayat-massal");
+      if (el) el.innerHTML = '<p class="bantu" style="margin:2px 0 0">Riwayat tidak bisa dimuat: '
+        + esc(e.message) + '</p>';
+    });
+  }
+
+  function batalkanBatch(id){
+    if (!confirm("Batalkan edit massal #" + id + "?\n\nNilai sebelum batch itu akan berlaku lagi.")) return;
+    sibuk(true, "Membatalkan…");
+    api("POST", "/rpc/batalkan_massal", { p_id: id })
+      .then(function(pesan){ return muatSemua().then(function(){ return pesan; }); })
+      .then(function(pesan){
+        sibuk(false); gambar(); muatRiwayat();
+        toast(typeof pesan === "string" ? pesan : "Edit massal dibatalkan.");
+      })
+      .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
+  }
+
+  $("f_jenis").addEventListener("change", sesuaikan);
+  ["tempel"].forEach(function(n){
+    var el = $("f_"+n); if (el) el.addEventListener("input", matikanTerap);
   });
-  bukaLaci("Ubah harga sekaligus");
+  $("btn-pratinjau").addEventListener("click", mintaPratinjau);
+  $("btn-terap").addEventListener("click", terapkan);
+  $("btn-batal").addEventListener("click", tutupLaci);
+  sesuaikan();
+  muatRiwayat();
+  bukaLaci("Ubah massal");
 }
+
+/* angka() mengembalikan null untuk teks; dipakai saat tempelan harga */
+function angka1(v){ var n = angka(v); return n === null ? null : n; }
+
+/* pintu lama tetap dipakai tombol di tab Price List */
+function formHargaMassal(){ formEditMassal("harga"); }
 
 /* ════════════════════════════════════════════════════════════════════
    PRODUK — master, sumber barang, kode pabrik
@@ -2813,7 +3287,8 @@ function panelProduk(){
   var belumSumber = PRODUK.filter(function(p){ return !p.sumber_barang; }).length;
 
   $("head-aksi").innerHTML =
-    bolehUbahProduk() ? '<button class="btn utama" id="btn-produk-baru" type="button">+ Produk baru</button>' : '';
+      (bolehUbahProduk() ? '<button class="btn" id="btn-kolom-massal" type="button">Ubah massal</button>' : '')
+    + (bolehUbahProduk() ? '<button class="btn utama" id="btn-produk-baru" type="button">+ Produk baru</button>' : '');
   var h = '';
 
   h += '<div class="tiles">'
@@ -2900,6 +3375,7 @@ function panelProduk(){
   pasangSaringUmum("produk", "produk", panelProduk);
   $("s-produk").addEventListener("change", function(e){ saring.produk.sb = e.target.value; panelProduk(); });
   if (bolehUbahProduk()) $("btn-produk-baru").addEventListener("click", function(){ formProduk(null); });
+  if (bolehUbahProduk()) $("btn-kolom-massal").addEventListener("click", function(){ formEditMassal("kelompok"); });
   Array.prototype.forEach.call($("p-produk").querySelectorAll("tr[data-produk]"), function(tr){
     var buka = function(){ formProduk(PRODUK.filter(function(p){ return p.id == tr.dataset.produk; })[0]); };
     tr.addEventListener("click", buka);
