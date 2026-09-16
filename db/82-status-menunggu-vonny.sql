@@ -1,0 +1,19 @@
+-- Berkas 82 (#8 lanjutan): SP masuk cek Vonny dulu — status 'menunggu vonny' & sembunyi dari Lie Sian.
+--
+-- Alur: sales input SP → status 'menunggu vonny' (BUKAN langsung 'di gudang'). Hanya
+--   Vonny/owner/gm/staff/finance/ichi/lenni + sales pemilik yang bisa melihatnya; Lie Sian (liesian)
+--   TIDAK bisa melihat sampai Vonny approve. Sesudah vonny_ok=true → status 'di gudang' & tampil utk Lie Sian.
+--
+-- (0) CHECK so_status_sah: tambah nilai 'menunggu vonny'.
+-- (1) status_sp_hitung: cabang 'menunggu vonny' antara 'menunggu gm' dan 'di gudang'
+--     (baris ada tapi vonny_ok bukan true). SP terkirim/tertagih/lunas tak terpengaruh (vonny_ok sudah true
+--     karena gerbang jaga_gerbang_vonny (#8) menuntut vonny_ok sebelum no_surat_jalan).
+-- (2) RLS so_baca: cabang liesian dibatasi — hanya SP dgn vonny_ok / sudah ada surat jalan / batal.
+--     Peran lain & sales-pemilik tak berubah. (Vonny approve dari panel Pengiriman, lihat #8.)
+-- (3) Hitung ulang status SP lama (dev: 2 SP jadi 'menunggu vonny'; sisanya lunas/tertagih tak berubah).
+--
+-- FE (index.html): tambah 'menunggu vonny' ke saring status SP, ke peta warna pill (panelSp `kelas`
+--   & KELAS_SP) → pill "p-sebagian" (amber) seperti 'menunggu gm'. Box approve Vonny #8 di formKirim
+--   tetap dipakai untuk meloloskan.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap fungsi/policy = seperti diterapkan via apply_migration berkas82.

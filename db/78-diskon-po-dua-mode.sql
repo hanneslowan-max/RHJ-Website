@@ -1,0 +1,16 @@
+-- Berkas 78: diskon PO 2 mode — Rupiah (nominal) atau Persen (% dari qty×harga per baris).
+-- Kolom po_lines.diskon_tipe ('rp'|'persen', default 'rp', CHECK). Kolom diskon = angka yang diketik
+--   (nominal Rp bila 'rp'; angka persen bila 'persen'). Potongan per baris:
+--     'persen' -> qty*harga * diskon/100 ; 'rp' -> diskon.
+-- View po_ringkas diperbarui: tiap "qty*harga - diskon" jadi memperhitungkan tipe (CASE). Kolom output
+--   IDENTIK; security_invoker=on dipertahankan. Baris lama (diskon_tipe='rp' default) = perilaku sama
+--   persis (diverifikasi: 31/31 po_lines 'rp', grand_total tak berubah).
+-- Komisi tetap TIDAK terpengaruh diskon (komisi dari nett SP, bukan PO) — keputusan #7 tak berubah.
+--
+-- FE (index.html): baris PO — sel "Diskon" jadi grup 2 mode: <select.po-diskon-tipe> (Rp/%) +
+--   <input.po-diskon>. Helper poDiskonRp()/poTotalBaris() cocok view. PO_KOLOM embed +diskon_tipe;
+--   barisPoBaru/simpanPo/set-expansion kirim diskon_tipe; formDetailDoc tampil "10% (Rp X)".
+--   Sekalian perbaiki 3 tag <input> rusak (po-harga, po-diskon, sp-nett kehilangan '>') + baris PO
+--   jadi grid 4 kolom .bi-angka.bi-po + .diskon-grup.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap view = seperti diterapkan via apply_migration berkas78.

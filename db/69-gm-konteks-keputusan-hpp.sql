@@ -1,0 +1,6 @@
+-- Berkas 69 (#21): saat approval GM (harga / telat / harga_khusus), tampilkan nett + EHC + HPP + margin.
+-- RPC gm_konteks_keputusan(p_jenis,p_ref) RETURNS TABLE, bergerbang setara_owner() (owner/gm) di DALAM fungsi
+--   → HPP tidak bocor ke peran lain. HPP dipakai = hpp_berlaku(product, tanggal SP). Untuk harga_khusus pakai
+--   tanggal SP pemicu bila ada, else current_date.
+-- FE (index.html): formGmPutus menambah <div id="gm-hpp"> lalu fetch RPC & render tabel di atas input %.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.

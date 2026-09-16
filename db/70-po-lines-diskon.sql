@@ -1,0 +1,7 @@
+-- Berkas 70 (#7): diskon per baris PO. po_lines.diskon (numeric, default 0, >=0).
+-- Nilai baris = round(qty*harga - diskon); mengurangi sub_total, dasar PPN, grand_total di view po_ringkas.
+-- Kolom output po_ringkas IDENTIK; security_invoker=on dipertahankan.
+-- Komisi TIDAK terpengaruh diskon (komisi dari harga_nett SP, bukan PO) — sesuai keputusan Hannes.
+-- Patokan grand_total SP = grand_total PO otomatis memakai total setelah diskon.
+-- FE (index.html): input .po-diskon per baris + poHitungLokal (cocok view) + disimpan ke po_lines.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.

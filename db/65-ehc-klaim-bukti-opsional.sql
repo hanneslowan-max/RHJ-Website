@@ -1,0 +1,7 @@
+-- Berkas 65 (#23): klaim EHC tidak lagi mewajibkan bukti (fitur upload bukti dihapus dari layar).
+-- ajukan_klaim_ehc(): hapus pemeriksaan "harus disertai bukti"; bila lampiran ADA tetap divalidasi & disimpan,
+-- bila TIDAK ada klaim tetap diterima. ehc_klaim_berkas tetap ada (opsional). ajukan_klaim_ehc_cepat tak diubah.
+-- CATATAN: ini MELONGGARKAN kontrol audit (dulu bukti wajib untuk uang keluar EHC). Sesuai permintaan Hannes.
+-- FE (index.html): tombol/label/berkas "Lampirkan bukti" + blok pemeriksaan wajib dihapus.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan fungsi lengkap = seperti yang diterapkan via apply_migration (lihat riwayat migrasi Supabase).

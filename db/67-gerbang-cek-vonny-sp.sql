@@ -1,0 +1,11 @@
+-- Berkas 67 (#8): Vonny double-check SP sebelum turun ke pengiriman (Lie Sian).
+-- Kolom sales_orders.vonny_ok/_oleh/_pada/_alasan + RPC putuskan_vonny_cek (owner/gm/vonny)
+--   + trigger so_vonny_gate: no_surat_jalan hanya boleh diisi setelah vonny_ok = true.
+-- Urutan gerbang: (GM bila harga di bawah list) -> Vonny cek -> surat jalan/kirim.
+--   RPC menolak bila status masih 'menunggu gm' (GM dulu).
+-- FE (index.html): formKirim -> kunci surat jalan saat belumVonny; box "Cek kelayakan Vonny"
+--   (approve inline + isi kategori customer #25 bila kosong) untuk owner/gm/vonny; flag merah utk peran lain.
+--   kolomSp menambah vonny_ok, vonny_alasan, customer_id, customers(industri).
+-- Terkait #25: Vonny mengisi kategori customer saat cek bila belum ada.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap RPC/trigger = seperti diterapkan via apply_migration (lihat riwayat migrasi Supabase).

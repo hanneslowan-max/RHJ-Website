@@ -1,0 +1,11 @@
+-- Berkas 68 (#22): komisi 1% flat + cash-only untuk Riksa (sales_reps id 8) & Michael (id 7).
+-- Kolom sales_reps.komisi_flat_pct (<=0.5) & cash_only. Di-set 0.01/true utk id 7,8 (data-driven).
+-- so_baris_hitung.pct: cabang "flat" ditaruh PALING ATAS → mengalahkan harga khusus, cash 5%, tier.
+--   Kolom output view identik; security_invoker=on dipertahankan (create or replace view menghapusnya).
+-- komisi_hitung: untuk rep flat, aturan telat 120 hari diabaikan (flat mengalahkan telat).
+-- Rep non-flat: TIDAK berubah sama sekali (cabang flat dilewati saat komisi_flat_pct null).
+-- Trigger so_cash_only: SP untuk rep cash_only dipaksa cash saat INSERT (tak bisa tempo).
+-- Catatan: dropdown pembayaran di form SP belum dikunci ke "cash" untuk rep ini (server sudah paksa);
+--   penguncian dropdown = polish FE opsional.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap view/fungsi = seperti diterapkan via apply_migration (lihat riwayat migrasi Supabase).

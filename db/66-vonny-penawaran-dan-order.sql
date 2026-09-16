@@ -1,0 +1,12 @@
+-- Berkas 66 (#11 & #27): Vonny boleh membuat penawaran + membaca order impor.
+-- #11: nomor_penawaran_baru + policy quotes/quote_lines memuat vonny (gerbang sempit;
+--      TIDAK menambah vonny ke boleh_alur_jual → SP/CRM tetap tertutup untuk vonny).
+-- #27a (produk): FE tab produk + vonny (baca; ubah tetap boleh_ubah_impor). RLS produk sudah izinkan baca vonny.
+-- #27b (order): fungsi baru boleh_lihat_order_impor() = boleh_lihat_impor() OR vonny;
+--      policy SELECT orders/import_lines/factory_codes/documents pakai gerbang itu.
+--      payments (bayar_baca) SENGAJA tidak diubah → vonny TIDAK melihat pembayaran supplier.
+-- FE (index.html): helper bolehBuatPenawaran(); tab penawaran/produk/order + vonny;
+--      muatSemua memuat order untuk vonny.
+-- CATATAN: vonny akan melihat nilai order impor (orders.total_nilai) — melekat pada akses "order".
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap fungsi + ALTER POLICY = seperti diterapkan via apply_migration (lihat riwayat migrasi Supabase).

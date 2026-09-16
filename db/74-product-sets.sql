@@ -1,0 +1,12 @@
+-- Berkas 74 (#1): harga SET roda — Opsi B. Tabel definisi set→komponen (pcs).
+-- Stok & komisi TETAP per pcs (set hanya alat quoting/breakdown).
+--   product_sets(id,kode,nama,kategori,catatan,aktif,dibuat/diubah)
+--   product_set_components(id,set_id→product_sets,product_id→products,qty,harga_nett,urut)
+--   view product_set_ringkas: harga_set = sum(qty*harga_nett), total_pcs, jumlah_komponen (security_invoker=on).
+-- RLS: baca boleh_lihat_produk(); tulis boleh_ubah_impor() (sama master products); hapus boleh_hapus().
+--   Tabel BARU, tidak menyentuh SO/PO/quote lama → aman untuk data lama.
+-- FE (index.html): Produk → "🧩 Set roda" (formKelolaSet/formSetEdit) untuk kelola set;
+--   Penawaran "+ Tambah set" = 1 baris satuan "set" berharga harga_set (tampil set+harga set);
+--   Form PO "+ Set" = pecah jadi baris komponen pcs (harga = harga_nett komponen) → SP per pcs.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap = seperti diterapkan via apply_migration berkas74 (lihat riwayat migrasi Supabase).

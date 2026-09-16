@@ -1,0 +1,25 @@
+-- Berkas 76 (#15): kirim SP PARTIAL — banyak surat jalan, invoice SATU di akhir.
+-- Additif & backward-compatible: SP tanpa pengiriman bertahap = 100% seperti dulu.
+--
+-- Tabel:
+--   so_kirim(id, so_id→sales_orders, no_surat_jalan, tgl, catatan, dibuat_*)   = 1 batch surat jalan.
+--   so_kirim_baris(id, kirim_id→so_kirim, so_line_id→sales_order_lines, qty)    = qty per baris di batch.
+-- View (security_invoker=on):
+--   so_kirim_sisa    : per baris BARANG aktif → qty_pesan, qty_kirim (kumulatif), sisa. (biaya diabaikan)
+--   so_kirim_ringkas : per SP → total & semua_terkirim.
+-- RLS: baca so_kirim bila SP-nya kelihatan (RLS sales_orders ikut di subquery); tulis boleh_terbitkan().
+-- RPC (SECURITY DEFINER, revoke anon):
+--   tambah_surat_jalan(p_so,p_no,p_tgl,p_baris jsonb[{so_line_id,qty}],p_catatan)
+--     - gerbang: boleh_terbitkan() (owner/gm/liesian) + vonny_ok (#8) + bukan menunggu gm/ditahan.
+--     - validasi qty<=sisa per baris; simpan batch; saat SEMUA sisa=0 → set sales_orders.no_surat_jalan
+--       (membuka invoice tunggal) lewat set_config('rhj.kirim','1').
+--   batal_surat_jalan(p_kirim) : hapus batch (sebelum invoice); lepas no_surat_jalan bila jadi tak lengkap.
+-- Trigger jaga_kirim_bertahap (BEFORE UPDATE sales_orders): bila SP punya so_kirim, no_surat_jalan hanya
+--   boleh diubah lewat RPC (rhj.kirim) — cegah dobel jalur. SP tanpa so_kirim: tak terpengaruh.
+--
+-- FE (index.html): formKirim dapat <div id="kr-partial"> → renderKirimPartial/gambarKirimPartial:
+--   daftar surat jalan terbit + tabel sisa per baris + "Terbitkan surat jalan ini" (qty per baris) +
+--   Batalkan per batch. Saat pakai bertahap, kotak "kirim semua sekaligus" (kr_sj_no/tgl) dikunci.
+--   Invoice tetap lewat field lama, terbuka setelah semua terkirim. segarkanKirim() muat ulang.
+-- Diterapkan ke DEV (eesdtbcualkdawhykchj) 15 Sep 2026. Belum ke produksi.
+-- Badan lengkap tabel/view/fungsi/trigger = seperti diterapkan via apply_migration berkas76.
