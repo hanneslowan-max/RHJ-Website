@@ -520,6 +520,10 @@ CREATE TABLE public.sales_orders (
   tanpa_po_alasan text,
   tanpa_po_oleh uuid,
   tanpa_po_pada timestamp with time zone,
+  vonny_ok boolean,
+  vonny_oleh uuid,
+  vonny_pada timestamp with time zone,
+  vonny_alasan text,
   CONSTRAINT sales_orders_pkey PRIMARY KEY (id),
   CONSTRAINT sales_orders_po_id_fkey FOREIGN KEY (po_id) REFERENCES public.purchase_orders(id),
   CONSTRAINT sales_orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
@@ -533,6 +537,18 @@ CREATE TABLE public.sales_orders (
   CONSTRAINT sales_orders_cash_oleh_fkey FOREIGN KEY (cash_oleh) REFERENCES auth.users(id),
   CONSTRAINT sales_orders_kirim_ok_oleh_fkey FOREIGN KEY (kirim_ok_oleh) REFERENCES auth.users(id)
 );
+-- status juga bisa 'menunggu vonny' (berkas 82): ada baris, vonny_ok bukan true, belum ada surat jalan.
+-- Cek Vonny (#8): vonny_* hanya lewat RPC putuskan_vonny_cek (owner/gm/vonny); jaga_kolom_sales blok e2
+--   menolak peran lain, kecuali pengguguran sistem (flag rhj.vonny_gugur, hanya mengosongkan) [berkas 86, 88].
+-- Trigger so_status_dok (AFTER INSERT / UPDATE OF no_surat_jalan, no_invoice, no_faktur, lunas, batal,
+--   harga_ok, vonny_ok, cash_ok, customer_id, sales_rep_id) -> so_sesudah_ubah() hitung ulang status [berkas 86].
+-- Trigger so_vonny_gugur (AFTER UPDATE, WHEN customer_id/kepada/alamat/up/telp/ppn_kena/catatan berubah,
+--   PO dilepas/diganti, atau po_menyusul/alasannya berganti pada SP tanpa PO) oleh selain owner/gm/vonny
+--   -> gugurkan_cek_vonny(): vonny_ok/oleh/pada -> null selama barang belum keluar [berkas 88].
+-- RPC tandai_sp_tanpa_po: selain owner/gm hanya PEMBUAT SP, sebelum cek Vonny & sebelum barang keluar [berkas 88].
+-- RLS so_baca [berkas 83, 88]: sales pemilik; SP yang sedang dicek Vonny (tidak batal, belum surat jalan,
+--   vonny_ok bukan true) hanya owner/gm/vonny + pembuatnya (dibuat_oleh, selama boleh_alur_jual);
+--   selebihnya boleh_lihat_semua_jual().
 CREATE TABLE public.sales_order_lines (
   id bigint NOT NULL DEFAULT nextval('sales_order_lines_id_seq'::regclass),
   so_id bigint NOT NULL,
@@ -548,6 +564,11 @@ CREATE TABLE public.sales_order_lines (
   CONSTRAINT sales_order_lines_so_id_fkey FOREIGN KEY (so_id) REFERENCES public.sales_orders(id),
   CONSTRAINT sales_order_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
 );
+-- Kolom batal/batal_alasan/batal_oleh/batal_pada (#18): lewat RPC batalkan_baris_sp / pulihkan_baris_sp.
+-- Trigger sol_jaga_tambah (BEFORE INSERT) [berkas 88]: selain owner/gm (atau rhj.usul), baris baru hanya
+--   selama SP segar (tidak batal, vonny_ok & harga_ok null, belum surat jalan/so_kirim/invoice).
+-- Trigger sol_vonny_gugur (AFTER INSERT/UPDATE/DELETE) [berkas 88]: perubahan produk/qty/harga_nett/
+--   ehc_item/jenis/deskripsi/batal oleh selain owner/gm/vonny -> gugurkan_cek_vonny(so_id).
 CREATE TABLE public.customer_pics (
   id bigint NOT NULL DEFAULT nextval('customer_pics_id_seq'::regclass),
   customer_id bigint,

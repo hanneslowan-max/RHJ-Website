@@ -4740,13 +4740,26 @@ function ubahBatalBaris(aksi, lineId, soId){
     if (alasan === null) return;
     if (!String(alasan).trim()) { toast("Alasan wajib diisi.", true); return; }
   }
+  /* #8: baris SP yang sudah lolos cek Vonny diubah oleh selain owner/GM/Vonny → keputusan
+     Vonny gugur di database (berkas 88) dan SP kembali ke antrean Double Check. */
+  var sp0 = (ALUR.sp || []).filter(function(x){ return String(x.id) === String(soId); })[0];
+  var lamaLolos = !!(sp0 && sp0.vonny_ok === true);
+  var pesan = "";
   sibuk(true, aksi === "batal" ? "Membatalkan baris…" : "Memulihkan baris…");
   api("POST", aksi === "batal" ? "/rpc/batalkan_baris_sp" : "/rpc/pulihkan_baris_sp",
       aksi === "batal" ? { p_line: lineId, p_alasan: String(alasan).trim() } : { p_line: lineId })
-    .then(function(msg){ toast(String(Array.isArray(msg) ? msg[0] : msg) || "Beres."); ALUR.dimuatSp = false; return muatSp(); })
+    .then(function(msg){
+      pesan = String(Array.isArray(msg) ? msg[0] : msg) || "Beres.";
+      ALUR.dimuatSp = false;
+      if (LANJUT && LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;   /* #8 */
+      if (LANJUT && LANJUT.kirim) LANJUT.kirim.dimuat = false;
+      return muatSp();
+    })
     .then(function(){
       sibuk(false);
       var o = (ALUR.sp || []).filter(function(x){ return String(x.id) === String(soId); })[0];
+      toast(pesan + ((lamaLolos && !bolehKonfirmasiKirim() && (!o || o.vonny_ok !== true))
+        ? " SP kembali ke antrean cek Vonny — perubahannya harus dicek ulang sebelum dikirim." : ""));
       panelSp();
       if (o) formDetailDoc("sp", o); else tutupLaci();
     })
@@ -6240,8 +6253,11 @@ function simpanSp(khusus){
         ? so._khusus + " item masuk antrean GM untuk harga & komisi khusus."
         : "Semua itemnya sudah punya harga khusus yang berlaku — tidak ada yang perlu diantrekan."));
     } else if (so._tanpaPoGagal) {
+      /* #8: sesudah SP tersimpan, mode tanpa PO hanya bisa dinyatakan pembuatnya sebelum cek
+         Vonny (berkas 88); selebihnya pengecualian owner/GM di laci "Tempelkan PO". */
       toast("SP " + so.no_sp + " tersimpan, tapi gagal ditandai tanpa PO: " + so._tanpaPoGagal
-          + " — SP masih draf. Nyatakan modenya lewat \"Tempelkan PO\".", true);
+          + " — surat jalannya akan tertahan sampai modenya dinyatakan. Minta owner/GM memberi "
+          + "pengecualian lewat \"Tempelkan PO\" → \"Izinkan tanpa PO\".", true);
     } else if (so._tanpaPo) {
       toast("Surat Pesanan " + so.no_sp + " tersimpan tanpa PO. Menunggu cek Vonny sebelum "
           + "surat jalan — invoicenya boleh terbit tanpa PO.");   /* #10 */
@@ -8600,6 +8616,16 @@ function formCekVonny(s){
     + tile("Sales", namaRepAlur(s.sales_rep_id) || "—", esc(s.kepada || ""))
     + '</div>'
     + (s.catatan ? '<div class="flag"><span class="f-ico">✎</span><div><b>Catatan sales:</b> ' + esc(s.catatan) + '</div></div>' : '')
+    /* #8 #10: mode tanpa PO dinyatakan pembuat SP SEBELUM cek ini (berkas 88) — alasannya
+       yang diperiksa Vonny, jadi harus terbaca di sini. */
+    + (s.tanpa_po_ok
+        ? '<div class="flag merah"><span class="f-ico">!</span><div><b>Mode tanpa PO</b> — invoice boleh terbit tanpa PO.'
+          + ' Alasan: <i>' + esc(s.tanpa_po_alasan || "—") + '</i></div></div>'
+        : (!s.po_id
+          ? '<div class="flag"><span class="f-ico">i</span><div><b>PO menyusul</b>'
+            + (s.po_menyusul_alasan ? ' — alasan: <i>' + esc(s.po_menyusul_alasan) + '</i>' : '')
+            + '. Invoice tertahan sampai PO ditempelkan.</div></div>'
+          : ''))
     + '<h3 class="sec">Baris</h3><div class="tw"><table><thead><tr><th class="l">Barang</th><th>Qty</th>'
     + '<th class="r">Nett</th><th class="r">EHC</th><th class="r">Total</th></tr></thead><tbody>'
     + lines.map(function(l){ var pr = produkById(l.product_id);
