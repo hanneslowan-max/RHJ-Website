@@ -908,6 +908,11 @@ CREATE TABLE public.usul_ubah (
   diputus_pada timestamp with time zone,
   CONSTRAINT usul_ubah_pkey PRIMARY KEY (id)
 );
+-- Indeks unik uu_menunggu_uniq (jenis, ref_id) WHERE status = 'menunggu' → satu usulan menunggu per dokumen.
+-- Tulis hanya lewat RPC ajukan_ubah / putuskan_ubah (SECURITY DEFINER). Sales hanya boleh mengajukan untuk
+--   PO/SP miliknya (sales_rep_id = sales_rep_saya()) [cabang po: berkas 96].
+-- RLS uu_baca (berkas 96): setara_owner() OR dokumennya terbaca oleh pembaca (EXISTS ke purchase_orders /
+--   sales_orders, tunduk RLS po_baca / so_baca) → usulan atas SP menunggu Vonny ikut tersembunyi seperti SP-nya.
 CREATE TABLE public.edit_massal_timpa (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   batch_id bigint NOT NULL,
