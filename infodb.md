@@ -106,6 +106,7 @@ CREATE TABLE public.products (
   bahan text CHECK (bahan IS NULL OR (bahan = ANY (ARRAY['CB'::text, 'Karet'::text, 'Nylon'::text, 'Polyurethane'::text]))),
   usulan boolean NOT NULL DEFAULT false,
   usulan_teks text,
+  kategori text NOT NULL CHECK (kategori = ANY (ARRAY['Roda'::text, 'Pallet Mesh'::text, 'Hospital'::text, 'Filing Cabinet'::text, 'Trolley'::text, 'Hand Pallet'::text, 'Lainnya'::text])),
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
   CONSTRAINT products_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)

@@ -967,7 +967,7 @@ var tabAktif = "ringkas";
    pula yang muncul lagi di kotaknya — huruf besar yang baru diketik
    berubah sendiri di depan mata. */
 var saring = { harga: {q:"",qKetik:"",brand:"SEMUA",st:"SEMUA",kel:"SEMUA",bracket:"SEMUA",bahan:"SEMUA",uk:"SEMUA"},
-               produk:{q:"",qKetik:"",brand:"SEMUA",sb:"SEMUA",kel:"SEMUA",bracket:"SEMUA",bahan:"SEMUA",uk:"SEMUA"},
+               produk:{q:"",qKetik:"",brand:"SEMUA",sb:"SEMUA",kel:"SEMUA",bracket:"SEMUA",bahan:"SEMUA",uk:"SEMUA",kat:"SEMUA"},   /* #26: kat = kategori */
                order: {q:"",qKetik:"",sup:"SEMUA",prod:"SEMUA",tiba:"SEMUA",dok:"SEMUA",bayar:"SEMUA"} };
 
 /* Siapa boleh apa — cerminan aturan yang dijaga database. Kalau berbeda,
@@ -988,6 +988,8 @@ function bolehUbahImpor(){  return ["owner","gm","staff"].indexOf(saya.peran) > 
 function bolehUbahBayar(){  return ["owner","gm","finance"].indexOf(saya.peran) > -1; }
 function bolehUbahHarga(){  return setaraOwner(); }
 function bolehUbahProduk(){ return ["owner","gm","staff"].indexOf(saya.peran) > -1; }
+/* #26: cerminan CHECK products_kategori_sah (berkas 90). */
+var KATEGORI_PRODUK = ["Roda","Pallet Mesh","Hospital","Filing Cabinet","Trolley","Hand Pallet","Lainnya"];
 
 /* GM = owner satu tingkat di bawah. Dua hal yang membedakan, dan keduanya
    dijaga database juga — bukan cuma tombol yang disembunyikan:
@@ -2821,8 +2823,13 @@ function muatSemua(){
   /* Kolom disebut satu per satu, bukan select=*. `catatan` bebas isi dan
      bisa saja suatu hari memuat harga beli atau nama pabrik — sementara
      tabel ini boleh dibaca sales. Yang tidak diminta tidak bisa bocor. */
-  minta("produk", "/products?select=id,id_lama,kode,brand,kelompok,fungsi,satuan,bahan,"
+  /* #26: kategori WAJIB ikut dimuat — dulu tidak, sehingga form produk selalu
+     kosong dan setiap simpan menimpa kategori jadi NULL. catatan juga sama
+     (tertimpa NULL), tapi hanya dikirim ke yang boleh menyunting produk;
+     sales tetap tidak menerimanya. */
+  minta("produk", "/products?select=id,id_lama,kode,brand,kelompok,kategori,fungsi,satuan,bahan,"
                 + "diameter_mm,hal_katalog,yakin,sumber_barang,aktif,usulan,usulan_teks"
+                + (bolehUbahProduk() ? ",catatan" : "")
                 + "&order=brand.asc,kode.asc");
   minta("harga",  "/price_list?select=*&order=berlaku_dari.desc");
   if (bolehLihatImpor() || saya.peran === "vonny") {   /* #27b: vonny baca order impor (payments tetap tertutup oleh RLS) */
@@ -3018,6 +3025,7 @@ function pasangSaringUmum(tag, kunci, gambarUlang){
     f.q = ""; f.brand = "SEMUA"; f.kel = "SEMUA"; f.bracket = "SEMUA"; f.bahan = "SEMUA"; f.uk = "SEMUA";
     if ("st" in f) f.st = "SEMUA";
     if ("sb" in f) f.sb = "SEMUA";
+    if ("kat" in f) f.kat = "SEMUA";   /* #26 */
     gambarUlang();
   });
 }
@@ -3032,7 +3040,8 @@ function cocokSaringUmum(p, f){
 function adaSaringan(f){
   return !!(f.q) || f.brand !== "SEMUA" || f.kel !== "SEMUA" || f.bracket !== "SEMUA"
       || f.bahan !== "SEMUA" || f.uk !== "SEMUA"
-      || (f.st && f.st !== "SEMUA") || (f.sb && f.sb !== "SEMUA");
+      || (f.st && f.st !== "SEMUA") || (f.sb && f.sb !== "SEMUA")
+      || (f.kat && f.kat !== "SEMUA");   /* #26 */
 }
 function tombolBersih(f, tag){
   return adaSaringan(f) ? '<button class="btn" type="button" id="bersih-' + tag + '">Bersihkan</button>' : '';
@@ -3131,7 +3140,7 @@ function hitungProduk(){
     p._ukuran  = (p.diameter_mm !== null && p.diameter_mm !== undefined && p.diameter_mm !== ""
                     ? labelUkuran(Number(p.diameter_mm))
                     : ukuranProduk(p.kode, p.kelompok)) || TAK_TERBACA;
-    p._cari = (p.kode + " " + (p.brand||"") + " " + (p.kelompok||"") + " " + (p.fungsi||"") + " " +
+    p._cari = (p.kode + " " + (p.brand||"") + " " + (p.kelompok||"") + " " + (p.kategori||"") + " " + (p.fungsi||"") + " " +   /* #26 */
                p._bahan + " " + p._ukuran + " " +
                p._kodePabrik.map(function(k){ return k.kode_pabrik; }).join(" ")).toLowerCase().replace(/["”]/g,"");
   });
@@ -11994,13 +12003,16 @@ var LAPORAN = {
   },
   penjualan: {
     label: "Penjualan per periode",
-    sub:   "Dipotong per sales, pelanggan, atau produk",
+    sub:   "Dipotong per sales, pelanggan, produk, atau kategori",   /* #26 */
     guna:  "Baris <b>biaya / ongkos kirim</b> berdiri di kolomnya sendiri, tidak "
          + "dicampur ke nilai barang — kalau dicampur, “penjualan produk” akan "
          + "memuat ongkos kirim, dan angka itu dipakai orang untuk memutuskan produk "
          + "mana yang didorong. Pada potongan <b>produk</b>, Grand Total dan Komisi "
          + "sengaja kosong: satu SP bisa memuat banyak produk, jadi menjumlahkannya "
-         + "di sana akan menghitung SP yang sama berkali-kali.",
+         + "di sana akan menghitung SP yang sama berkali-kali. Potongan <b>kategori</b> "
+         + "(Roda, Pallet Mesh, Hospital, …) sama seperti produk: Grand Total dan Komisi "
+         + "kosong, dan SP yang memuat dua kategori terhitung di keduanya pada kolom "
+         + "“Jumlah SP”. Baris SP yang dibatalkan tidak ikut.",   /* #26 */
     rpc:   "/rpc/laporan_penjualan",
     tanggal: true,
     dimensi: true,
@@ -12101,7 +12113,8 @@ var LAPORAN = {
 };
 var LAPORAN_URUT = ["piutang", "faktur", "komisi", "penjualan",
                     "margin_produk", "margin_sp", "hpp_kosong"];
-var DIMENSI_LAPORAN = [["sales","Per sales"], ["pelanggan","Per pelanggan"], ["produk","Per produk"]];
+var DIMENSI_LAPORAN = [["sales","Per sales"], ["pelanggan","Per pelanggan"], ["produk","Per produk"],
+                       ["kategori","Per kategori produk"]];   /* #26: laporan_penjualan berkas 91 */
 
 function bolehLaporan(){
   return ["owner","gm","staff","finance","sales","liesian","ichi","vonny","lenni"]
@@ -14913,6 +14926,7 @@ function saringProduk(){
   var f = saring.produk;
   return produkSah().filter(function(p){
     if (!cocokSaringUmum(p, f)) return false;
+    if (f.kat && f.kat !== "SEMUA" && p.kategori !== f.kat) return false;   /* #26 */
     if (f.sb === "KOSONG" && p.sumber_barang) return false;
     if (f.sb === "IMPOR"  && p.sumber_barang !== "impor") return false;
     if (f.sb === "LOKAL"  && p.sumber_barang !== "lokal") return false;
@@ -15129,6 +15143,7 @@ function panelProduk(){
   h += '<div class="saring">'
     + '<input type="search" id="q-produk" value="'+esc(nilaiKotakSaring(f))+'" placeholder="Cari kode internal, merek, seri, atau kode pabrik…" aria-label="Cari produk">'
     + saringUmum(f, "produk")
+    + '<label>Kategori <select id="c-produk">' + opsiSaring(KATEGORI_PRODUK, f.kat, "Semua kategori") + '</select></label>'   /* #26 */
     + '<label>Saring <select id="s-produk">'
     +   '<option value="SEMUA">semua</option>'
     +   '<option value="KOSONG"'+(f.sb==="KOSONG"?" selected":"")+'>belum ditentukan asalnya</option>'
@@ -15145,6 +15160,7 @@ function panelProduk(){
 
   h += '<div class="tw beku"><table><thead><tr>'
     + '<th class="l">Kode internal</th><th class="l">Merek</th><th class="l">Kelompok / seri</th>'
+    + '<th class="l">Kategori</th>'   /* #26 */
     + '<th class="l">Spesifikasi</th>'
     + '<th>Satuan</th><th class="l">Asal barang</th>'
     + '<th>Kode pabrik</th><th>Harga</th></tr></thead><tbody>';
@@ -15152,6 +15168,7 @@ function panelProduk(){
     h += '<tr class="klik" tabindex="0" data-produk="'+p.id+'">'
       + '<td class="l">'+esc(p.kode)+'</td><td class="l">'+esc(p.brand)+'</td>'
       + '<td class="l">'+(p.kelompok?esc(p.kelompok):'<span class="muted">—</span>')+'</td>'
+      + '<td class="l">'+(p.kategori?esc(p.kategori):'<span class="muted">—</span>')+'</td>'   /* #26 */
       + '<td class="l" style="white-space:nowrap">'+spekProduk(p)+'</td>'
       + '<td>'+esc(p.satuan)+'</td>'
       + '<td class="l">'+(p.sumber_barang
@@ -15160,7 +15177,7 @@ function panelProduk(){
       + '<td'+(p._kodePabrik.length?'':' class="num0"')+'>'+p._kodePabrik.length+'</td>'
       + '<td>'+(p._harga===null?'<span class="muted">—</span>':rp(p._harga))+'</td></tr>';
   });
-  h += '</tbody><tfoot><tr><td colspan="8" class="l">'
+  h += '</tbody><tfoot><tr><td colspan="9" class="l">'
     + (hasil.length > 400 ? '400 pertama dari '+hasil.length.toLocaleString("id-ID")+' — persempit pencarian untuk melihat sisanya'
                           : hasil.length.toLocaleString("id-ID")+' produk')
     + '</td></tr></tfoot></table></div>';
@@ -15190,6 +15207,7 @@ function panelProduk(){
   pasangKotakSaring("q-produk", saring.produk, panelProduk);
   pasangSaringUmum("produk", "produk", panelProduk);
   $("s-produk").addEventListener("change", function(e){ saring.produk.sb = e.target.value; panelProduk(); });
+  $("c-produk").addEventListener("change", function(e){ saring.produk.kat = e.target.value; panelProduk(); });   /* #26 */
   if (bolehUbahProduk()) $("btn-produk-baru").addEventListener("click", function(){ formProduk(null); });
   if (bolehUbahProduk()) $("btn-kolom-massal").addEventListener("click", function(){ formEditMassal("kelompok"); });
   if ($("btn-excel-produk")) $("btn-excel-produk").addEventListener("click", function(){ formExcelMassal(); });
@@ -15225,9 +15243,13 @@ function formProduk(p){
     + '</div>'
     + field({nama:"kelompok", label:"Kelompok / seri", nilai:p.kelompok, mati:!boleh,
              jenis:"pilih-ketik", pilihan:kelompokDaftar, tempel:"kelompok baru"})
+    /* #26: kategori tidak bisa dikosongkan (NOT NULL, berkas 90). Pilihan "otomatis"
+       hanya untuk produk yang belum punya kategori (produk baru) — database lalu
+       menurunkannya dari kelompok/seri. */
     + field({nama:"kategori", label:"Kategori produk", jenis:"select", nilai:p.kategori || "", mati:!boleh,
-             pilihan:["","Roda","Pallet Mesh","Hospital","Filing Cabinet","Trolley","Hand Pallet","Lainnya"],
-             bantu:"Dipakai untuk laporan per kategori."})   /* #26 */
+             pilihan:(p.kategori ? [] : [{v:"", l:"— otomatis dari kelompok / seri —"}]).concat(KATEGORI_PRODUK),
+             bantu:"Dipakai untuk laporan penjualan per kategori."
+                  + (p.kategori ? "" : " Kosong = diisi otomatis dari kelompok / seri (mis. seri “Pallet Mesh …” jadi Pallet Mesh); yang tidak dikenali jadi Roda.")})
     + '<div class="baris">'
     + field({nama:"fungsi", label:"Fungsi", jenis:"select", nilai:p.fungsi, mati:!boleh, pilihan:[
         "","Hidup / Swivel","Mati / Rigid","Rem / Brake","Wheel Only","All Swivel W/Brake",
@@ -15295,6 +15317,10 @@ function simpanProduk(p, baru){
   var kembar = PRODUK.filter(function(x){
     return x.kode.toLowerCase() === d.kode.toLowerCase() && (baru || x.id !== p.id); });
   if (kembar.length) { tampilPesan("Kode <code>"+esc(d.kode)+"</code> sudah dipakai produk lain."); return; }
+  /* #26: kolom yang tidak ikut dimuat JANGAN ikut dikirim — dulu kategori & catatan
+     tidak dimuat, lalu dikirim null dan menimpa isi database. */
+  if (!baru && p.kategori === undefined) delete d.kategori;
+  if (!baru && p.catatan === undefined) delete d.catatan;
   sibuk(true, "Menyimpan…");
   (baru ? api("POST", "/products", d, "return=representation")
         : api("PATCH", "/products?id=eq."+p.id, d, "return=representation"))
