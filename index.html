@@ -4065,8 +4065,32 @@ function poDiskonRp(b){
   var d = Number(b.diskon)||0;
   return b.diskon_tipe === "persen" ? base * d / 100 : d;   /* tak dibulatkan di sini; round di total */
 }
+/* #7: nilai bersih baris PO dihitung BULAT, bukan float. Float (qty×harga − potongan) bisa jatuh
+   ke x,4999… padahal nilai pastinya x,50 → Math.round turun, round() numeric po_ringkas naik →
+   SP dari pasangSp kurang Rp 1 dan ditolak (contoh 1 × 44.500 diskon 46,7% = 23.718,50).
+   qty & harga numeric(14,2) → ×100 bulat, jadi qc×hc = qty×harga dalam 1/10.000 Rp, eksak;
+   potongan habis dalam sen (CHECK po_lines_diskon_sen) → senDari eksak (hanya buang derau float).
+   Tepat selama nilai baris ≤ ± Rp 900 miliar (2^53 / 10.000). */
+function poNilaiBaris1e4(b){
+  var qc = Math.round((Number(b.qty) || 0) * 100), hc = Math.round((Number(b.harga) || 0) * 100);
+  return qc * hc - senDari(poDiskonRp(b)) * 100;
+}
+/* n/d (bulat, d > 0) dibulatkan setengah menjauhi nol — sama dengan round() numeric Postgres. */
+function bagiBulat(n, d){
+  var a = Math.abs(n), r = a % d, q = (a - r) / d;
+  if (r * 2 >= d) q += 1;
+  return (n < 0 && q) ? -q : q;
+}
+/* Nilai baris PO dalam SEN (bilangan bulat) = rumus po_ringkas. SATUAN = pembulatan po_ringkas
+   dalam 1/10.000 Rp: 10000 = round() ke rupiah (kini). #12 (tanpa pembulatan, sen): ubah jadi 100
+   seiring po_ringkas/periksa_total_sp — dan qty×harga harus dijaga habis dalam sen (CHECK), karena
+   harga_nett SP numeric(14,2) tidak bisa meniru pecahan di bawah sen. */
+function poNilaiBarisSen(b){
+  var SATUAN = 10000;
+  return bagiBulat(poNilaiBaris1e4(b), SATUAN) * (SATUAN / 100);
+}
 function poTotalBaris(b){
-  return Math.round((Number(b.qty)||0) * (Number(b.harga)||0) - poDiskonRp(b));
+  return poNilaiBarisSen(b) / 100;
 }
 /* #7: rupiah → sen (bilangan bulat). Math.round di sini HANYA membuang derau float (0,1+0,2),
    bukan pembulatan bisnis — yang masuk sudah dipastikan habis dalam sen (habisSen). */
@@ -4128,8 +4152,8 @@ function poRincianSet(l){
     return (Number(c.qty) || 0) + '× ' + (pp ? (pp.kode || pp.nama || ('#' + c.product_id)) : ('#' + c.product_id));
   }).join(", ");
 }
-/* #7 #1: satu baris PO → baris SP (per pcs) yang jumlahnya PERSIS nilai baris PO (poTotalBaris,
-   rumus sama po_ringkas) — grand total SP = PO (periksa_total_sp) tetap lolos, juga dalam sen.
+/* #7 #1: satu baris PO → baris SP (per pcs) yang jumlahnya PERSIS nilai baris PO (poNilaiBarisSen,
+   hitungan bulat, rumus sama po_ringkas) — grand total SP = PO (periksa_total_sp) tetap lolos, juga dalam sen.
    · tanpa diskon, bukan set: disalin apa adanya (nett = harga).
    · berdiskon: nett per unit = nilai bersih / qty, dipecah pecahNettSen (maks. 2 baris).
    · SET: nilai bersih dialokasikan ke komponen (snapshot) berbobot qty × harga nett komponen,
@@ -4143,10 +4167,7 @@ function spBarisDariPo(l){
   }
   if (!l.set_id && !(Number(l.diskon) > 0))
     return [ jadi(l.product_id, l.deskripsi, l.jenis || "barang", { qty: Number(l.qty), nett: Number(l.harga) }) ];
-  var T = poTotalBaris(l);
-  if (!habisSen(T)) throw new Error('Nilai baris "' + nama + '" di PO tidak habis dalam sen, jadi SP-nya '
-    + 'tidak bisa dibuat persis sama. Perbaiki qty/harga baris itu di PO dulu (Minta ubah).');
-  var tSen = senDari(T), pc;
+  var tSen = poNilaiBarisSen(l), pc;   /* bulat, = po_ringkas (bukan float — lihat poNilaiBaris1e4) */
   if (!l.set_id) {
     pc = pecahNettSen(tSen, l.qty);
     if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon tidak bisa dibagi rata ke qty '
@@ -4181,15 +4202,17 @@ function spBarisDariPo(l){
   return hasil;
 }
 function poHitungLokal(f){
-  var sub = 0, barang = 0, biaya = 0;
+  /* #7: dijumlah dalam SEN bulat (poNilaiBarisSen), bukan float rupiah — sama po_ringkas.
+     PPN = round(dasar × 0,11) ke rupiah (po_ringkas); #12 (sen): pembagi 10000 → 100. */
+  var barangSen = 0, biayaSen = 0;
   f.baris.forEach(function(b){
-    var n = poTotalBaris(b);   /* #7 */
-    sub += n;
-    if (b.jenis === "biaya") biaya += n; else barang += n;
+    var n = poNilaiBarisSen(b);   /* #7 */
+    if (b.jenis === "biaya") biayaSen += n; else barangSen += n;
   });
-  var ppn = f.ppn_kena ? Math.round(barang * 0.11) : 0;
-  return { sub: sub, barang: barang, biaya: biaya, dasar: barang,
-           ppn: ppn, grand: sub + ppn };
+  var ppnSen = f.ppn_kena ? bagiBulat(barangSen * 11, 10000) * 100 : 0;
+  var subSen = barangSen + biayaSen;
+  return { sub: subSen / 100, barang: barangSen / 100, biaya: biayaSen / 100, dasar: barangSen / 100,
+           ppn: ppnSen / 100, grand: (subSen + ppnSen) / 100 };
 }
 
 /* #24: sorting daftar dengan klik header. Mengurutkan data yang sedang termuat. */
