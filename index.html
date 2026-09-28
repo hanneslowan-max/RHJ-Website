@@ -988,6 +988,10 @@ function bolehUbahImpor(){  return ["owner","gm","staff"].indexOf(saya.peran) > 
 function bolehUbahBayar(){  return ["owner","gm","finance"].indexOf(saya.peran) > -1; }
 function bolehUbahHarga(){  return setaraOwner(); }
 function bolehUbahProduk(){ return ["owner","gm","staff"].indexOf(saya.peran) > -1; }
+/* #27: cerminan boleh_ubah_produk() (berkas 92) — MEMBUAT & MENGUBAH produk, Vonny ikut.
+   Hapus, ubah massal/Excel, set roda, kode pabrik, sahkan/gabung usulan tetap
+   bolehUbahProduk()/bolehUbahImpor()/bolehHapus(). */
+function bolehSuntingProduk(){ return bolehUbahProduk() || saya.peran === "vonny"; }
 /* #26: cerminan CHECK products_kategori_sah (berkas 90). */
 var KATEGORI_PRODUK = ["Roda","Pallet Mesh","Hospital","Filing Cabinet","Trolley","Hand Pallet","Lainnya"];
 
@@ -2829,10 +2833,10 @@ function muatSemua(){
      sales tetap tidak menerimanya. */
   minta("produk", "/products?select=id,id_lama,kode,brand,kelompok,kategori,fungsi,satuan,bahan,"
                 + "diameter_mm,hal_katalog,yakin,sumber_barang,aktif,usulan,usulan_teks"
-                + (bolehUbahProduk() ? ",catatan" : "")
+                + (bolehSuntingProduk() ? ",catatan" : "")
                 + "&order=brand.asc,kode.asc");
   minta("harga",  "/price_list?select=*&order=berlaku_dari.desc");
-  if (bolehLihatImpor() || saya.peran === "vonny") {   /* #27b: vonny baca order impor (payments tetap tertutup oleh RLS) */
+  if (bolehLihatImpor() || saya.peran === "vonny") {   /* #27b: vonny baca order impor (payments tetap tertutup oleh RLS; suppliers terbaca sejak berkas 92) */
     minta("order",    "/orders?select=*&order=id.asc");
     minta("bayar",    "/payments?select=*&order=id.asc");
     minta("kp",       "/factory_codes?select=*&order=id.asc");
@@ -12894,6 +12898,10 @@ function panelOrder(T){
   if (saya.peran === "sales") return panelOrderSales(T);
   var bolehTambah = saya.peran === "owner";
   var bolehUbah = bolehUbahImpor();
+  /* #27: Vonny membaca order impor tanpa pembayaran (payments tertutup RLS).
+     Angka & saringan pembayaran disembunyikan — kalau tampil, isinya selalu
+     "Rp0 dibayar" dan itu menyesatkan. */
+  var lihatBayar = bolehLihatImpor();
   $("head-aksi").innerHTML = bolehTambah
     ? '<button class="btn utama" id="btn-order-baru" type="button">+ Order baru</button>'
     : '<span class="gembok">Order baru hanya bisa dibuat owner</span>';
@@ -12923,13 +12931,15 @@ function panelOrder(T){
     +   '<option value="LENGKAP"'+(fo.dok==="LENGKAP"?" selected":"")+'>Lengkap</option>'
     +   '<option value="BELUM"'+(fo.dok==="BELUM"?" selected":"")+'>Belum lengkap</option>'
     + '</select></label>'
-    + '<label>Pembayaran <select id="o-bayar">'
-    +   '<option value="SEMUA">Semua</option>'
-    +   '<option value="LUNAS"'+(fo.bayar==="LUNAS"?" selected":"")+'>Lunas</option>'
-    +   '<option value="BELUM"'+(fo.bayar==="BELUM"?" selected":"")+'>Belum lunas</option>'
-    +   ["Sebagian","Belum Bayar","Belum ada nilai"].map(function(v){
-          return '<option value="'+esc(v)+'"'+(fo.bayar===v?" selected":"")+'>'+esc(v)+'</option>'; }).join("")
-    + '</select></label>'
+    + (lihatBayar
+      ? '<label>Pembayaran <select id="o-bayar">'
+      +   '<option value="SEMUA">Semua</option>'
+      +   '<option value="LUNAS"'+(fo.bayar==="LUNAS"?" selected":"")+'>Lunas</option>'
+      +   '<option value="BELUM"'+(fo.bayar==="BELUM"?" selected":"")+'>Belum lunas</option>'
+      +   ["Sebagian","Belum Bayar","Belum ada nilai"].map(function(v){
+            return '<option value="'+esc(v)+'"'+(fo.bayar===v?" selected":"")+'>'+esc(v)+'</option>'; }).join("")
+      + '</select></label>'
+      : '')   /* #27 */
     + (adaSaringOrder() ? '<button class="btn" type="button" id="bersih-order">Bersihkan</button>' : '')
     + '<span class="hitungan">'+hasilO.length+' dari '+ORDER.length+'</span>'
     + '</div>';
@@ -12968,9 +12978,12 @@ function panelOrder(T){
   }, { nilai:0, bayar:0, sisa:0 });
   h += '</tbody><tfoot><tr><td colspan="7" class="l">'
     + (adaSaringOrder() ? hasilO.length+' order tersaring (dari '+T.n+')' : 'Total '+T.n+' order')
-    + ' · nilai ' + rp(jml.nilai) + ' · dibayar ' + rp(jml.bayar) + ' · sisa ' + rp(jml.sisa)
+    + ' · nilai ' + rp(jml.nilai)
+    + (lihatBayar ? ' · dibayar ' + rp(jml.bayar) + ' · sisa ' + rp(jml.sisa) : '')   /* #27 */
     + '</td></tr></tfoot></table></div>'
-    + '<p class="muted" style="font-size:12.5px;margin-top:9px">Klik baris mana pun untuk membuka dan mengubah datanya.</p>';
+    + '<p class="muted" style="font-size:12.5px;margin-top:9px">'
+    + ((bolehUbah || bolehAlurImpor()) ? 'Klik baris mana pun untuk membuka dan mengubah datanya.' : 'Klik baris untuk melihat rinciannya.')
+    + '</p>';
   $("p-order").innerHTML = h;
   pasangSaringOrder();
   if (bolehTambah) $("btn-order-baru").addEventListener("click", function(){ formOrder(null); });
@@ -13213,11 +13226,16 @@ var KETERANGAN_PERAN = [
     bisa:["Menandai Surat Pesanan lunas (input pelunasan)","Melihat SELURUH alur jual: PO, SP, pengiriman, pelunasan"],
     tidak:["Menerbitkan surat jalan, invoice, atau faktur — itu Lie Sian",
            "Melihat HPP dan margin","Mengubah price list atau produk"] },
-  { peran:"vonny", ringkas:"Vonny — input PO, sisanya baca saja",
+  { peran:"vonny", ringkas:"Vonny — input PO, cek SP, ubah master produk; sisanya baca saja",   /* #27 */
     bisa:["Memasukkan dan merapikan PO customer","Melihat SELURUH alur jual: PO, SP, pengiriman, pelunasan",
-          "Melihat price list"],
+          "Melihat price list",
+          "Membuat & mengubah master produk (tanpa menghapus)",
+          "Melihat order impor & supplier (baca saja)"],
     tidak:["Membuat Surat Pesanan","Mengubah CRM","Mengisi nominal klaim EHC atau komisi",
-           "Melihat HPP dan margin"] },
+           "Melihat HPP dan margin",
+           "Mengubah order impor, kode pabrik, atau pembayaran",
+           "Melihat pembayaran supplier atau mengunduh dokumen impor",
+           "Menghapus produk, ubah massal, set roda, mengesahkan usulan produk"] },
   { peran:"lenni", ringkas:"Lenni — Laporan Finance, baca saja",
     bisa:["Menarik Laporan Finance","Melihat nominal klaim EHC dan komisi",
           "Melihat SELURUH alur jual dan price list"],
@@ -15124,7 +15142,7 @@ function panelProduk(){
       (bolehUbahProduk() ? '<button class="btn" id="btn-kolom-massal" type="button">Ubah massal</button>'
                          + '<button class="btn" id="btn-excel-produk" type="button">Ubah lewat Excel</button>'
                          + '<button class="btn" id="btn-set-roda" type="button" title="Kelola set roda (1 set = beberapa pcs)">🧩 Set roda</button>' : '')   /* #1 */
-    + (bolehUbahProduk() ? '<button class="btn utama" id="btn-produk-baru" type="button">+ Produk baru</button>' : '');
+    + (bolehSuntingProduk() ? '<button class="btn utama" id="btn-produk-baru" type="button">+ Produk baru</button>' : '');   /* #27: Vonny ikut */
   var h = '<div class="tiles">'
     + tile("Produk", sah.length.toLocaleString("id-ID"), "", "", "produk")
     + tile("Belum ditentukan asalnya", belumSumber.toLocaleString("id-ID"),
@@ -15182,17 +15200,23 @@ function panelProduk(){
                           : hasil.length.toLocaleString("id-ID")+' produk')
     + '</td></tr></tfoot></table></div>';
 
+  /* #27: menyambungkan kode pabrik = menulis factory_codes, dijaga boleh_ubah_impor()
+     (owner/GM/staff). Vonny hanya melihat — barisnya tidak bisa diklik, supaya tidak
+     muncul "Tersambung" palsu padahal database menolak (0 baris, tanpa galat). */
+  var bolehSambung = bolehUbahImpor();
   if (yatim.length) {
     h += '<h3 class="sec">Kode pabrik yang belum punya kode internal — '+yatim.length+'</h3>'
       + '<div class="flag"><span class="f-ico">i</span><div>Barang ini sudah pernah dibeli, tapi belum pernah '
       + 'dinamai dengan kode internal RHJ. Selama begini, pembeliannya tidak masuk hitungan HPP produk mana pun. '
-      + 'Klik satu baris untuk menyambungkannya ke produk yang sudah ada, atau buat produk baru.</div></div>'
+      + (bolehSambung ? 'Klik satu baris untuk menyambungkannya ke produk yang sudah ada, atau buat produk baru.'
+                      : 'Yang menyambungkan: owner, GM, atau staff.')
+      + '</div></div>'
       + '<div class="tw"><table><thead><tr><th class="l">Pabrik</th><th class="l">Kode pabrik</th>'
       + '<th class="l">Varian</th><th class="l">Pembeda</th><th>Ø mm</th><th class="l">Fungsi</th><th class="l">HS</th>'
       + '</tr></thead><tbody>';
     yatim.slice(0, 200).forEach(function(k){
       var s = SUPPLIER.filter(function(x){ return x.id === k.supplier_id; })[0];
-      h += '<tr class="klik" tabindex="0" data-kp="'+k.id+'">'
+      h += (bolehSambung ? '<tr class="klik" tabindex="0" data-kp="'+k.id+'">' : '<tr>')
         + '<td class="l">'+(s?esc(s.nama):'—')+'</td><td class="l">'+esc(k.kode_pabrik)+'</td>'
         + '<td class="l">'+(k.varian?esc(k.varian):'<span class="muted">—</span>')+'</td>'
         + '<td class="l">'+(k.pembeda?esc(k.pembeda):'<span class="muted">—</span>')+'</td>'
@@ -15208,7 +15232,7 @@ function panelProduk(){
   pasangSaringUmum("produk", "produk", panelProduk);
   $("s-produk").addEventListener("change", function(e){ saring.produk.sb = e.target.value; panelProduk(); });
   $("c-produk").addEventListener("change", function(e){ saring.produk.kat = e.target.value; panelProduk(); });   /* #26 */
-  if (bolehUbahProduk()) $("btn-produk-baru").addEventListener("click", function(){ formProduk(null); });
+  if (bolehSuntingProduk()) $("btn-produk-baru").addEventListener("click", function(){ formProduk(null); });   /* #27 */
   if (bolehUbahProduk()) $("btn-kolom-massal").addEventListener("click", function(){ formEditMassal("kelompok"); });
   if ($("btn-excel-produk")) $("btn-excel-produk").addEventListener("click", function(){ formExcelMassal(); });
   if ($("btn-set-roda")) $("btn-set-roda").addEventListener("click", function(){ formKelolaSet(); });   /* #1 */
@@ -15225,7 +15249,7 @@ function panelProduk(){
 }
 
 function formProduk(p){
-  var baru = !p, boleh = bolehUbahProduk();
+  var baru = !p, boleh = bolehSuntingProduk();   /* #27: Vonny boleh membuat & mengubah */
   p = p || { satuan:"pcs", aktif:true };
   var brands = daftarBrand();
   var kelompokAda = {}; PRODUK.forEach(function(x){ if (x.kelompok) kelompokAda[x.kelompok] = 1; });
@@ -15233,7 +15257,7 @@ function formProduk(p){
   var kelompokDaftar = Object.keys(kelompokAda).sort();
 
   var h = '<fieldset'+(boleh?'':' class="terkunci"')+'><legend>Identitas'
-    + (boleh?'':' <span class="gembok">— hanya owner &amp; staff</span>')+'</legend>'
+    + (boleh?'':' <span class="gembok">— hanya owner, GM, staff &amp; Vonny</span>')+'</legend>'
     + field({nama:"kode", label:"Kode internal RHJ", nilai:p.kode, wajib:true, mati:!boleh,
              tempel:'mis. 03 RED PP 4" H', bantu:"Harus unik. Ini yang menyambungkan produk ke kode pabrik, harga, dan HPP."})
     + '<div class="baris">'
@@ -15324,7 +15348,12 @@ function simpanProduk(p, baru){
   sibuk(true, "Menyimpan…");
   (baru ? api("POST", "/products", d, "return=representation")
         : api("PATCH", "/products?id=eq."+p.id, d, "return=representation"))
-    .then(function(){ return muatSemua(); })
+    .then(function(r){
+      /* #27: RLS yang menolak UPDATE tidak memberi galat — hasilnya cuma kosong.
+         Tanpa pemeriksaan ini layar mengumumkan "tersimpan" padahal tidak. */
+      if (!r || !r.length) throw new Error("Produk tidak tersimpan — peran Anda tidak berwenang, atau datanya sudah berubah. Muat ulang halaman.");
+      return muatSemua();
+    })
     .then(function(){ tutupLaci(); gambar(); toast(baru ? "Produk tersimpan." : "Perubahan tersimpan."); })
     .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
 }
@@ -15377,9 +15406,15 @@ function formSambung(k){
   bukaLaci("Sambungkan kode pabrik");
 }
 
-/* order hanya bisa dilihat (finance) */
+/* order hanya bisa dilihat (finance, Vonny, …) */
 function formOrderLihat(o){
-  var h = '<fieldset class="terkunci"><legend>Order <span class="gembok">— finance hanya melihat</span></legend>'
+  /* #27: pembayaran hanya untuk yang memang boleh membacanya (payments =
+     boleh_lihat_impor). Untuk Vonny datanya selalu kosong — menampilkan
+     "Sudah dibayar Rp0" akan terbaca sebagai fakta, padahal cuma tak terlihat. */
+  var bayar = bolehLihatImpor()
+    ? [["Sudah dibayar", rp(o._dibayarIdr)], ["Sisa", rp(o._sisaIdr)], ["Status bayar", o._status]]
+    : [["Pembayaran", '<span class="muted">tidak ditampilkan untuk peran Anda</span>']];
+  var h = '<fieldset class="terkunci"><legend>Order <span class="gembok">— hanya melihat</span></legend>'
     + '<div class="tw" style="margin-top:6px"><table><tbody>'
     + [["No invoice", esc(o.no_invoice)], ["Supplier", esc(o.supplier)],
        ["Tanggal order", o.tanggal_order ? tglTampil(o.tanggal_order) : "—"],
@@ -15387,10 +15422,9 @@ function formOrderLihat(o){
        ["Kurs estimasi", o.kurs_estimasi === null ? "—" : Number(o.kurs_estimasi).toLocaleString("id-ID")],
        ["Nilai estimasi", o._nilai === null ? "—" : rp(o._nilai)],
        ["Status produksi", esc(o.status_produksi)],
-       ["ETD / ETA / tiba", [o.etd, o.eta, o.tanggal_tiba].map(function(x){ return x ? tglTampil(x) : "—"; }).join(" · ")],
-       ["Sudah dibayar", rp(o._dibayarIdr)], ["Sisa", rp(o._sisaIdr)],
-       ["Status bayar", o._status],
-       ["Dokumen", (o._dok||[]).length ? (o._dok.length + " berkas") : "belum ada"]].map(function(r){
+       ["ETD / ETA / tiba", [o.etd, o.eta, o.tanggal_tiba].map(function(x){ return x ? tglTampil(x) : "—"; }).join(" · ")]]
+      .concat(bayar)
+      .concat([["Dokumen", (o._dok||[]).length ? (o._dok.length + " berkas") : "belum ada"]]).map(function(r){
         return '<tr><td class="l">'+r[0]+'</td><td class="l">'+r[1]+'</td></tr>'; }).join("")
     + '</tbody></table></div></fieldset>';
   /* finance tetap perlu MENGUNDUH dokumennya untuk pembayaran, dan mengunggah
@@ -15716,7 +15750,10 @@ function barisSlot(o, dok, jenis, idx, boleh){
   if (d) {
     h += '<div class="slot-berkas"><span>' + esc(d.nama_berkas) + ' · ' + ukuranTampil(d.ukuran) + '</span>'
       +  '<span class="slot-aksi">'
-      +    '<button type="button" class="btn kecil" data-unduh="' + d.id + '">Unduh</button>'
+      /* #27: cerminan storage dokumen_baca (boleh_lihat_impor). Vonny melihat
+         order tapi tidak mengunduh berkasnya — tombol yang selalu gagal tidak dipasang. */
+      +    (bolehLihatImpor() ? '<button type="button" class="btn kecil" data-unduh="' + d.id + '">Unduh</button>'
+                              : '<span class="muted">unduh: tim impor/finance</span>')
       +    (bolehHapus() ? ' <button type="button" class="btn kecil bahaya" data-hapusdok="' + d.id + '">Hapus</button>' : '')
       +  '</span></div>';
   }
@@ -15868,7 +15905,8 @@ function gambarDokumen(o){
         + '<td>' + ukuranTampil(d.ukuran) + '</td>'
         + '<td>' + tdJkt(d.dibuat_pada) + '</td>'
         + '<td style="text-align:right;white-space:nowrap">'
-        +   '<button type="button" class="btn kecil" data-unduh="' + d.id + '">Unduh</button>'
+        +   (bolehLihatImpor() ? '<button type="button" class="btn kecil" data-unduh="' + d.id + '">Unduh</button>'
+                               : '<span class="muted">unduh: tim impor/finance</span>')   /* #27 */
         +   (bolehHapus() ? ' <button type="button" class="btn kecil bahaya" data-hapusdok="' + d.id + '">Hapus</button>' : '')
         + '</td></tr>';
     });
