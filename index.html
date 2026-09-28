@@ -3445,6 +3445,7 @@ function pindahTab(nama){
    ═══════════════════════════════════════════════════════════════════════ */
 var ALUR = {
   po: [], sp: [], rep: [], dimuatPo: false, dimuatSp: false, memuat: false,
+  repCash: null,        /* #22: id sales cash-only dari RPC sales_rep_cash_only (untuk peran yang tak bisa membaca sales_reps) */
   /* Periode daftar PO. 2 hari: yang dilihat orang tiap hari cuma PO yang
      baru masuk, dan daftar itu harus tetap ringan berapa pun PO yang sudah
      menumpuk. Periode ini TIDAK mengatur antrean "belum jadi SP" maupun
@@ -3589,8 +3590,12 @@ function repAlur(){
      satu pertanyaan yang selama ini tidak bisa dijawab layar mana pun:
      "akun saya ini sales yang mana?". Tanpa tautan itu sales_rep_saya()
      di database NULL, dan setiap daftar yang disaring per-sales pulang
-     kosong — tanpa galat, tanpa penjelasan. */
-  return api("GET", "/sales_reps?select=id,nama,jenis,aktif,profile_id&order=nama").then(function(r){
+     kosong — tanpa galat, tanpa penjelasan.
+     #22: select=* supaya cash_only & komisi_flat_pct (berkas 68) ikut
+     terbaca TANPA membuat permintaan ini gagal 400 di database yang belum
+     punya kolom itu — di sana repCashOnly() jatuh ke RPC, lalu ke "bukan
+     cash-only", dan database tetap yang memutuskan. */
+  return api("GET", "/sales_reps?select=*&order=nama").then(function(r){
     ALUR.rep = r || []; return ALUR.rep;
   });
 }
@@ -3725,6 +3730,40 @@ function kotakAkunSales(){
 function namaRepAlur(id){
   var r = ALUR.rep.filter(function(x){ return String(x.id) === String(id); })[0];
   return r ? r.nama : "";
+}
+/* #22: sales cash-only (Riksa, Michael) — SP-nya selalu cash, komisinya flat.
+   ALUR.rep untuk peran yang boleh membaca sales_reps; ALUR.repCash (RPC
+   sales_rep_cash_only) untuk Ichi, yang tidak bisa. Ini hanya untuk layar:
+   yang menolak tempo/"bukan cash" adalah trigger jaga_cash_only (berkas 95). */
+function repAlurById(id){
+  return ALUR.rep.filter(function(x){ return String(x.id) === String(id); })[0] || null;
+}
+function repCashOnly(id){
+  if (id === null || id === undefined || id === "") return false;
+  var r = repAlurById(id);
+  if (r && r.cash_only !== undefined) return r.cash_only === true;
+  return (ALUR.repCash || []).some(function(x){ return String(x) === String(id); });
+}
+function labelKomisiFlat(id){
+  var r = repAlurById(id);
+  if (!r || r.komisi_flat_pct === null || r.komisi_flat_pct === undefined) return "komisi flat";
+  /* Persen, bukan rupiah: 0.01 → "1", 0.015 → "1,5". toPrecision(12) hanya
+     membuang sisa floating point (0.07*100 = 7.000000000000001), bukan membulatkan. */
+  var p = Number((Number(r.komisi_flat_pct) * 100).toPrecision(12));
+  return "komisi flat " + String(p).replace(".", ",") + "%";
+}
+function muatRepCash(){
+  if (ALUR.repCash && ALUR.repCash.length) return Promise.resolve(ALUR.repCash);
+  return api("POST", "/rpc/sales_rep_cash_only", {})
+    .then(function(r){ ALUR.repCash = Array.isArray(r) ? r : []; return ALUR.repCash; })
+    .catch(function(){ return []; });   /* tanpa RPC: pilihan tetap tampil, database yang menolak */
+}
+/* Sales yang akan tercatat di SP. Kotak Sales kosong + pengisinya berperan
+   sales → database mengisinya dengan dirinya sendiri (jaga_pemilik_dokumen). */
+function spRepEfektif(f){
+  if (f.sales_rep_id) return f.sales_rep_id;
+  var r = peranSales() ? repSayaAlur() : null;
+  return r ? r.id : null;
 }
 
 /* ── memuat ──────────────────────────────────────────────────────────── */
@@ -5652,6 +5691,13 @@ function panelSp(){
     }
     {
       if (spFormSiap(f)) {
+        /* #22: sales cash-only → pembayaran dikunci Cash. Diperiksa tiap kali
+           form digambar, karena sales bisa berganti dari PO, pelanggan, atau
+           kotak Sales. Kalau diganti lagi ke sales biasa, pilihan kembali ke
+           default tempo (hanya bila tadinya dipaksa di sini). */
+        var repSp = spRepEfektif(f), cashKunci = repCashOnly(repSp);
+        if (cashKunci) { if (!f.cash_minta) f._cashPaksa = true; f.cash_minta = true; }
+        else if (f._cashPaksa) { f.cash_minta = false; f._cashPaksa = false; }
         h += '<div class="baris2" style="margin-top:12px">'
           +   medanAlur("Kepada", '<input type="text" id="sp-kepada" value="'+esc(f.kepada)+'">')
           +   medanAlur("UP.", '<input type="text" id="sp-up" value="'+esc(f.up)+'">')
@@ -5662,16 +5708,25 @@ function panelSp(){
                 + '<option value="0"'+(!f.ppn_kena?" selected":"")+'>Non-PPN</option></select>')
           + '</div>'
           + '<div class="baris2" style="margin-top:12px">'
-          +   medanAlur("Pembayaran", '<select id="sp-cash">'
-                + '<option value="0"'+(!f.cash_minta?" selected":"")+'>Tempo / hutang — komisi tier biasa</option>'
-                + '<option value="1"'+(f.cash_minta?" selected":"")+'>Cash — komisi 5% di harga list ke atas</option>'
-                + '</select>')
-          +   medanAlur("", '<span class="bantu" style="display:block;padding-top:8px">'
-                + (f.cash_minta
-                    ? 'Klaim cash ini dicocokkan finance saat pelunasan. Komisi 5% berlaku '
-                      + 'sesudah dicocokkan, bukan sekarang.'
-                    : 'Penjualan tempo memakai tier biasa: 2% / 3% / 4% HAMMER / 5%.')
-                + '</span>')
+          +   (cashKunci   /* #22 */
+                ? medanAlur("Pembayaran", '<select id="sp-cash" disabled>'
+                    + '<option value="1" selected>Cash — ' + esc(labelKomisiFlat(repSp)) + '</option>'
+                    + '</select>')
+                  + medanAlur("", '<span class="bantu" style="display:block;padding-top:8px">'
+                    + 'Sales ini khusus penjualan cash — pilihan tempo tidak tersedia. Komisinya '
+                    + esc(labelKomisiFlat(repSp).replace(/^komisi /, "")) + ' dari nilai barang '
+                    + '(bukan tier, bukan 5%). Finance tetap mencocokkan uang cash-nya saat pelunasan.'
+                    + '</span>')
+                : medanAlur("Pembayaran", '<select id="sp-cash">'
+                    + '<option value="0"'+(!f.cash_minta?" selected":"")+'>Tempo / hutang — komisi tier biasa</option>'
+                    + '<option value="1"'+(f.cash_minta?" selected":"")+'>Cash — komisi 5% di harga list ke atas</option>'
+                    + '</select>')
+                  + medanAlur("", '<span class="bantu" style="display:block;padding-top:8px">'
+                    + (f.cash_minta
+                        ? 'Klaim cash ini dicocokkan finance saat pelunasan. Komisi 5% berlaku '
+                          + 'sesudah dicocokkan, bukan sekarang.'
+                        : 'Penjualan tempo memakai tier biasa: 2% / 3% / 4% HAMMER / 5%.')
+                    + '</span>'))
           + '</div>'
           + '<div style="margin-top:12px">'
           +   medanAlur("Alamat", '<textarea id="sp-alamat" rows="2">'+esc(f.alamat)+'</textarea>')
@@ -6357,7 +6412,7 @@ function simpanSp(khusus){
       /* Klaim sales, bukan fakta. cash_ok sengaja tidak dikirim dari sini:
          yang menaikkan komisi adalah kolom itu, dan hanya finance yang
          boleh menyentuhnya. */
-      cash_minta: !!f.cash_minta,
+      cash_minta: !!f.cash_minta || repCashOnly(spRepEfektif(f)),   /* #22: DB tetap memaksa */
       catatan: f.catatan || null   /* #17 */
     }, "return=representation");
   })
@@ -9343,7 +9398,7 @@ function muatLunas(){
   if (L.saring === "belum") q += "&lunas=is.false";
   if (L.saring === "lunas") q += "&lunas=is.true";
   q += "&order=" + L.tglKol + ".desc.nullslast,id.desc";
-  return Promise.all([ apiHalaman(q, 0, BATAS_TARIK - 1), repAlur() ])
+  return Promise.all([ apiHalaman(q, 0, BATAS_TARIK - 1), repAlur(), muatRepCash() ])   /* #22 */
     .then(function(r){
       L.total = r[0].total;
       L.dipotong = (L.total !== null && L.total > r[0].baris.length);
@@ -9460,6 +9515,8 @@ function panelLunas(){
     + 'yang menaikkan komisinya jadi 5% adalah pencocokan finance di layar ini, bukan klaim '
     + 'itu sendiri. Selama belum dicocokkan, komisinya tetap tier biasa — jadi tidak ada satu '
     + 'orang pun yang bisa menaikkan komisinya sendiri hanya dengan mengetik.'
+    + ' Pengecualian: sales cash-only (Riksa, Michael) — SP-nya selalu cash dengan komisi flat, '
+    + 'tanpa pilihan "bukan cash — tempo".'   /* #22 */
     + (bolehPelunasan() ? '' : '<br><br><b>Peran Anda tidak boleh menandai pelunasan.</b> '
         + 'Daftarnya tetap terbaca. Yang boleh: owner, GM, dan Ichi.'));
 
@@ -9551,25 +9608,48 @@ function formLunas(s){
      jawabannya. Menanyakannya di layar terpisah berarti menanyakannya
      saat orangnya sudah tidak melihat buktinya lagi. */
   if (s.cash_minta || s.cash_ok !== null) {
+    /* #22: SP sales cash-only (Riksa, Michael) selalu cash dan komisinya flat —
+       pilihan "bukan cash — tempo" tidak ditawarkan (database menolaknya,
+       trigger jaga_cash_only & cocokkan_cash_sp berkas 95). */
+    var cashOnly = repCashOnly(s.sales_rep_id);
     h += '<div class="flag' + (s.cash_ok === null ? '' : (s.cash_ok ? ' ok' : ' bad'))
       + '"><span class="f-ico">' + (s.cash_ok === null ? 'i' : (s.cash_ok ? '✓' : '!')) + '</span><div>'
-      + (s.cash_minta
-          ? '<b>Sales menandai penjualan ini cash.</b> '
-          : '<b>Sales TIDAK menandai penjualan ini cash.</b> ')
-      + (s.cash_ok === null
-          ? 'Komisinya masih memakai tier biasa. Kalau uangnya memang diterima kontan, '
-            + 'benarkan di bawah — komisinya jadi 5% untuk baris yang harganya di price list '
-            + 'ke atas. Yang di bawah price list tetap perlu putusan GM.'
-          : (s.cash_ok
-              ? 'Sudah dibenarkan sebagai penjualan cash — komisinya memakai aturan 5%.'
-              : 'Sudah dinyatakan BUKAN penjualan cash — komisinya memakai tier biasa.'))
+      + (cashOnly
+          ? '<b>Sales cash-only — penjualan ini selalu cash.</b> '
+            + (s.cash_ok === null
+                ? 'Benarkan di bawah begitu uang cash-nya diterima. Komisinya flat dan tidak '
+                  + 'bergantung pada pencocokan ini.'
+                : (s.cash_ok
+                    ? 'Sudah dibenarkan sebagai penjualan cash.'
+                    : 'Tercatat bukan cash (data lama).'))
+          : (s.cash_minta
+              ? '<b>Sales menandai penjualan ini cash.</b> '
+              : '<b>Sales TIDAK menandai penjualan ini cash.</b> ')
+            + (s.cash_ok === null
+                ? 'Komisinya masih memakai tier biasa. Kalau uangnya memang diterima kontan, '
+                  + 'benarkan di bawah — komisinya jadi 5% untuk baris yang harganya di price list '
+                  + 'ke atas. Yang di bawah price list tetap perlu putusan GM.'
+                : (s.cash_ok
+                    ? 'Sudah dibenarkan sebagai penjualan cash — komisinya memakai aturan 5%.'
+                    : 'Sudah dinyatakan BUKAN penjualan cash — komisinya memakai tier biasa.')))
       + '</div></div>'
       + field({ nama:"ln_cash", label:"Pencocokan cash oleh finance", jenis:"select", mati:kunciCash,
                 nilai: s.cash_ok === null ? "" : (s.cash_ok ? "ya" : "tidak"),
-                pilihan:[{v:"",l:"Belum dicocokkan"},
-                         {v:"ya",l:"Benar, uangnya cash"},
-                         {v:"tidak",l:"Bukan cash — tempo biasa"}],
-                bantu:"Hanya kolom ini yang menaikkan komisi. Klaim sales sendiri tidak." });
+                pilihan: cashOnly
+                  /* Opsi "tidak" hanya untuk data lama yang memang sudah begitu —
+                     tanpa pasangannya, dropdown jatuh ke "" dan Simpan memicu
+                     pesan "tidak bisa dikembalikan". */
+                  ? [{v:"",l:"Belum dicocokkan"},
+                     {v:"ya",l:"Benar, uangnya cash"}]
+                    .concat(s.cash_ok === false ? [{v:"tidak",l:"Bukan cash (data lama)"}] : [])
+                  : [{v:"",l:"Belum dicocokkan"},
+                     {v:"ya",l:"Benar, uangnya cash"},
+                     {v:"tidak",l:"Bukan cash — tempo biasa"}],
+                bantu: cashOnly
+                  ? "Sales cash-only: pilihan \"bukan cash — tempo\" tidak tersedia (database "
+                    + "menolaknya). Kalau SP ini memang tempo, minta staff/GM/owner memindahkan "
+                    + "sales-nya dulu."
+                  : "Hanya kolom ini yang menaikkan komisi. Klaim sales sendiri tidak." });
   }
 
   $("laci-form").innerHTML = h;
@@ -17100,7 +17180,7 @@ window.__alur = {
   alur: function(){ return ALUR; },
   siapkan: function(o){
     saya = o.saya; PRODUK = o.produk || []; HARGA = o.harga || [];
-    ALUR.po = []; ALUR.sp = []; ALUR.rep = []; ALUR.usul = [];
+    ALUR.po = []; ALUR.sp = []; ALUR.rep = []; ALUR.usul = []; ALUR.repCash = null;   /* #22 */
     ALUR.dimuatPo = false; ALUR.dimuatSp = false; ALUR.dimuatUsul = false;
     ALUR.poForm = null; ALUR.spForm = null; ALUR.pesan = "";
     /* Saringan ikut dikembalikan ke awal. Kalau tidak, uji yang menyetel

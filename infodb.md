@@ -318,9 +318,15 @@ CREATE TABLE public.sales_reps (
   profile_id uuid,
   aktif boolean NOT NULL DEFAULT true,
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  komisi_flat_pct numeric CHECK (komisi_flat_pct IS NULL OR komisi_flat_pct >= 0::numeric AND komisi_flat_pct <= 0.5),
+  cash_only boolean NOT NULL DEFAULT false,
   CONSTRAINT sales_reps_pkey PRIMARY KEY (id),
   CONSTRAINT sales_reps_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES auth.users(id)
 );
+-- komisi_flat_pct & cash_only [berkas 68, #22]: Riksa (8) & Michael (7) = 0.01 & true. komisi_flat_pct
+--   mengalahkan tier/harga khusus/cash di so_baris_hitung. cash_only ditegakkan trigger so_x_cash_only di
+--   sales_orders [berkas 95]. RLS rep_baca = boleh_baca() (tanpa ichi/liesian/selfie) → FE memakai
+--   RPC sales_rep_cash_only() -> bigint[] (authenticated; pending/nonaktif = {}) [berkas 95].
 CREATE TABLE public.customers (
   id bigint NOT NULL DEFAULT nextval('customers_id_seq'::regclass),
   nama text NOT NULL,
@@ -622,6 +628,11 @@ CREATE TABLE public.sales_orders (
 --   -> gugurkan_cek_vonny(): vonny_ok/oleh/pada -> null selama barang belum keluar [berkas 88].
 -- RPC tandai_sp_tanpa_po: selain owner/gm hanya PEMBUAT SP, sebelum cek Vonny & sebelum barang keluar [berkas 88].
 -- Trigger so_jaga_pembuat (BEFORE UPDATE, WHEN dibuat_oleh/dibuat_pada berubah) [berkas 89]: hanya owner/gm.
+-- Cash (#22): cash_minta = klaim sales, cash_ok = pencocokan (RPC cocokkan_cash_sp: owner/gm/finance/ichi;
+--   trigger so_cash_jaga -> jaga_cash_sp mencatat cash_oleh/pada). Trigger so_x_cash_only (BEFORE INSERT OR
+--   UPDATE OF sales_rep_id, cash_minta, cash_ok) -> jaga_cash_only() SECURITY DEFINER [berkas 95]: untuk SP rep
+--   cash_only, cash_ok=false ditolak (juga di cocokkan_cash_sp), cash_minta true->false ditolak, INSERT / pindah
+--   ke rep cash_only dipaksa cash_minta=true. Berlaku semua peran; nama "so_x_" = jalan sesudah so_pemilik.
 -- Constraint trigger so_pelanggan_po (AFTER UPDATE OF customer_id, WHEN po_id terisi, DEFERRABLE INITIALLY
 --   DEFERRED) [berkas 89] -> jaga_pelanggan_sp_po(): pelanggan SP = pelanggan PO-nya (dicek saat COMMIT).
 -- RLS so_baca [berkas 83, 88]: sales pemilik; SP yang sedang dicek Vonny (tidak batal, belum surat jalan,
