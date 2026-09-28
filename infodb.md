@@ -390,9 +390,14 @@ CREATE TABLE public.quotes (
 -- Trigger quotes_jaga_sales (BEFORE INSERT / UPDATE OF sales_rep_id, customer_id) [berkas 87]:
 --   isi dibuat_oleh/dibuat_pada; sales -> sales_rep_id = dirinya (tak bisa sales lain);
 --   vonny wajib ada sales; sales & vonny: pelanggan bertuan hanya atas nama pemegangnya.
--- RLS [berkas 87]: quote_baca = vonny / boleh_lihat_semua_lead() / sales_rep_id = sales_rep_saya()
---   (atau lead lama milik sales itu); quote_tambah = crm/vonny + pelanggan_saya + sales=dirinya;
---   quote_ubah = owner/gm/staff/vonny. Simpan lewat RPC simpan_penawaran(p_kepala, p_baris).
+-- Trigger quotes_jaga_nomor (BEFORE INSERT / UPDATE OF nomor) [berkas 93]: INSERT tanpa nomor → diisi
+--   counter; selain owner nomor wajib yang sudah dikeluarkan counter (format baku, urut ≤ counter);
+--   UPDATE nomor hanya owner. auth.uid() null tidak dijaga.
+-- RLS [berkas 87, 93]: quote_baca = vonny / boleh_lihat_semua_lead() / (peran sales AND
+--   sales_rep_id = sales_rep_saya(), atau lead lama milik sales itu) — sales nonaktif/pending yang
+--   masih tertaut tidak melihat apa pun; quote_tambah = crm/vonny + pelanggan_saya + sales=dirinya;
+--   quote_ubah = owner/gm/staff/vonny. Simpan lewat RPC simpan_penawaran(p_kepala, p_baris):
+--   nomor diambil ulang bila bentrok quotes_nomor_uniq (maks 10x) [berkas 93].
 CREATE TABLE public.quote_lines (
   id bigint NOT NULL DEFAULT nextval('quote_lines_id_seq'::regclass),
   quote_id bigint NOT NULL,
@@ -421,6 +426,10 @@ CREATE TABLE public.quote_counter (
   urut integer NOT NULL DEFAULT 0,
   CONSTRAINT quote_counter_pkey PRIMARY KEY (tahun, bulan)
 );
+-- Nomor: nomor_penawaran_baru(tanggal) (SECURITY DEFINER, crm/vonny) menaikkan counter dan MELOMPATI
+--   nomor yang sudah ada di quotes; format lewat nomor_penawaran_format(urut, tahun, bulan) =
+--   'NNN/PQ/MCE/<bulan romawi>/<tahun>', ≥ 1000 tidak dipotong [berkas 93]. RLS tanpa policy →
+--   tabel ini hanya disentuh lewat fungsi.
 CREATE TABLE public.purchase_orders (
   id bigint NOT NULL DEFAULT nextval('purchase_orders_id_seq'::regclass),
   no_po text NOT NULL CHECK (btrim(no_po) <> ''::text),
