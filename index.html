@@ -4401,6 +4401,7 @@ function formBatal(jenis, o){
         toast((po ? "PO " : "Surat Pesanan ") + nomor + " dibatalkan.");
         ALUR.dimuatPo = false; ALUR.dimuatSp = false;
         LANJUT.kirim.dimuat = false; LANJUT.lunas.dimuat = false; LANJUT.gm.dimuat = false;
+        LANJUT.vonnycek.dimuat = false;   /* #8: SP batal keluar dari tab Double Check */
         return po ? muatPo(true).then(panelPo) : muatSp(true).then(panelSp);
       })
       .catch(function(e){ tampilPesan(esc(e.message)); })
@@ -4854,6 +4855,7 @@ function formMintaUbah(jenis, id){
       tutupLaci();
       ALUR.dimuatUsul = false; ALUR.dimuatPo = false; ALUR.dimuatSp = false;
       if (LANJUT && LANJUT.gm) LANJUT.gm.dimuat = false;
+      if (LANJUT && LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;   /* #8: baris berubah → status bisa pindah */
       /* Kalau perubahannya membuat SP tidak lagi sama dengan PO, itu bukan
          kabar baik yang boleh lewat sebagai "berhasil" hijau selama 3 detik.
          Dipakaikan gaya peringatan supaya terbaca dan bertahan lebih lama. */
@@ -6201,6 +6203,7 @@ function simpanSp(khusus){
        — dan itu memang perlu di sini: daftarnya baru saja berubah oleh
        permintaan yang barusan dikirim. */
     ALUR.spForm = spFormBaru(); ALUR.dimuatSp = false; ALUR.dimuatPo = false;
+    LANJUT.vonnycek.dimuat = false;   /* #8: SP baru masuk tab Double Check Vonny */
     if (khusus) tutupLaci();
     if (so._khususGagal) {
       toast("SP " + so.no_sp + " tersimpan, tapi permintaan harga khususnya gagal: "
@@ -8239,10 +8242,14 @@ var KOL_TGL_KIRIM = [
 ];
 var BATAS_TARIK = 500;
 
+/* #8: angka di tombol halaman memakai saringan yang sama dengan muatKirim() —
+   SP 'menunggu vonny' tidak dihitung (ia ada di tab Double Check Vonny). */
 var KIRIM_HAL = [
-  { id:"belum", label:"Belum terkirim", q:"/sales_orders?select=id&batal=is.false&no_surat_jalan=is.null",
+  { id:"belum", label:"Belum terkirim", q:"/sales_orders?select=id&batal=is.false&no_surat_jalan=is.null"
+      + "&status=neq." + encodeURIComponent("menunggu vonny"),
     syarat:"no_surat_jalan=is.null",     tglKol:"tanggal" },
-  { id:"sudah", label:"Sudah terkirim", q:"/sales_orders?select=id&batal=is.false&no_surat_jalan=not.is.null",
+  { id:"sudah", label:"Sudah terkirim", q:"/sales_orders?select=id&batal=is.false&no_surat_jalan=not.is.null"
+      + "&status=neq." + encodeURIComponent("menunggu vonny"),
     syarat:"no_surat_jalan=not.is.null", tglKol:"tgl_surat_jalan" }
 ];
 
@@ -8316,6 +8323,7 @@ function panelVonnyCek(){
 function segarkanVonnyCek(){
   LANJUT.vonnycek.dimuat = false;
   if (LANJUT.kirim) LANJUT.kirim.dimuat = false;   /* SP yang lolos akan muncul di Pengiriman */
+  ALUR.dimuatSp = false;                           /* #8: pill status di daftar SP ikut segar */
   muatVonnyCek().then(panelVonnyCek).catch(function(){});
 }
 function formCekVonny(s){
@@ -8525,6 +8533,9 @@ function formKirim(s){
      ditahan. Yang belum diputuskan tetap dijaga database. */
   var tahanKirim = (s.kirim_ok === false);
   var belumVonny = (s.vonny_ok !== true) && !s.no_surat_jalan;   /* #8: surat jalan tertahan sampai Vonny nyatakan layak */
+  /* #8: tombol cek hanya untuk SP yang memang 'menunggu vonny' — draft (belum ada
+     baris) & 'menunggu gm' ditolak database (putuskan_vonny_cek, berkas 86). */
+  var bisaCekVonny = belumVonny && bolehKonfirmasiKirim() && s.status === "menunggu vonny";
   var kunci = !bolehTerbitkan() || tahanGm || tahanKirim || belumVonny;
   var r = ringkasSo(s);
   var h = tahanGm
@@ -8548,7 +8559,7 @@ function formKirim(s){
     + tile("Status", s.status || "—", "dihitung database")
     + '</div>'
     + (s.catatan ? '<div class="flag"><span class="f-ico">✎</span><div><b>Catatan dari sales untuk pengiriman:</b> ' + esc(s.catatan) + '</div></div>' : '')   /* #17 */
-    + (belumVonny ? (bolehKonfirmasiKirim()
+    + (belumVonny ? (bisaCekVonny   /* #8 */
         ? '<div class="kotak" style="border:1px solid #c99a2e;background:#fbf6e9;margin-bottom:12px"><div class="kotak-isi">'
           + '<b>Cek kelayakan Vonny.</b> Surat jalan terkunci sampai SP ini dinyatakan layak diproses.'
           + (s.vonny_ok === false && s.vonny_alasan ? '<br><span class="muted">Sebelumnya ditahan — ' + esc(s.vonny_alasan) + '</span>' : '')
@@ -8593,7 +8604,7 @@ function formKirim(s){
   bukaLaci("Pengiriman & Invoice — " + s.no_sp);
 
   /* #8: listener cek Vonny dipasang SEBELUM early-return, karena saat belumVonny kunci=true. */
-  if (belumVonny && bolehKonfirmasiKirim()) {
+  if (bisaCekVonny) {   /* #8 */
     var perluKat = !(s.customers && s.customers.industri && String(s.customers.industri).trim());
     $("btn-vonny-ok").addEventListener("click", function(){
       var kat = perluKat ? nilaiForm("vk_kat") : null;
@@ -8604,6 +8615,7 @@ function formKirim(s){
           ? api("PATCH", "/customers?id=eq." + s.customer_id, { industri: kat }) : null; })
         .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
         .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " dinyatakan layak diproses.");
+          LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8 */
           LANJUT.kirim.dimuat = false; muatKirim().then(panelKirim).catch(function(){}); })
         .catch(function(e){ tampilPesan(esc(e.message)); })
         .then(function(){ sibuk(false); });
@@ -8615,6 +8627,7 @@ function formKirim(s){
       sibuk(true);
       api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: false, p_alasan: alasan })
         .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " ditahan.");
+          LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8 */
           LANJUT.kirim.dimuat = false; muatKirim().then(panelKirim).catch(function(){}); })
         .catch(function(e){ tampilPesan(esc(e.message)); })
         .then(function(){ sibuk(false); });
@@ -11207,6 +11220,7 @@ function formGmUsulUbah(ref){
         if (pesan && String(pesan).indexOf("PERHATIAN") > -1) toast(String(pesan), true);
         else toast(setuju ? "Disetujui dan diterapkan." : "Ditolak.");
         LANJUT.gm.dimuat = false;
+        LANJUT.vonnycek.dimuat = false;   /* #8: baris berubah → status bisa pindah */
         ALUR.dimuatUsul = false; ALUR.dimuatPo = false; ALUR.dimuatSp = false;
         muatGm().then(panelGmAntre).catch(function(){});
       })
@@ -11381,6 +11395,7 @@ function formGmPutus(jenis, ref){
       tutupLaci(); toast(setuju ? "Disetujui." : "Ditolak.");
       LANJUT.gm.dimuat = false; LANJUT.kirim.dimuat = false; LANJUT.lunas.dimuat = false;
       LANJUT.khusus.dimuat = false;
+      LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8: 'menunggu gm' → 'menunggu vonny' */
       muatGm().then(panelGmAntre).catch(function(){});
     })
     .catch(function(e){ tampilPesan(esc(e.message)); })
