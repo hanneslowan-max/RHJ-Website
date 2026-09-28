@@ -1144,8 +1144,20 @@ function headerDasar(){
   if (sesi && sesi.access_token) h["Authorization"] = "Bearer " + sesi.access_token;
   return h;
 }
+/* #7 (berkas 94): CHECK baris PO → kalimat manusia. Form PO/minta-ubah sudah memeriksa lebih
+   dulu (cekDiskonPo); ini jaring untuk jalur lain. */
+var PESAN_CHECK = {
+  po_lines_diskon_maks: "Diskon baris PO melebihi batas: diskon % paling banyak 100, diskon Rp paling banyak qty × harga.",
+  po_lines_diskon_sen: "Diskon baris PO harus habis dalam sen: diskon Rp paling banyak 2 angka di belakang koma, "
+                     + "dan diskon % tidak boleh menghasilkan potongan di bawah sen.",
+  po_lines_set_qty_bulat: "Jumlah set di baris PO harus bilangan bulat.",
+  po_lines_set_bukan_produk: "Baris set di PO tidak boleh sekaligus menunjuk produk."
+};
 function pesanGalat(j, res){
-  if (j && j.message) return j.message;
+  if (j && j.message) {
+    var cek = /violates check constraint "([a-z0-9_]+)"/.exec(j.message);
+    return (cek && PESAN_CHECK[cek[1]]) || j.message;
+  }
   if (j && j.error_description) return j.error_description;
   if (j && j.msg) return j.msg;
   return "Gagal menghubungi server (HTTP " + res.status + ").";
@@ -3716,7 +3728,7 @@ function namaRepAlur(id){
 }
 
 /* ── memuat ──────────────────────────────────────────────────────────── */
-var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,jenis,qty,harga,keterangan,diskon,diskon_tipe,set_id,product_sets(id,nama,product_set_components(product_id,qty,harga_nett,urut)))";   /* #1: baris set + rincian komponen */
+var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,jenis,qty,harga,keterangan,diskon,diskon_tipe,set_id,set_komponen,product_sets(id,nama,product_set_components(product_id,qty,harga_nett,urut)))";   /* #1: baris set + snapshot komponen (berkas 94); definisi set = cadangan data lama */
 function muatPo(paksa){
   if (ALUR.dimuatPo && !paksa) return Promise.resolve();
   /* Mode cari SENGAJA mengabaikan jendela waktu. Gunanya pencarian ini
@@ -4017,6 +4029,118 @@ function poDiskonRp(b){
 function poTotalBaris(b){
   return Math.round((Number(b.qty)||0) * (Number(b.harga)||0) - poDiskonRp(b));
 }
+/* #7: rupiah → sen (bilangan bulat). Math.round di sini HANYA membuang derau float (0,1+0,2),
+   bukan pembulatan bisnis — yang masuk sudah dipastikan habis dalam sen (habisSen). */
+function senDari(x){ return Math.round((Number(x) || 0) * 100); }
+function habisSen(x){
+  var s = (Number(x) || 0) * 100;
+  return Math.abs(s - Math.round(s)) <= Math.max(1e-6, Math.abs(s) * 1e-13);
+}
+/* #7: batas diskon — cermin CHECK po_lines_diskon_maks/_sen & po_lines_set_qty_bulat (berkas 94).
+   Hasil: pesan galat, atau null bila sah. */
+function cekDiskonPo(b, no){
+  var q = Number(b.qty) || 0, h = Number(b.harga) || 0, d = Number(b.diskon) || 0, bruto = q * h;
+  no = no || "";
+  if (b.set_id && q !== Math.floor(q)) return no + "jumlah set harus bilangan bulat.";
+  if (d < 0) return no + "diskon tidak boleh negatif.";
+  if (b.diskon_tipe === "persen") {
+    if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
+    if (!habisSen(bruto * d / 100))
+      return no + "diskon " + ribu(d) + "% menghasilkan potongan Rp "
+        + (bruto * d / 100).toLocaleString("id-ID", { maximumFractionDigits: 6 })
+        + " — tidak habis dalam sen. Ubah persennya atau pakai diskon Rp.";
+  } else {
+    if (d * 100 > bruto * 100 + 1e-6) return no + "diskon " + rp(d) + " melebihi nilai baris " + rp(bruto) + ".";
+    if (!habisSen(d)) return no + "diskon Rp paling banyak 2 angka di belakang koma.";
+  }
+  return null;
+}
+/* #7: pecah nilai baris T (sen, bulat) ke qty unit dalam paling banyak 2 baris SP:
+   (q−r) unit @ n dan r unit @ n+1 satuan. Satuannya Rp 1 bila T bulat rupiah, selain itu 1 sen.
+   Jumlahnya = T PERSIS — tanpa pembulatan, tanpa toleransi. null = tidak bisa dipecah
+   (qty pecahan yang nilainya tidak habis dibagi). */
+function pecahNettSen(tSen, qty){
+  var q = Number(qty);
+  if (!(q > 0) || !(tSen >= 0) || tSen !== Math.floor(tSen)) return null;
+  if (q !== Math.floor(q)) {
+    var qc = Math.round(q * 100);                     /* qty numeric(14,2) → dalam 0,01 */
+    if (Math.abs(qc - q * 100) > 1e-6 || (tSen * 100) % qc !== 0) return null;
+    return [{ qty: q, nett: (tSen * 100 / qc) / 100 }];
+  }
+  var unit = tSen % 100 === 0 ? 100 : 1;
+  var T = tSen / unit, n = Math.floor(T / q), r = T - n * q, hasil = [];
+  if (q - r > 0) hasil.push({ qty: q - r, nett: n * unit / 100 });
+  if (r > 0)     hasil.push({ qty: r,     nett: (n + 1) * unit / 100 });
+  return hasil;
+}
+/* #1: komponen set sebuah baris PO — snapshot saat PO disimpan (po_lines.set_komponen, berkas 94);
+   data lama tanpa snapshot → definisi set kini. */
+function poKomponenSet(l){
+  var komp = Array.isArray(l.set_komponen) ? l.set_komponen : null;
+  if (!komp) {
+    var ps = Array.isArray(l.product_sets) ? l.product_sets[0] : l.product_sets;
+    komp = ps ? (ps.product_set_components || []) : [];
+  }
+  return komp.slice().sort(function(a, b){ return (a.urut || 0) - (b.urut || 0); });
+}
+function poRincianSet(l){
+  return poKomponenSet(l).map(function(c){
+    var pp = produkById(c.product_id);
+    return (Number(c.qty) || 0) + '× ' + (pp ? (pp.kode || pp.nama || ('#' + c.product_id)) : ('#' + c.product_id));
+  }).join(", ");
+}
+/* #7 #1: satu baris PO → baris SP (per pcs) yang jumlahnya PERSIS nilai baris PO (poTotalBaris,
+   rumus sama po_ringkas) — grand total SP = PO (periksa_total_sp) tetap lolos, juga dalam sen.
+   · tanpa diskon, bukan set: disalin apa adanya (nett = harga).
+   · berdiskon: nett per unit = nilai bersih / qty, dipecah pecahNettSen (maks. 2 baris).
+   · SET: nilai bersih dialokasikan ke komponen (snapshot) berbobot qty × harga nett komponen,
+     komponen terakhir menyerap sisa, lalu tiap komponen dipecah pecahNettSen.
+   Melempar Error berpesan jelas bila tidak bisa dibuat persis. */
+function spBarisDariPo(l){
+  var nama = l.deskripsi || ((produkById(l.product_id) || {}).kode) || ("baris " + (l.urut || "?"));
+  function jadi(kode, deskripsi, jenis, x){
+    return { kode: kode, deskripsi: deskripsi, jenis: jenis, qty: x.qty, nett: x.nett, ehc: 0,
+             list: jenis === "biaya" ? null : hargaListProduk(kode) };
+  }
+  if (!l.set_id && !(Number(l.diskon) > 0))
+    return [ jadi(l.product_id, l.deskripsi, l.jenis || "barang", { qty: Number(l.qty), nett: Number(l.harga) }) ];
+  var T = poTotalBaris(l);
+  if (!habisSen(T)) throw new Error('Nilai baris "' + nama + '" di PO tidak habis dalam sen, jadi SP-nya '
+    + 'tidak bisa dibuat persis sama. Perbaiki qty/harga baris itu di PO dulu (Minta ubah).');
+  var tSen = senDari(T), pc;
+  if (!l.set_id) {
+    pc = pecahNettSen(tSen, l.qty);
+    if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon tidak bisa dibagi rata ke qty '
+      + l.qty + '. Pakai qty bilangan bulat di PO.');
+    return pc.map(function(x){ return jadi(l.product_id, l.deskripsi, l.jenis || "barang", x); });
+  }
+  var komp = poKomponenSet(l), nSet = Number(l.qty) || 0;
+  if (!komp.length) throw new Error('Set "' + nama + '" di PO tidak punya komponen — tidak bisa dipecah ke pcs.');
+  var unit = tSen % 100 === 0 ? 100 : 1, TU = tSen / unit;
+  var bobot = komp.map(function(c){ return (Number(c.qty) || 0) * senDari(c.harga_nett); });
+  var W = bobot.reduce(function(a, x){ return a + x; }, 0);
+  if (!(W > 0)) {
+    bobot = komp.map(function(c){ return Number(c.qty) || 0; });
+    W = bobot.reduce(function(a, x){ return a + x; }, 0);
+  }
+  var sisa = TU, hasil = [];
+  komp.forEach(function(c, i){
+    var bagian;
+    if (i === komp.length - 1) bagian = sisa;
+    else {
+      var x = W > 0 ? TU * (bobot[i] / W) : 0, xr = Math.round(x);
+      bagian = Math.abs(x - xr) <= Math.max(1e-6, Math.abs(x) * 1e-12) ? xr : Math.floor(x);
+      bagian = Math.max(0, Math.min(bagian, sisa));
+    }
+    sisa -= bagian;
+    var q = nSet * (Number(c.qty) || 0), pr = produkById(c.product_id);
+    var pk = pecahNettSen(bagian * unit, q);
+    if (!pk) throw new Error('Set "' + nama + '": bagian komponen ' + (pr ? pr.kode : ('#' + c.product_id))
+      + ' tidak bisa dibagi ke ' + q + ' pcs.');
+    pk.forEach(function(x){ hasil.push(jadi(c.product_id, pr ? (pr.nama || pr.kode) : null, "barang", x)); });
+  });
+  return hasil;
+}
 function poHitungLokal(f){
   var sub = 0, barang = 0, biaya = 0;
   f.baris.forEach(function(b){
@@ -4199,6 +4323,7 @@ function panelPo(){
        kembarannya sendiri tidak ada di layar. */
     var d = !!kunciDobel[String(p.no_po).trim().toLowerCase()];
     var brs = (p.po_lines || []).map(function(l){
+      if (l.set_id) return (l.deskripsi || "Set") + " = " + Number(l.qty) + " set";   /* #1 */
       var pr = produkById(l.product_id);
       return (pr ? pr.kode : (l.deskripsi || "?")) + " = " + Number(l.qty) + " pcs"; }).join(" / ");
     h += '<tr class="baris-klik'+(p.batal ? ' baris-batal' : (d?' baris-dobel':''))+'" data-po-detail="'+p.id+'" tabindex="0">'   /* #19 */
@@ -4693,20 +4818,20 @@ function formDetailDoc(jenis, row){
     var pr = produkById(l.product_id);
     var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
     if (isPo) {
-      var potong = (l.diskon_tipe==="persen") ? (Number(l.qty)||0)*(Number(l.harga)||0)*(Number(l.diskon)||0)/100 : (Number(l.diskon)||0);   /* #7 */
-      var tot = Math.round((Number(l.qty)||0)*(Number(l.harga)||0) - potong);
+      /* #7: satu sumber rumus — poDiskonRp/poTotalBaris (= po_ringkas), bukan tulisan ulang. */
+      var potong = poDiskonRp(l);
+      var tot = poTotalBaris(l);
       var diskonTampil = (l.diskon_tipe==="persen")
-        ? (esc(l.diskon||0)+'% <span class="muted">('+rp(Math.round(potong))+')</span>')
+        ? (esc(ribu(l.diskon||0))+'% <span class="muted">('+rp(potong)+')</span>')
         : rp(l.diskon||0);
-      var setPs = Array.isArray(l.product_sets) ? l.product_sets[0] : l.product_sets;   /* #1 */
+      if (l.set_id) nama = l.deskripsi || "Set";
+      var rinciSet = l.set_id ? poRincianSet(l) : "";   /* #1: snapshot saat PO disimpan */
       var setInfo = l.set_id
         ? ' <span class="pill p-lunas">set</span>'
-          + ((setPs && (setPs.product_set_components||[]).length)
-              ? ' <span class="muted">(1 set = '+esc((setPs.product_set_components||[]).map(function(c){var pp=produkById(c.product_id);return (Number(c.qty)||0)+'× '+(pp?(pp.kode||pp.nama||('#'+c.product_id)):('#'+c.product_id));}).join(", "))+', pecah ke pcs di SP)</span>'
-              : '')
+          + (rinciSet ? ' <span class="muted">(1 set = '+esc(rinciSet)+', pecah ke pcs di SP)</span>' : '')
         : '';
       h += '<tr><td class="l">'+esc(nama)+setInfo+(l.keterangan?' <span class="muted">· '+esc(l.keterangan)+'</span>':'')+'</td>'
-        + '<td>'+esc(l.qty)+'</td><td class="r">'+rp(l.harga)+'</td><td class="r">'+diskonTampil+'</td>'
+        + '<td>'+esc(ribu(l.qty))+(l.set_id?' set':'')+'</td><td class="r">'+rp(l.harga)+'</td><td class="r">'+diskonTampil+'</td>'
         + '<td class="r">'+rp(tot)+'</td></tr>';
     } else {
       var tt = Math.round((Number(l.qty)||0)*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0)));
@@ -4810,30 +4935,46 @@ function formMintaUbah(jenis, id){
       +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" });
   }
 
+  var isPoU = jenis === "po";
   h += '<h4 class="sec">Baris</h4><div class="tw"><table><thead><tr><th>Item</th>'
     + '<th class="r">Qty</th><th class="r">'
-    + (jenis === "po" ? "Harga" : "Harga nett") + '</th>'
-    + (jenis === "po" ? '' : '<th class="r">EHC/item</th>')
+    + (isPoU ? "Harga" : "Harga nett") + '</th>'
+    + (isPoU ? '<th class="r">Diskon</th><th>Keterangan</th>' : '<th class="r">EHC/item</th>')
     + '</tr></thead><tbody>';
   baris.forEach(function(l, i){
     var pr = produkById(l.product_id);
-    h += '<tr><td>' + esc(pr ? pr.kode + " · " + pr.nama : (l.deskripsi || "?"))
+    var namaItem = l.set_id ? (l.deskripsi || "Set") : (pr ? pr.kode + (pr.nama ? " · " + pr.nama : "") : (l.deskripsi || "?"));
+    h += '<tr><td>' + esc(namaItem)
+      + (l.set_id ? ' <span class="pill p-lunas">set</span>' : '')
+      + '<input type="hidden" class="uu-id" value="' + esc(l.id == null ? "" : l.id) + '">'
+      + '<input type="hidden" class="uu-set" value="' + esc(l.set_id == null ? "" : l.set_id) + '">'
       + '<input type="hidden" class="uu-pid" value="' + esc(l.product_id == null ? "" : l.product_id) + '">'
       + '<input type="hidden" class="uu-des" value="' + esc(l.deskripsi || "") + '">'
       + '<input type="hidden" class="uu-jen" value="' + esc(l.jenis || "barang") + '">'
       + '<input type="hidden" class="uu-urut" value="' + ((l.urut || i + 1)) + '"></td>'
       + '<td class="r"><input type="number" step="1" min="0" class="uu-qty" value="' + Number(l.qty || 0) + '" style="width:90px"></td>'
+      /* #1: harga per set terkunci dari definisi set (sama seperti form PO) */
       + '<td class="r"><input type="number" step="1" min="0" class="uu-harga" value="'
-      + Number(jenis === "po" ? (l.harga || 0) : (l.harga_nett || 0)) + '" style="width:130px"></td>'
-      + (jenis === "po" ? ''
+      + Number(isPoU ? (l.harga || 0) : (l.harga_nett || 0)) + '" style="width:130px"'
+      + (isPoU && l.set_id ? ' disabled title="Harga per set mengikuti isi set saat PO dibuat"' : '') + '></td>'
+      + (isPoU
+          /* #6 #7: diskon (Rp/%) & keterangan baris ikut bisa diubah — dan ikut terkirim, supaya
+             tidak hilang diam-diam saat usulannya diterapkan. */
+          ? '<td class="r" style="white-space:nowrap"><select class="uu-dtipe" aria-label="Tipe diskon">'
+            + '<option value="rp"' + (l.diskon_tipe === "persen" ? "" : " selected") + '>Rp</option>'
+            + '<option value="persen"' + (l.diskon_tipe === "persen" ? " selected" : "") + '>%</option></select> '
+            + '<input type="text" inputmode="decimal" class="uu-diskon" value="' + esc(ribu(l.diskon || 0)) + '" style="width:110px"></td>'
+            + '<td>' + (l.jenis === "biaya" ? '<span class="muted">—</span>'
+                : '<input type="text" class="uu-ket" value="' + esc(l.keterangan || "") + '" placeholder="opsional" style="width:160px">') + '</td>'
           : '<td class="r"><input type="number" step="1" min="0" class="uu-ehc" value="'
             + Number(l.ehc_item || 0) + '" style="width:110px"></td>')
       + '</tr>';
   });
-  if (!baris.length) h += '<tr><td colspan="4" class="kosong">Dokumen ini belum punya baris.</td></tr>';
+  if (!baris.length) h += '<tr><td colspan="5" class="kosong">Dokumen ini belum punya baris.</td></tr>';
   h += '</tbody></table></div>';
   h += '<p class="bantu">Baris tidak bisa ditambah atau dihapus dari sini — yang bisa diubah '
-    + 'qty dan harganya. Untuk menambah atau membuang item, batalkan dokumennya dan buat ulang, '
+    + (isPoU ? 'qty, harga, diskon, dan keterangannya (harga baris set terkunci)' : 'qty dan harganya')
+    + '. Untuk menambah atau membuang item, batalkan dokumennya dan buat ulang, '
     + 'supaya yang lama tetap terbaca apa adanya.</p>';
 
   h += field({ nama:"u_alasan", label:"Alasan perubahan", jenis:"textarea", wajib:true,
@@ -4874,7 +5015,7 @@ function formMintaUbah(jenis, id){
       kepala.alamat = nilaiForm("u_alamat") || "";
     }
     if (kurang) { tampilPesan(esc(kurang) + " tidak boleh dikosongkan."); return; }
-    var isi = [];
+    var isi = [], salahBaris = [];
     Array.prototype.forEach.call(document.querySelectorAll("#laci-form tbody tr"), function(tr){
       var pid = tr.querySelector(".uu-pid");
       if (!pid) return;
@@ -4883,13 +5024,26 @@ function formMintaUbah(jenis, id){
                 deskripsi: tr.querySelector(".uu-des").value,
                 jenis: tr.querySelector(".uu-jen").value,
                 qty: Number(tr.querySelector(".uu-qty").value) || 0 };
-      if (jenis === "po") b.harga = Number(tr.querySelector(".uu-harga").value) || 0;
-      else {
+      if (jenis === "po") {
+        /* #1 #6 #7: seluruh kolom baris ikut — id, set_id, diskon, tipe diskon, keterangan. Dulu hanya
+           qty & harga, sehingga set_id/diskon/keterangan hilang saat usulannya diterapkan. */
+        var idEl = tr.querySelector(".uu-id"), setEl = tr.querySelector(".uu-set"), ketEl = tr.querySelector(".uu-ket");
+        b.id = idEl && idEl.value !== "" ? Number(idEl.value) : null;
+        b.set_id = setEl && setEl.value !== "" ? Number(setEl.value) : null;
+        b.harga = Number(tr.querySelector(".uu-harga").value) || 0;
+        b.diskon = angkaAlur(tr.querySelector(".uu-diskon").value);
+        b.diskon_tipe = tr.querySelector(".uu-dtipe").value === "persen" ? "persen" : "rp";
+        b.keterangan = ketEl ? (ketEl.value.trim() || null) : null;
+        if (!(b.qty > 0)) salahBaris.push("Baris " + b.urut + ": qty harus lebih dari 0.");
+        var gd = cekDiskonPo(b, "Baris " + b.urut + ": ");
+        if (gd) salahBaris.push(gd);
+      } else {
         b.harga_nett = Number(tr.querySelector(".uu-harga").value) || 0;
         b.ehc_item = Number(tr.querySelector(".uu-ehc").value) || 0;
       }
       isi.push(b);
     });
+    if (salahBaris.length) { tampilPesan(esc(salahBaris.join(" "))); return; }
 
     sibuk(true);
     api("POST", "/rpc/ajukan_ubah", {
@@ -4938,11 +5092,13 @@ function poBarisHtml(f){
         +   '<span class="pill p-lunas" style="float:right">set</span>'
         +   '<label>Item (set)</label>'
         +   '<div class="bi-nama">'+esc(b.deskripsi || "Set")+'</div>'
-        +   '<span class="bi-ket">1 set = '+esc(rincian || "—")+' · dipecah ke pcs saat jadi SP</span>'
+        +   '<span class="bi-ket">1 set = '+esc(rincian || "—")+' · isi set dicatat saat PO disimpan, dipecah ke pcs saat jadi SP</span>'
         + '</div>'
+        + '<div class="bi-ketpo" style="grid-column:1/-1"><label>Keterangan</label>'   /* #6: baris set juga boleh berketerangan */
+        +   '<input type="text" class="po-ket" data-i="'+i+'" value="'+esc(b.keterangan||"")+'" placeholder="opsional — catatan untuk baris ini"></div>'
         + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b></div>'
         + '<div class="bi-angka bi-po">'
-        +   '<div><label>Qty (set)</label><input type="text" inputmode="decimal" class="po-qty" data-i="'+i+'" value="'+esc(b.qty)+'"></div>'
+        +   '<div><label>Qty (set)</label><input type="text" inputmode="numeric" class="po-qty" data-i="'+i+'" value="'+esc(b.qty)+'"></div>'
         +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'" disabled></div>'
         +   '<div><label>Diskon</label><div class="diskon-grup">'   /* #7: diskon set (dialokasikan ke komponen saat SP) */
         +     '<select class="po-diskon-tipe" data-i="'+i+'" aria-label="Tipe diskon">'
@@ -5179,10 +5335,15 @@ function siapkanBarisPo(f){
     if (!disentuh) return;
     var no = "Baris " + (i + 1) + ": ";
     if (qty <= 0) { salah.push(no + "qty belum diisi."); return; }
+    /* #7: batas diskon (≤ 100%, ≤ qty × harga, habis dalam sen) + jumlah set bulat — sama dengan
+       CHECK po_lines di database (berkas 94), supaya ditolak di sini dengan pesan yang jelas. */
+    var galatDiskon = cekDiskonPo(b, no);
+    if (galatDiskon) { salah.push(galatDiskon); return; }
     if (b.set_id) {   /* #1: baris SET — dikirim apa adanya (diskon boleh); dipecah ke pcs saat jadi SP */
       kirim.push({ jenis:"barang", set_id:b.set_id, kode:null, usulanTeks:"",
                    deskripsi:(b.deskripsi||"").trim() || null, qty:qty, harga:Number(b.harga) || 0,
-                   keterangan:null, diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp" });
+                   keterangan:(b.keterangan||"").trim() || null,   /* #6 */
+                   diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp" });
       return;
     }
     if (b.jenis === "biaya") {
@@ -5848,44 +6009,24 @@ function pasangSp(poSiap){
     if (!id) { ALUR.spForm = spFormBaru(); panelSp(); return; }
     var p = poSiap.filter(function(x){ return String(x.id) === String(id); })[0];
     if (!p) return;
+    /* #7 #1: tiap baris PO → baris SP per pcs lewat spBarisDariPo: diskon baris (Rp/%) ikut
+       mengurangi nett, baris SET dipecah ke komponen menurut snapshot saat PO disimpan, dan
+       jumlahnya PERSIS nilai baris PO (paling banyak 2 baris per item bila tidak habis dibagi —
+       tanpa pembulatan). Kalau tidak bisa dibuat persis, SP-nya tidak disiapkan sama sekali. */
+    var barisSp;
+    try {
+      barisSp = (p.po_lines || []).slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); })
+        .reduce(function(acc, l){ return acc.concat(spBarisDariPo(l)); }, []);
+    } catch (e) {
+      toast(e.message, true);
+      ALUR.spForm = spFormBaru(); panelSp();
+      return;
+    }
     ALUR.spForm = {
       po_id: p.id, kepada: p.nama_customer, alamat: p.alamat || "", up:"", telp:"",
       no_seri:"", sales_rep_id: p.sales_rep_id, ppn_kena: p.ppn_kena,
       customer_id: p.customer_id, cash_minta: false,
-      /* #1: baris SET di PO dipecah ke komponen pcs di sini — SP selalu per pcs (stok & komisi).
-         NILAI BERSIH baris set (sesudah diskon, rumus sama po_ringkas) dialokasikan proporsional
-         ke tiap komponen berdasarkan bobot qty×harga komponen; komponen TERAKHIR menyerap sisa
-         pembulatan → jumlah baris SP PERSIS = nilai baris PO (SP=PO terjaga, meski ada diskon). */
-      baris: (p.po_lines || []).slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); })
-        .reduce(function(acc, l){
-          var ps = Array.isArray(l.product_sets) ? l.product_sets[0] : l.product_sets;
-          var komp = ps ? (ps.product_set_components || []) : [];
-          if (l.set_id && komp.length) {
-            var nSet = Number(l.qty) || 1;
-            var urut = komp.slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); });
-            var W = urut.reduce(function(a,c){ return a + (Number(c.qty)||0)*(Number(c.harga_nett)||0); }, 0);
-            var gross = (Number(l.qty)||0) * (Number(l.harga)||0);
-            var potong = (l.diskon_tipe === "persen") ? gross*(Number(l.diskon)||0)/100 : (Number(l.diskon)||0);
-            var NL = Math.round(gross - potong);   /* nilai bersih baris set = po_ringkas baris ini */
-            var sisa = NL;
-            urut.forEach(function(c, idx){
-              var q = nSet * (Number(c.qty) || 0);
-              var compNet = (idx < urut.length - 1)
-                ? (W > 0 ? Math.round(NL * ((Number(c.qty)||0)*(Number(c.harga_nett)||0)) / W) : 0)
-                : sisa;   /* komponen terakhir = sisa, biar total pas */
-              sisa -= (idx < urut.length - 1) ? compNet : 0;
-              var pr = produkById(c.product_id);
-              acc.push({ kode: c.product_id, deskripsi: pr ? (pr.nama || pr.kode) : null,
-                         jenis: "barang", qty: q, nett: q > 0 ? compNet / q : 0, ehc: 0,
-                         list: hargaListProduk(c.product_id) });
-            });
-          } else {
-            acc.push({ kode: l.product_id, deskripsi: l.deskripsi, jenis: l.jenis || "barang",
-                       qty: Number(l.qty), nett: Number(l.harga), ehc: 0,
-                       list: hargaListProduk(l.product_id) });
-          }
-          return acc;
-        }, [])
+      baris: barisSp
     };
     panelSp();
   });
@@ -6306,6 +6447,17 @@ function formHargaKhusus(){
   var f = ALUR.spForm;
   var perlu = spBarisPerluKhusus(f);
   if (!perlu.length) { toast("Tidak ada baris yang perlu harga khusus.", true); return; }
+  /* #7: satu produk bisa muncul di 2 baris SP (hasil pemecahan diskon/set, selisih Rp 1 atau 1 sen)
+     — diajukan SEKALI dengan harga terendahnya, bukan dua permintaan untuk pasangan yang sama. */
+  var perProduk = {}, unik = [];
+  perlu.forEach(function(b){
+    var k = String(b.kode);
+    if (!perProduk[k]) {
+      perProduk[k] = { kode: b.kode, nett: b.nett, ehc: b.ehc, list: b.list };   /* salinan — baris SP tidak diubah */
+      unik.push(perProduk[k]);
+    } else if (Number(b.nett) < Number(perProduk[k].nett)) perProduk[k].nett = b.nett;
+  });
+  perlu = unik;
 
   var h = '<p class="muted" style="margin:2px 2px 10px">Untuk <b>' + esc(f.kepada || "—")
     + '</b>. Harga yang disetujui GM jadi <b>batas bawah</b>: PO berikutnya dengan harga '
@@ -6380,7 +6532,9 @@ var GALAT_BERKAS = [
   { pola:/purchase_orders\.batal|batalkan_po|batalkan_sp/i,
     berkas:"39-schema-batal-po-sp.sql" },
   { pola:/edit_massal_timpa/i,
-    berkas:"38-schema-massal-tanggal-sama.sql" }
+    berkas:"38-schema-massal-tanggal-sama.sql" },
+  { pola:/set_komponen|simpan_set|hapus_set|periksa_komposisi_set/i,   /* #1 #6 #7 */
+    berkas:"94-po-set-diskon-snapshot.sql" }
 ];
 /* Galat yang menyebutkan TEMBOKNYA, bukan pintunya. "new row violates
    row-level security policy" adalah kalimat Postgres yang benar dan
@@ -7351,19 +7505,74 @@ function formKelolaSet(){
   bukaLaci("Set roda");
   muatSet(true).then(gambarKelolaSet).catch(function(e){ tampilPesan(esc(e.message)); });
 }
+/* #1 (berkas 94): aturan set roda — cermin periksa_komposisi_set() di database, supaya ditolak
+   di sini dengan pesan yang sama sebelum dikirim. Kecocokan TIPE (kode yang hanya beda fungsi)
+   diserahkan ke database (tipe_roda), pesannya ikut tampil bila ditolak. */
+var SET_ATURAN = "1 set roda = 4 pcs roda satu tipe (kategori, merek, dan tipe sama — hanya beda fungsi): "
+  + "4 rem, 4 hidup, 4 mati, 2 rem + 2 hidup, 2 rem + 2 mati, atau 2 hidup + 2 mati.";
+var SET_FUNGSI = { "Rem / Brake":"rem", "Hidup / Swivel":"hidup", "Mati / Rigid":"mati" };
+function ringkasKomposisiSet(komp){
+  var n = { rem:0, hidup:0, mati:0, lain:0, total:0 };
+  (komp || []).forEach(function(c){
+    if (!c.product_id) return;
+    var p = produkById(c.product_id), q = Number(c.qty) || 0, f = p ? SET_FUNGSI[p.fungsi] : null;
+    n[f || "lain"] += q; n.total += q;
+  });
+  return n;
+}
+function cekKomposisiSetLokal(komp){
+  var per = {}, urutan = [];
+  (komp || []).forEach(function(c){
+    var k = String(c.product_id);
+    if (!per[k]) { per[k] = { product_id:c.product_id, qty:0, nettSalah:false }; urutan.push(per[k]); }
+    per[k].qty += Number(c.qty) || 0;
+    var h = angka(c.harga_nett) || 0;
+    if (h < 0 || !habisSen(h)) per[k].nettSalah = true;
+  });
+  if (!urutan.length) return "Set harus punya komponen — 1 set roda = 4 pcs roda.";
+  var acuan = null, dipakai = {}, n = { rem:0, hidup:0, mati:0 }, total = 0;
+  for (var i = 0; i < urutan.length; i++) {
+    var c = urutan[i], p = produkById(c.product_id);
+    if (!p) return "Ada komponen yang produknya belum dipilih atau tidak ada di master produk.";
+    if (!(c.qty >= 1) || c.qty !== Math.floor(c.qty)) return "Qty " + p.kode + " harus bilangan bulat minimal 1 (sekarang " + ribu(c.qty) + ").";
+    if (c.nettSalah) return "Harga nett " + p.kode + " harus ≥ 0 dan paling banyak 2 angka di belakang koma.";
+    if (p.usulan) return p.kode + " masih item usulan — sahkan dulu sebelum dipakai di set.";
+    var f = SET_FUNGSI[p.fungsi];
+    if (!f) return p.kode + " belum punya fungsi Rem / Hidup / Mati di master produk — set roda hanya untuk "
+      + "roda yang fungsinya tercatat. Isi dulu kolom Fungsi produk itu.";
+    if (!acuan) acuan = p;
+    else if ((p.kategori || "") !== (acuan.kategori || "") || (p.brand || "") !== (acuan.brand || ""))
+      return "Keempat roda harus satu kategori, satu merek, dan satu tipe — hanya beda fungsi (rem/hidup/mati). "
+        + p.kode + " (" + (p.kategori || "?") + " · " + (p.brand || "?") + ") tidak setipe dengan "
+        + acuan.kode + " (" + (acuan.kategori || "?") + " · " + (acuan.brand || "?") + ").";
+    if (dipakai[f]) return "Ada dua produk berbeda berfungsi " + p.fungsi + " (" + dipakai[f] + " dan " + p.kode
+      + "). Satu fungsi = satu produk — periksa kolom Fungsi di master produk.";
+    dipakai[f] = p.kode; n[f] = c.qty; total += c.qty;
+  }
+  if (total !== 4) return "1 set roda = tepat 4 pcs roda; sekarang " + ribu(total) + " pcs.";
+  var kombo = n.rem + "," + n.hidup + "," + n.mati;
+  if (["4,0,0","0,4,0","0,0,4","2,2,0","2,0,2","0,2,2"].indexOf(kombo) < 0)
+    return "Kombinasi " + n.rem + " rem + " + n.hidup + " hidup + " + n.mati + " mati tidak sah. Yang sah: "
+      + "4 rem, 4 hidup, 4 mati, 2 rem + 2 hidup, 2 rem + 2 mati, atau 2 hidup + 2 mati.";
+  return null;
+}
 function gambarKelolaSet(){
   var S = LANJUT.set;
   var h = '<div class="flag"><span class="f-ico">i</span><div>'
-    + 'Satu <b>set</b> = beberapa produk pcs (mis. 1 set roda = 4 pcs kombinasi rem/hidup/mati). '
-    + 'Stok & komisi tetap per pcs. Penawaran menampilkan set berikut harganya; PO/SP memecahnya '
-    + 'ke pcs.</div></div>'
+    + 'Satu <b>set</b> = beberapa produk pcs. <b>' + esc(SET_ATURAN) + '</b> '
+    + 'Stok & komisi tetap per pcs. Penawaran menampilkan set berikut harganya; PO mencatat isi set '
+    + 'saat PO disimpan, dan SP memecahnya ke pcs. Set yang sudah dipakai PO tidak bisa dihapus — '
+    + 'ia dinonaktifkan.</div></div>'
     + '<div class="baris-alat" style="margin:8px 0"><button class="btn utama" id="set-baru" type="button">+ Set baru</button></div>';
   if (!S.baris.length) h += '<p class="muted">Belum ada set.</p>';
   else h += '<div class="tw"><table><thead><tr><th class="l">Nama</th><th class="l">Isi</th><th class="r">Harga set</th><th></th></tr></thead><tbody>'
     + S.baris.map(function(s){
         return '<tr'+(s.aktif?'':' style="opacity:.5"')+'><td class="l"><b>'+esc(s.nama)+'</b>'
           + (s.kategori?' <span class="muted">· '+esc(s.kategori)+'</span>':'')
-          + (s.aktif?'':' <span class="pill p-belum">nonaktif</span>')+'</td>'
+          + (s.aktif?'':' <span class="pill p-belum">nonaktif</span>')
+          + (function(){ var g = cekKomposisiSetLokal(s.komponen || []);   /* #1 */
+              return g ? ' <span class="pill p-belum" title="'+esc(g)+'">tidak sah — buka Ubah</span>' : ''; })()
+          + '</td>'
           + '<td class="l">'+esc(setRincian(s)||'—')+'</td>'
           + '<td class="r">'+rp(setHargaSet(s))+'</td>'
           + '<td><button class="btn kecil set-edit" type="button" data-id="'+s.id+'">Ubah</button></td></tr>';
@@ -7386,7 +7595,7 @@ function formSetEdit(s){
     kategori: s ? (s.kategori||"") : "", catatan: s ? (s.catatan||"") : "", aktif: s ? !!s.aktif : true,
     komponen: s ? (s.komponen||[]).map(function(c){ return { product_id:c.product_id, qty:c.qty, harga_nett:c.harga_nett, ketikan:"" }; }) : []
   };
-  if (!SET_EDIT.komponen.length) SET_EDIT.komponen.push({ product_id:null, qty:1, harga_nett:0, ketikan:"" });
+  if (!SET_EDIT.komponen.length) SET_EDIT.komponen.push({ product_id:null, qty:2, harga_nett:0, ketikan:"" });
   gambarSetEdit();
 }
 function setHargaSetLokal(e){ return e.komponen.reduce(function(a,c){ return a + (Number(c.qty)||0)*(angka(c.harga_nett)||0); }, 0); }
@@ -7395,7 +7604,8 @@ function setKompHtml(e){
     var p = c.product_id ? produkById(c.product_id) : null;
     return '<div class="baris-item bi-tanpahasil" data-i="'+i+'">'
       + '<div class="bi-produk"><label>Produk (pcs)</label>'
-      +   (p ? '<div class="bi-nama">'+esc(p.nama||p.kode)+'</div><span class="bi-ket">'+esc(p.kode)+' · '+esc(p.brand||"")+'</span>'
+      +   (p ? '<div class="bi-nama">'+esc(p.nama||p.kode)+'</div><span class="bi-ket">'+esc(p.kode)+' · '+esc(p.brand||"")
+               + ' · ' + (p.fungsi ? esc(p.fungsi) : '<b class="bi-belum">fungsi belum diisi</b>') + '</span>'   /* #1 */
              : '<input type="text" class="setk-cari" data-i="'+i+'" value="'+esc(c.ketikan||"")+'" placeholder="ketik kode/nama produk…" autocomplete="off"><div class="cari-hasil" hidden></div>')
       + '</div>'
       + '<div class="bi-angka bi-mini">'
@@ -7413,15 +7623,26 @@ function gambarSetEdit(){
     +   field({nama:"set_kat", label:"Kategori / tipe (opsional)", nilai:e.kategori})
     + '</div>'
     + '<h4 class="sec">Komponen (pcs)</h4>'
+    + '<p class="bantu" style="margin:0 0 6px">' + esc(SET_ATURAN) + '</p>'   /* #1 */
     + '<div id="set-komp">' + setKompHtml(e) + '</div>'
     + '<div class="baris-alat" style="margin-top:8px"><button class="btn" id="set-komp-tambah" type="button">+ Komponen</button></div>'
+    + (function(){   /* #1: ringkasan langsung — terlihat sebelum Simpan, bukan sesudah ditolak */
+        var n = ringkasKomposisiSet(e.komponen);
+        var galat = cekKomposisiSetLokal(e.komponen.filter(function(c){ return c.product_id; }));
+        return '<div class="flag' + (galat ? ' bad' : '') + '" style="margin-top:10px"><span class="f-ico">' + (galat ? '!' : '✓') + '</span><div>'
+          + 'Isi sekarang: <b>' + ribu(n.rem) + ' rem · ' + ribu(n.hidup) + ' hidup · ' + ribu(n.mati) + ' mati</b>'
+          + (n.lain ? ' · ' + ribu(n.lain) + ' tanpa fungsi' : '') + ' — total ' + ribu(n.total) + ' pcs. '
+          + (galat ? esc(galat) : 'Susunannya sah (kecocokan tipe diperiksa database saat disimpan).')
+          + '</div></div>';
+      })()
     + '<label class="f" style="margin-top:10px"><span>Status</span>'
     +   '<select id="set_aktif"><option value="1"'+(e.aktif?' selected':'')+'>Aktif</option>'
     +   '<option value="0"'+(!e.aktif?' selected':'')+'>Nonaktif</option></select></label>'
-    + '<p class="bantu" style="margin-top:6px">Harga set = jumlah (qty × harga nett) tiap komponen: <b>'+rp(setHargaSetLokal(e))+'</b>.</p>';
+    + '<p class="bantu" style="margin-top:6px">Harga set = jumlah (qty × harga nett) tiap komponen: <b>'+rp(setHargaSetLokal(e))+'</b>. '
+    + 'Mengubah isi set tidak mengubah PO yang sudah dibuat — PO menyimpan isi set saat disimpan.</p>';
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = '<button class="btn utama" id="set-simpan" type="button">Simpan set</button>'
-    + (e.id ? ' <button class="btn bahaya" id="set-hapus" type="button">Hapus set</button>' : '')
+    + (e.id && bolehHapus() ? ' <button class="btn bahaya" id="set-hapus" type="button">Hapus set</button>' : '')   /* #1: hapus = owner (RLS pset_hapus) */
     + ' <button class="btn" id="set-kembali" type="button">Kembali</button>';
   bukaLaci(e.id ? "Ubah set" : "Set baru");
   pasangSetEdit();
@@ -7438,7 +7659,7 @@ function bacaSetForm(){
 function pasangSetEdit(){
   var e = SET_EDIT;
   $("set-kembali").addEventListener("click", formKelolaSet);
-  $("set-komp-tambah").addEventListener("click", function(){ bacaSetForm(); e.komponen.push({ product_id:null, qty:1, harga_nett:0, ketikan:"" }); gambarSetEdit(); });
+  $("set-komp-tambah").addEventListener("click", function(){ bacaSetForm(); e.komponen.push({ product_id:null, qty:2, harga_nett:0, ketikan:"" }); gambarSetEdit(); });
   Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-cari"), function(inp){
     inp.addEventListener("input", function(){ e.komponen[+inp.dataset.i].ketikan = inp.value; });
     pasangCariProduk(inp, function(p){
@@ -7450,7 +7671,7 @@ function pasangSetEdit(){
   });
   Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-hapus"), function(b){
     b.addEventListener("click", function(){ bacaSetForm(); e.komponen.splice(+b.dataset.i,1);
-      if (!e.komponen.length) e.komponen.push({ product_id:null, qty:1, harga_nett:0, ketikan:"" }); gambarSetEdit(); });
+      if (!e.komponen.length) e.komponen.push({ product_id:null, qty:2, harga_nett:0, ketikan:"" }); gambarSetEdit(); });
   });
   Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-qty,.setk-nett"), function(inp){
     inp.addEventListener("change", function(){ bacaSetForm(); gambarSetEdit(); });
@@ -7461,32 +7682,37 @@ function pasangSetEdit(){
 function simpanSet(){
   bacaSetForm(); var e = SET_EDIT;
   if (!String(e.nama).trim()) { toast("Nama set wajib diisi.", true); return; }
-  var komp = e.komponen.filter(function(c){ return c.product_id && Number(c.qty) > 0; });
-  if (!komp.length) { toast("Set harus punya minimal satu komponen produk dengan qty.", true); return; }
+  /* #1: baris tanpa produk diabaikan; sisanya diperiksa aturan set roda (sama dengan database). */
+  var komp = e.komponen.filter(function(c){ return c.product_id; }).map(function(c){
+    return { product_id: c.product_id, qty: Number(c.qty) || 0, harga_nett: angka(c.harga_nett) || 0 };
+  });
+  var galat = cekKomposisiSetLokal(komp);
+  if (galat) { tampilPesan(esc(galat)); return; }
   sibuk(true, "Menyimpan set…");
   var kepala = { nama:String(e.nama).trim(), kode:e.kode?String(e.kode).trim():null,
                  kategori:e.kategori?String(e.kategori).trim():null, catatan:e.catatan||null, aktif:e.aktif };
-  var simpanKepala = e.id
-    ? api("PATCH", "/product_sets?id=eq."+e.id, kepala, "return=representation").then(function(r){ return Array.isArray(r)?r[0]:r; })
-    : api("POST", "/product_sets", kepala, "return=representation").then(function(r){ return Array.isArray(r)?r[0]:r; });
-  simpanKepala.then(function(s){
-    var sid = s.id;
-    return api("DELETE", "/product_set_components?set_id=eq."+sid, null, "return=minimal").then(function(){
-      return api("POST", "/product_set_components", komp.map(function(c,i){
-        return { set_id:sid, product_id:c.product_id, qty:Number(c.qty), harga_nett:angka(c.harga_nett)||0, urut:i+1 };
-      }), "return=minimal");
-    });
-  }).then(function(){ sibuk(false); LANJUT.set.dimuat = false; return muatSet(true); })
+  /* #1: satu RPC atomik (berkas 94) — dulu 3 request terpisah (kepala, hapus komponen, tulis
+     komponen); gagal di tengah meninggalkan set tanpa komponen. */
+  api("POST", "/rpc/simpan_set", { p_id: e.id || null, p_kepala: kepala, p_komponen: komp })
+    .then(function(){ sibuk(false); LANJUT.set.dimuat = false; return muatSet(true); })
     .then(function(){ toast("Set tersimpan."); formKelolaSet(); })
     .catch(function(err){ sibuk(false); tampilPesan(esc(err.message)); });
 }
 function hapusSet(){
   var e = SET_EDIT; if (!e.id) return;
-  if (!confirm('Hapus set "'+e.nama+'"? Komponennya ikut terhapus. Penawaran/PO yang sudah dibuat tidak terpengaruh.')) return;
+  if (!confirm('Hapus set "'+e.nama+'"?\n\nKalau set ini sudah dipakai di PO, set TIDAK dihapus melainkan '
+             + 'dinonaktifkan — PO lama tetap utuh (isi setnya tercatat di PO). Penawaran lama tetap '
+             + 'menyimpan nama & harganya.')) return;
   sibuk(true, "Menghapus…");
-  api("DELETE", "/product_sets?id=eq."+e.id, null, "return=minimal")
-    .then(function(){ sibuk(false); LANJUT.set.dimuat = false; return muatSet(true); })
-    .then(function(){ toast("Set dihapus."); formKelolaSet(); })
+  var pesan = "";
+  /* #1: lewat RPC hapus_set (berkas 94) — set yang sudah dipakai PO dinonaktifkan dengan pesan
+     jelas, bukan galat FK mentah; non-owner mendapat penolakan jelas, bukan "Set dihapus." palsu. */
+  api("POST", "/rpc/hapus_set", { p_id: e.id })
+    .then(function(r){
+      pesan = String((Array.isArray(r) ? r[0] : r) || "Beres.");
+      sibuk(false); LANJUT.set.dimuat = false; return muatSet(true);
+    })
+    .then(function(){ toast(pesan); formKelolaSet(); })
     .catch(function(err){ sibuk(false); tampilPesan(esc(err.message)); });
 }
 /* picker set — dipakai form penawaran & PO */
@@ -7494,13 +7720,18 @@ function pilihSet(cb){
   muatSet().then(function(){
     var aktif = LANJUT.set.baris.filter(function(s){ return s.aktif && (s.komponen||[]).length; });
     var h = '<div class="flag"><span class="f-ico">i</span><div>Pilih set. Penawaran menampilkan set '
-      + 'berikut harganya; di PO set dipecah ke komponen pcs.</div></div>';
+      + 'berikut harganya; PO mencatat isi set saat disimpan, dan SP memecahnya ke komponen pcs.</div></div>';
     if (!aktif.length) h += '<p class="muted">Belum ada set aktif. Buat dulu lewat <b>Produk → Set roda</b>.</p>';
     else h += '<div class="tw"><table><thead><tr><th class="l">Set</th><th class="l">Isi</th><th class="r">Harga set</th><th></th></tr></thead><tbody>'
       + aktif.map(function(s){
+          /* #1: set yang kini tidak memenuhi aturan (mis. fungsi produknya diubah sesudah set dibuat)
+             ditolak database saat PO disimpan — ditandai di sini, bukan dibiarkan gagal belakangan. */
+          var galat = cekKomposisiSetLokal(s.komponen || []);
           return '<tr><td class="l"><b>'+esc(s.nama)+'</b></td><td class="l">'+esc(setRincian(s))+'</td>'
             + '<td class="r">'+rp(setHargaSet(s))+'</td>'
-            + '<td><button class="btn kecil set-pilih" type="button" data-id="'+s.id+'">Pilih</button></td></tr>';
+            + '<td>' + (galat
+                ? '<span class="pill p-belum" title="' + esc(galat) + '">tidak sah</span>'
+                : '<button class="btn kecil set-pilih" type="button" data-id="'+s.id+'">Pilih</button>') + '</td></tr>';
         }).join("") + '</tbody></table></div>';
     $("laci-form").innerHTML = h;
     $("laci-kaki").innerHTML = '<button class="btn" id="set-pilih-tutup" type="button">Tutup</button>';
@@ -11476,19 +11707,62 @@ function formGmUsulUbah(ref){
         + '<td class="l"><b>' + esc(uuTeks(b)) + '</b></td></tr>';
     });
 
+    var isPoUsul = u.jenis === "po";
+    function barisBeda(label, a, b){
+      brs += '<tr><td class="l">' + esc(label) + '</td>'
+        + '<td class="l"><s class="muted">' + esc(a) + '</s></td>'
+        + '<td class="l"><b>' + esc(b) + '</b></td></tr>';
+    }
+    /* #1 #6 #7: usulan PO dilengkapi dari baris lama seperti yang dilakukan database saat menerapkan
+       (po_baris_usul_lengkap, berkas 94) — usulan lama yang tidak membawa diskon/set/keterangan tidak
+       tampil seolah-olah menghapusnya. */
+    var baruBaris = (baru.baris || []).map(function(b){
+      if (!isPoUsul) return b;
+      var asal = (lama.baris || []).filter(function(x){ return b.id != null && String(x.id) === String(b.id); })[0]
+              || (lama.baris || []).filter(function(x){ return String(x.urut) === String(b.urut); })[0] || {};
+      var gabung = {};
+      Object.keys(asal).forEach(function(f){ gabung[f] = asal[f]; });
+      Object.keys(b).forEach(function(f){ if (f !== "set_komponen") gabung[f] = b[f]; });
+      return gabung;
+    });
     var pl = {}, pb = {};
     (lama.baris || []).forEach(function(b){ pl[uuBarisKunci(b)] = b; });
-    (baru.baris || []).forEach(function(b){ pb[uuBarisKunci(b)] = b; });
+    baruBaris.forEach(function(b){ pb[uuBarisKunci(b)] = b; });
+    function teksItem(l){
+      if (!l || (l.product_id == null && l.set_id == null)) return (l && l.deskripsi) || "—";
+      if (l.set_id != null) return "set " + (l.deskripsi || ("#" + l.set_id));
+      var pr = produkById(l.product_id);
+      return pr ? pr.kode : ("#" + l.product_id);
+    }
+    function teksDiskon(l){
+      return l.diskon_tipe === "persen" ? ribu(l.diskon || 0) + "%" : rp(Number(l.diskon || 0));
+    }
     Object.keys(pb).forEach(function(k){
-      var a = pl[k] || {}, b = pb[k];
-      ["qty","harga","harga_nett","ehc_item"].forEach(function(f){
+      var a = pl[k] || {}, b = pb[k], lbl = "Baris " + k + " · ";
+      if (pl[k] && (String(a.product_id == null ? "" : a.product_id) !== String(b.product_id == null ? "" : b.product_id)
+                    || String(a.set_id == null ? "" : a.set_id) !== String(b.set_id == null ? "" : b.set_id)))
+        barisBeda(lbl + "item diganti", teksItem(a), teksItem(b));
+      if (b.qty !== undefined && Number(a.qty || 0) !== Number(b.qty || 0))
+        barisBeda(lbl + "qty", ribu(a.qty || 0), ribu(b.qty || 0));
+      ["harga","harga_nett","ehc_item"].forEach(function(f){
         if (b[f] === undefined) return;
         if (Number(a[f] || 0) === Number(b[f] || 0)) return;
-        brs += '<tr><td class="l">Baris ' + esc(k) + ' · ' + esc(f) + '</td>'
-          + '<td class="l"><s class="muted">' + esc(rp(Number(a[f] || 0))) + '</s></td>'
-          + '<td class="l"><b>' + esc(rp(Number(b[f] || 0))) + '</b></td></tr>';
+        barisBeda(lbl + f.replace("_", " "), rp(Number(a[f] || 0)), rp(Number(b[f] || 0)));
       });
+      if (isPoUsul && (Number(a.diskon || 0) !== Number(b.diskon || 0)
+                       || (a.diskon_tipe || "rp") !== (b.diskon_tipe || "rp")))
+        barisBeda(lbl + "diskon", teksDiskon(a), teksDiskon(b));
+      if (isPoUsul && String(a.keterangan || "") !== String(b.keterangan || ""))
+        barisBeda(lbl + "keterangan", a.keterangan || "—", b.keterangan || "—");
+      if (isPoUsul && pl[k] && poTotalBaris(a) !== poTotalBaris(b))
+        barisBeda(lbl + "nilai baris", rp(poTotalBaris(a)), rp(poTotalBaris(b)));
     });
+    if (isPoUsul) {
+      var ppnBaru = (kb.ppn_kena === undefined || kb.ppn_kena === null) ? kl.ppn_kena : kb.ppn_kena;
+      var gtLama = poHitungLokal({ baris: lama.baris || [], ppn_kena: !!kl.ppn_kena }).grand;
+      var gtBaru = poHitungLokal({ baris: baru.baris ? baruBaris : (lama.baris || []), ppn_kena: !!ppnBaru }).grand;
+      if (gtLama !== gtBaru) barisBeda("Grand total PO", rp(gtLama), rp(gtBaru));
+    }
     /* Baris yang HILANG dari usulan juga perubahan — dan yang paling mudah
        lolos kalau yang ditampilkan cuma isi usulannya. */
     Object.keys(pl).forEach(function(k){

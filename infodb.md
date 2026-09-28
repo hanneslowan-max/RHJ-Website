@@ -111,6 +111,44 @@ CREATE TABLE public.products (
   CONSTRAINT products_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
   CONSTRAINT products_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)
 );
+-- tipe_roda(kode) [berkas 94]: kunci tipe roda dari kode — produk yang hanya beda fungsi (H/M/R/S,
+--   OSJ/OSK/OSJB, OSNJ/OSNJB/OSNBK, SPJ/SPK/SPJB, HSUCJ/HSUCJB/HSUCK, JCB/KCB/JBCB, TSH/TFH/TSHJB,
+--   Hammer 320S/320SR, 500BPS/500BPR) mendapat kunci sama; dibandingkan tanpa spasi.
+CREATE TABLE public.product_sets (   -- #1 set roda (berkas 74; dipakai PO sejak 85; aturan & snapshot 94)
+  id bigint NOT NULL DEFAULT nextval('product_sets_id_seq'::regclass),
+  kode text UNIQUE,
+  nama text NOT NULL,
+  kategori text,
+  catatan text,
+  aktif boolean NOT NULL DEFAULT true,
+  dibuat_oleh uuid DEFAULT auth.uid(),
+  dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  diubah_oleh uuid,
+  diubah_pada timestamp with time zone,
+  CONSTRAINT product_sets_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.product_set_components (
+  id bigint NOT NULL DEFAULT nextval('product_set_components_id_seq'::regclass),
+  set_id bigint NOT NULL,
+  product_id bigint NOT NULL,
+  qty numeric NOT NULL DEFAULT 1 CHECK (qty > 0::numeric),
+  harga_nett numeric NOT NULL DEFAULT 0 CHECK (harga_nett >= 0::numeric),
+  urut integer NOT NULL DEFAULT 1,
+  CONSTRAINT product_set_components_pkey PRIMARY KEY (id),
+  CONSTRAINT product_set_components_set_id_fkey FOREIGN KEY (set_id) REFERENCES public.product_sets(id) ON DELETE CASCADE,
+  CONSTRAINT product_set_components_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+);
+-- View product_set_ringkas: harga_set = sum(qty*harga_nett), total_pcs, jumlah_komponen.
+-- Aturan set roda (#1, berkas 94) = periksa_komposisi_set(komponen jsonb) -> NULL sah / pesan:
+--   tepat 4 pcs, qty bulat, satu kategori + merek + tipe_roda, fungsi tercatat, satu produk per fungsi,
+--   kombinasi 4R / 4H / 4M / 2R+2H / 2R+2M / 2H+2M, bukan usulan, harga_nett >= 0 & <= 2 desimal.
+--   Ditegakkan: RPC simpan_set; constraint trigger DEFERRABLE INITIALLY DEFERRED psetc_jaga_komposisi
+--   (product_set_components) & pset_jaga_aktif (product_sets, saat diaktifkan) -> jaga_komposisi_set();
+--   dan saat set dipakai baris PO (po_lines_set_snapshot).
+-- RPC (SECURITY INVOKER, hak = RLS): simpan_set(p_id, p_kepala, p_komponen) -> id, atomik;
+--   hapus_set(p_id) -> teks: hapus bila belum dipakai PO, bila sudah dipakai -> aktif=false.
+-- RLS: pset_baca/psetc_baca = boleh_lihat_produk(); tambah/ubah (dan hapus komponen) = boleh_ubah_impor()
+--   (owner/gm/staff); pset_hapus = boleh_hapus() (owner). quote_lines.set_id ON DELETE SET NULL.
 CREATE TABLE public.factory_codes (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   supplier_id bigint NOT NULL,
@@ -464,13 +502,38 @@ CREATE TABLE public.po_lines (
   urut integer NOT NULL DEFAULT 1,
   product_id bigint,
   deskripsi text,
-  qty numeric NOT NULL CHECK (qty > 0::numeric),
-  harga numeric NOT NULL CHECK (harga >= 0::numeric),
+  qty numeric(14,2) NOT NULL CHECK (qty > 0::numeric),
+  harga numeric(14,2) NOT NULL CHECK (harga >= 0::numeric),
   jenis text NOT NULL DEFAULT 'barang'::text CHECK (jenis = ANY (ARRAY['barang'::text, 'biaya'::text])),
+  keterangan text,                                            -- #6: catatan per baris
+  diskon numeric NOT NULL DEFAULT 0 CHECK (diskon >= 0::numeric),   -- #7
+  diskon_tipe text NOT NULL DEFAULT 'rp'::text CHECK (diskon_tipe = ANY (ARRAY['rp'::text, 'persen'::text])),
+  set_id bigint,                                              -- #1 (berkas 85): baris SET
+  set_komponen jsonb,                                         -- #1 (berkas 94): snapshot komponen set
   CONSTRAINT po_lines_pkey PRIMARY KEY (id),
-  CONSTRAINT po_lines_po_id_fkey FOREIGN KEY (po_id) REFERENCES public.purchase_orders(id),
-  CONSTRAINT po_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+  CONSTRAINT po_lines_po_id_fkey FOREIGN KEY (po_id) REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
+  CONSTRAINT po_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT po_lines_set_id_fkey FOREIGN KEY (set_id) REFERENCES public.product_sets(id),
+  -- berkas 94 (#7/#1):
+  CONSTRAINT po_lines_diskon_maks CHECK (CASE WHEN diskon_tipe = 'persen' THEN diskon <= 100 ELSE diskon <= qty * harga END),
+  CONSTRAINT po_lines_diskon_sen CHECK (CASE WHEN diskon_tipe = 'persen'
+    THEN qty * harga * diskon / 100 = trunc(qty * harga * diskon / 100, 2) ELSE diskon = trunc(diskon, 2) END),
+  CONSTRAINT po_lines_set_qty_bulat CHECK (set_id IS NULL OR qty = trunc(qty)),
+  CONSTRAINT po_lines_set_bukan_produk CHECK (set_id IS NULL OR (product_id IS NULL AND jenis = 'barang'))
 );
+-- Nilai baris = qty*harga − potongan (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus po_ringkas.
+-- Baris SET (#1): jenis 'barang', product_id NULL, set_id terisi, harga = harga per set, qty = jumlah set
+--   (bulat), deskripsi = nama set. set_komponen = [{product_id,qty,harga_nett,urut}] diisi trigger
+--   po_lines_set_snapshot (BEFORE INSERT/UPDATE -> jaga_set_baris_po, berkas 94): diambil dari definisi
+--   set saat baris disimpan (set wajib aktif & sah menurut periksa_komposisi_set), nilai dari klien
+--   diabaikan, tidak bisa diubah langsung; putuskan_ubah (rhj.usul='on') membawa snapshot lama bila
+--   set_id sama. SP dari PO memecah set ke pcs menurut snapshot ini (FE spBarisDariPo): nilai bersih baris
+--   dibagi PERSIS (maks. 2 baris SP per item: n dan n+1 satuan Rp 1 / 1 sen) → grand total SP = PO.
+-- Trigger lain: po_lines_jenis (jaga_jenis_baris), zz_audit_po_lines.
+-- RLS: pol_baca (PO terbaca), pol_tambah (PO terbaca + boleh_input_po), pol_ubah/pol_hapus
+--   (boleh_ubah_langsung = owner/gm). Perubahan oleh peran lain lewat ajukan_ubah → putuskan_ubah:
+--   cabang po melengkapi baris usulan dari baris tersimpan (po_baris_usul_lengkap: set_id, set_komponen,
+--   diskon, diskon_tipe, keterangan) dan memeriksanya (periksa_baris_po_usul) [berkas 94].
 CREATE TABLE public.sp_counter (
   tahun integer NOT NULL,
   bulan integer NOT NULL,
