@@ -372,16 +372,26 @@ CREATE TABLE public.quotes (
   customer_id bigint NOT NULL,
   nomor text NOT NULL,
   tanggal date NOT NULL DEFAULT CURRENT_DATE,
-  berlaku_hari integer NOT NULL DEFAULT 14,
+  berlaku_hari integer,
   kepada text,
   catatan text,
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
   dibuat_oleh uuid,
+  sales_rep_id bigint,
   CONSTRAINT quotes_pkey PRIMARY KEY (id),
-  CONSTRAINT quotes_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id),
+  CONSTRAINT quotes_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id) ON DELETE SET NULL,
   CONSTRAINT quotes_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
-  CONSTRAINT quotes_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id)
+  CONSTRAINT quotes_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
+  CONSTRAINT quotes_sales_rep_id_fkey FOREIGN KEY (sales_rep_id) REFERENCES public.sales_reps(id)
 );
+-- UNIQUE INDEX quotes_nomor_uniq (nomor); INDEX quotes_sales_rep_idx (sales_rep_id)  [berkas 87]
+-- berlaku_hari NULL = tanpa batas (#5).
+-- Trigger quotes_jaga_sales (BEFORE INSERT / UPDATE OF sales_rep_id, customer_id) [berkas 87]:
+--   isi dibuat_oleh/dibuat_pada; sales -> sales_rep_id = dirinya (tak bisa sales lain);
+--   vonny wajib ada sales; sales & vonny: pelanggan bertuan hanya atas nama pemegangnya.
+-- RLS [berkas 87]: quote_baca = vonny / boleh_lihat_semua_lead() / sales_rep_id = sales_rep_saya()
+--   (atau lead lama milik sales itu); quote_tambah = crm/vonny + pelanggan_saya + sales=dirinya;
+--   quote_ubah = owner/gm/staff/vonny. Simpan lewat RPC simpan_penawaran(p_kepala, p_baris).
 CREATE TABLE public.quote_lines (
   id bigint NOT NULL DEFAULT nextval('quote_lines_id_seq'::regclass),
   quote_id bigint NOT NULL,
@@ -392,10 +402,18 @@ CREATE TABLE public.quote_lines (
   harga numeric NOT NULL,
   harga_list numeric,
   urut integer NOT NULL DEFAULT 1,
+  spesifikasi text,
+  set_id bigint,
   CONSTRAINT quote_lines_pkey PRIMARY KEY (id),
-  CONSTRAINT quote_lines_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.quotes(id),
-  CONSTRAINT quote_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
+  CONSTRAINT quote_lines_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.quotes(id) ON DELETE CASCADE,
+  CONSTRAINT quote_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
+  CONSTRAINT quote_lines_set_id_fkey FOREIGN KEY (set_id) REFERENCES public.product_sets(id) ON DELETE SET NULL,
+  CONSTRAINT quote_lines_qty_positif CHECK (qty > 0::numeric) NOT VALID,
+  CONSTRAINT quote_lines_harga_wajar CHECK (harga >= 0::numeric) NOT VALID,
+  CONSTRAINT quote_lines_produk_atau_set CHECK (product_id IS NULL OR set_id IS NULL) NOT VALID
 );
+-- Baris set (#1, berkas 87): product_id NULL + set_id, satuan 'set', harga = harga per set.
+-- RLS: ql_baca = boleh_lihat_quote(quote_id); ql_tulis = boleh_tulis_quote(quote_id).
 CREATE TABLE public.quote_counter (
   tahun integer NOT NULL,
   bulan integer NOT NULL,
