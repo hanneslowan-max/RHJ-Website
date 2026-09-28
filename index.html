@@ -8984,6 +8984,9 @@ function gambarKirimPartial(s, lines, kirimList){
 
   var h = '';
   if (!pakaiBertahap && !bolehTerbit) { box.innerHTML = ""; return; }   /* tak ada yang perlu digambar */
+  /* #8 (berkas 89): SP yang sudah dikirim sekaligus (nomor surat jalan di kepala SP, tanpa
+     surat jalan bertahap) tidak boleh "dikirim" lagi — database menolak tambah_surat_jalan. */
+  if (!pakaiBertahap && s.no_surat_jalan) { box.innerHTML = ""; return; }
 
   h += '<h3 class="sec">Pengiriman bertahap <span class="muted">(banyak surat jalan · invoice satu di akhir)</span></h3>';
 

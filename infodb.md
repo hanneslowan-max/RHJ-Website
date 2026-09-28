@@ -446,6 +446,8 @@ CREATE TABLE public.purchase_orders (
   CONSTRAINT purchase_orders_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id),
   CONSTRAINT purchase_orders_dibatalkan_oleh_fkey FOREIGN KEY (dibatalkan_oleh) REFERENCES auth.users(id)
 );
+-- Constraint trigger po_pelanggan_sp (AFTER UPDATE OF customer_id, DEFERRABLE INITIALLY DEFERRED)
+--   [berkas 89] -> jaga_pelanggan_sp_po(): SP (tidak batal) yang menunjuk PO ini harus berpelanggan sama.
 CREATE TABLE public.po_lines (
   id bigint NOT NULL DEFAULT nextval('po_lines_id_seq'::regclass),
   po_id bigint NOT NULL,
@@ -546,6 +548,9 @@ CREATE TABLE public.sales_orders (
 --   PO dilepas/diganti, atau po_menyusul/alasannya berganti pada SP tanpa PO) oleh selain owner/gm/vonny
 --   -> gugurkan_cek_vonny(): vonny_ok/oleh/pada -> null selama barang belum keluar [berkas 88].
 -- RPC tandai_sp_tanpa_po: selain owner/gm hanya PEMBUAT SP, sebelum cek Vonny & sebelum barang keluar [berkas 88].
+-- Trigger so_jaga_pembuat (BEFORE UPDATE, WHEN dibuat_oleh/dibuat_pada berubah) [berkas 89]: hanya owner/gm.
+-- Constraint trigger so_pelanggan_po (AFTER UPDATE OF customer_id, WHEN po_id terisi, DEFERRABLE INITIALLY
+--   DEFERRED) [berkas 89] -> jaga_pelanggan_sp_po(): pelanggan SP = pelanggan PO-nya (dicek saat COMMIT).
 -- RLS so_baca [berkas 83, 88]: sales pemilik; SP yang sedang dicek Vonny (tidak batal, belum surat jalan,
 --   vonny_ok bukan true) hanya owner/gm/vonny + pembuatnya (dibuat_oleh, selama boleh_alur_jual);
 --   selebihnya boleh_lihat_semua_jual().
@@ -569,6 +574,33 @@ CREATE TABLE public.sales_order_lines (
 --   selama SP segar (tidak batal, vonny_ok & harga_ok null, belum surat jalan/so_kirim/invoice).
 -- Trigger sol_vonny_gugur (AFTER INSERT/UPDATE/DELETE) [berkas 88]: perubahan produk/qty/harga_nett/
 --   ehc_item/jenis/deskripsi/batal oleh selain owner/gm/vonny -> gugurkan_cek_vonny(so_id).
+CREATE TABLE public.so_kirim (   -- surat jalan bertahap (#15, berkas 76)
+  id bigint NOT NULL DEFAULT nextval('so_kirim_id_seq'::regclass),
+  so_id bigint NOT NULL,
+  no_surat_jalan text NOT NULL,
+  tgl date NOT NULL,
+  catatan text,
+  dibuat_oleh uuid DEFAULT auth.uid(),
+  dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT so_kirim_pkey PRIMARY KEY (id),
+  CONSTRAINT so_kirim_so_id_fkey FOREIGN KEY (so_id) REFERENCES public.sales_orders(id)
+);
+CREATE TABLE public.so_kirim_baris (
+  id bigint NOT NULL DEFAULT nextval('so_kirim_baris_id_seq'::regclass),
+  kirim_id bigint NOT NULL,
+  so_line_id bigint NOT NULL,
+  qty numeric NOT NULL CHECK (qty > 0::numeric),
+  CONSTRAINT so_kirim_baris_pkey PRIMARY KEY (id),
+  CONSTRAINT so_kirim_baris_kirim_id_fkey FOREIGN KEY (kirim_id) REFERENCES public.so_kirim(id) ON DELETE CASCADE,
+  CONSTRAINT so_kirim_baris_so_line_id_fkey FOREIGN KEY (so_line_id) REFERENCES public.sales_order_lines(id)
+);
+-- View so_kirim_sisa (per baris barang aktif: qty_pesan, qty_kirim, sisa). Tulis HANYA lewat RPC
+--   tambah_surat_jalan / batal_surat_jalan (owner/gm/liesian) yang menyalakan flag rhj.kirim.
+-- Trigger so_kirim_jaga & so_kirim_baris_jaga (BEFORE INSERT/UPDATE/DELETE) [berkas 89]: tanpa rhj.kirim
+--   ditolak (termasuk owner); so_kirim baru wajib SP tidak batal, vonny_ok = true, kirim_ok bukan false,
+--   status_sp_hitung bukan menunggu gm/menunggu vonny/draft; baris wajib barang aktif SP itu & qty <= sisa.
+-- tambah_surat_jalan [berkas 89]: kunci SP (FOR UPDATE), pakai status_sp_hitung, tolak SP yang sudah
+--   ber-invoice atau sudah dikirim sekaligus (no_surat_jalan kepala terisi tanpa so_kirim).
 CREATE TABLE public.customer_pics (
   id bigint NOT NULL DEFAULT nextval('customer_pics_id_seq'::regclass),
   customer_id bigint,
