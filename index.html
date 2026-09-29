@@ -1095,6 +1095,45 @@ function hitungPpn(mode, dasar, lain){
   if (mode === "non") return { dpp: dasar, ppn: 0, grand: dasar + lain };
   return { dpp: dasar, ppn: dasar * 0.11, grand: dasar * 1.11 + lain };
 }
+/* #30 (berkas 114): mode PPN sebuah PO/SP. Data/klien lama hanya punya ppn_kena (false → non). */
+function modePpnDok(d){
+  var m = d && d.mode_ppn;
+  return (m === "include" || m === "exclude" || m === "non") ? m : (d && d.ppn_kena === false ? "non" : "exclude");
+}
+/* Angka TANPA PPN dari harga yang diketik — mode include dibagi 1,11 (cermin dpp_ppn di DB). Dipakai untuk
+   membandingkan dengan price list / harga khusus, yang selalu tanpa PPN. */
+function dppSatuan(nilai, mode){ return mode === "include" ? (Number(nilai) || 0) / 1.11 : (Number(nilai) || 0); }
+/* Harga nett dibanding price list (tanpa PPN) → -1 di bawah, 0 sama, 1 di atas. Include: nett ÷ 1,11 vs list
+   dihitung bulat (100 × nett_sen vs 111 × list_sen) supaya sama persis dengan DB, tanpa derau float. */
+function bandingList(nett, list, mode){
+  var n = senDari(nett), l = senDari(list);
+  if (mode === "include") { n *= 100; l *= 111; }
+  return n < l ? -1 : (n > l ? 1 : 0);
+}
+function opsiModePpn(mode){
+  return MODE_PPN.map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === mode ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join("");
+}
+/* #30: keterangan kecil di bawah angka grand total sebuah PO/SP (r = baris ringkas / dokumen). */
+function ketPpn(r){
+  var m = modePpnDok(r);
+  return m === "non" ? "non-PPN" : (m === "include" ? "termasuk PPN · harga include" : "termasuk PPN");
+}
+/* Blok jumlahan PO/SP: t = { mode, barang (+ehc), biaya, dasar (DPP), sub, ppn, grand }. */
+function jumlahanPpnHtml(t, baris){
+  var h = baris || "";
+  if (t.biaya) h += '<div><span>Biaya / ongkos <i>tidak kena PPN</i></span><b>' + rp(t.biaya) + '</b></div>';
+  if (t.mode === "include") {
+    h += '<div><span>DPP <i>' + (t.biaya ? 'barang ' : '') + '÷ 1,11</i></span><b>' + rp(t.dasar) + '</b></div>'
+      +  '<div><span>PPN 11% <i>sudah termasuk dalam harga</i></span><b>' + rp(t.ppn) + '</b></div>';
+  } else {
+    h += '<div><span>Sub total</span><b>' + rp(t.sub) + '</b></div>'
+      +  (t.mode === "non"
+            ? '<div><span>PPN <i>non-PPN</i></span><b>—</b></div>'
+            : '<div><span>PPN 11%' + (t.biaya ? ' <i>dari ' + rp(t.dasar) + '</i>' : '') + '</span><b>' + rp(t.ppn) + '</b></div>');
+  }
+  return h + '<div class="besar"><span>Grand Total' + (t.mode === "include" ? ' <i>termasuk PPN</i>' : '')
+    + '</span><b>' + rp(t.grand) + '</b></div>';
+}
 function angkaSaja(v){ return angkaId(v); }                        /* #14: nama lama → pengurai baru */
 function angkaAlur(v){ var n = angkaId(v); return n === null ? 0 : n; }
 /* #14: format saat mengetik — titik ribuan, satu koma desimal (maks `des` digit; kelebihan DITOLAK,
@@ -4238,7 +4277,8 @@ function poFormBaru(){
      sudah kosong — keterangan yang tidak lagi menerangkan apa pun. */
   lupakanSalesPelanggan();
   return { tanggal: new Date().toISOString().slice(0,10), no_po: "", customer_id: null,
-           nama_customer: "", alamat: "", sales_rep_id: null, ppn_kena: true, hp: "", namaTerpilih: "",   /* #29 */
+           nama_customer: "", alamat: "", sales_rep_id: null, ppn_kena: true, mode_ppn: "exclude",   /* #30 */
+           hp: "", namaTerpilih: "",   /* #29 */
            lampiran: "", catatan: "", baris: [ barisPoBaru() ] };
 }
 /* Ongkos kirim dan biaya lain ikut ditagihkan, tapi TIDAK masuk dasar
@@ -4442,9 +4482,11 @@ function poHitungLokal(f){
     if (b.jenis === "biaya") biaya4 += n; else barang4 += n;
   });
   var barang = barang4 / 10000, biaya = biaya4 / 10000;
-  var ppn = f.ppn_kena ? barang * 0.11 : 0;
-  return { sub: barang + biaya, barang: barang, biaya: biaya, dasar: barang,
-           ppn: ppn, grand: barang + biaya + ppn };
+  /* #30 (berkas 114, = po_ringkas): exclude → + 11% barang; include → grand = Σ baris PERSIS,
+     DPP = barang ÷ 1,11, PPN = barang − DPP; non → tanpa PPN. Biaya tidak pernah kena PPN. */
+  var mode = modePpnDok(f), x = hitungPpn(mode, barang, biaya);
+  return { mode: mode, sub: x.dpp + biaya, barang: barang, biaya: biaya, dasar: x.dpp,
+           ppn: x.ppn, grand: mode === "exclude" ? barang + biaya + x.ppn : barang + biaya };
 }
 
 /* #24: sorting daftar dengan klik header.
@@ -4760,8 +4802,7 @@ function panelPo(){
                 return '<option value="'+r.id+'"'+(String(r.id)===String(f.sales_rep_id)?" selected":"")+'>'
                      + esc(labelRep(r)) + '</option>'; }).join("")
             + '</select>')
-      +   medanAlur("PPN", '<select id="po-ppn"><option value="1"'+(f.ppn_kena?" selected":"")+'>Kena VAT 11%</option>'
-            + '<option value="0"'+(!f.ppn_kena?" selected":"")+'>Non-PPN</option></select>')
+      +   medanAlur("PPN", '<select id="po-ppn">' + opsiModePpn(modePpnDok(f)) + '</select>')   /* #30 */
       + '</div>'
       + kotakSalesPelanggan()
       + '<div style="margin-top:12px">'   /* #36 */
@@ -4774,18 +4815,16 @@ function panelPo(){
       + '</div></div>';
 
     h += '<h3 class="sec">Baris item PO <span class="muted">harga satuan terisi dari price list — boleh diubah sesuai PO customer</span></h3>';
+    if (modePpnDok(f) === "include")   /* #30 */
+      h += '<div class="flag" style="margin-bottom:10px"><span class="f-ico">i</span><div><b>Include PPN.</b> Ketik harga seperti di PO customer '
+        + '(sudah termasuk PPN 11%). Price list yang terisi otomatis <b>belum</b> termasuk PPN — sesuaikan. Grand total = jumlah baris persis; '
+        + 'DPP = barang ÷ 1,11.</div></div>';
     h += '<div class="kotak"><div class="kotak-isi" id="po-baris">' + poBarisHtml(f) + '</div></div>';
 
-    h += '<div class="jumlahan-alur">'
-      + (t.biaya
-          ? '<div><span>Barang</span><b>'+rp(t.barang)+'</b></div>'
-          + '<div><span>Biaya / ongkos <i>tidak kena PPN</i></span><b>'+rp(t.biaya)+'</b></div>'
-          : '')
-      + '<div><span>Sub total</span><b>'+rp(t.sub)+'</b></div>'
-      + '<div><span>VAT 11%'+(f.ppn_kena?'':' (non-PPN)')
-      +   (t.biaya && f.ppn_kena ? ' <i>dari '+rp(t.dasar)+'</i>' : '')
-      +   '</span><b>'+(t.ppn?rp(t.ppn):'—')+'</b></div>'
-      + '<div class="besar"><span>Grand Total</span><b>'+rp(t.grand)+'</b></div></div>';
+    h += '<div class="jumlahan-alur">'   /* #30: tiga mode PPN */
+      + jumlahanPpnHtml(t, (t.biaya || t.mode === "include")
+          ? '<div><span>Barang' + (t.mode === "include" ? ' <i>termasuk PPN</i>' : '') + '</span><b>'+rp(t.barang)+'</b></div>' : '')
+      + '</div>';
 
     h += '<div class="aksi-baris">'
       + '<button class="btn utama" id="po-submit" type="button">Submit PO</button>'
@@ -5399,7 +5438,7 @@ function formDetailDoc(jenis, row){
   var h = '<div class="tiles" style="margin-bottom:4px">'
     + tile(isPo ? "No PO" : "No SP", isPo ? row.no_po : row.no_sp, tglTampil(row.tanggal))
     + tile("Pihak", isPo ? row.nama_customer : row.kepada, esc(namaRepAlur(row.sales_rep_id)))
-    + tile("Grand total", r ? rp(r.grand_total) : "—", "termasuk PPN")
+    + tile("Grand total", r ? rp(r.grand_total) : "—", ketPpn(r || row))   /* #30 */
     + (isPo ? "" : tile("Status", row.status || "—", "dihitung database"))
     + '</div>';
   /* #18: batal SISA qty per baris SP (bukan cuma satu baris utuh). Tombol hanya untuk alur jual/vonny;
@@ -5647,12 +5686,18 @@ function formMintaUbah(jenis, id){
     h += field({ nama:"u_no_po", label:"No PO", nilai:d.no_po })
       +  field({ nama:"u_tanggal", label:"Tanggal", jenis:"date", nilai:d.tanggal })
       +  field({ nama:"u_nama_customer", label:"Perusahaan", nilai:d.nama_customer })
-      +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" });
+      +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" })
+      +  field({ nama:"u_mode_ppn", label:"PPN", jenis:"select", nilai:modePpnDok(d),   /* #30 */
+                 pilihan: MODE_PPN.map(function(o){ return { v:o[0], l:o[1] }; }),
+                 bantu:"SP dari PO ini ikut berubah. Ditolak bila SP-nya sudah ber-invoice." });
   } else {
     h += field({ nama:"u_kepada", label:"Kepada", nilai:d.kepada })
       +  field({ nama:"u_up", label:"UP.", nilai:d.up || "" })
       +  field({ nama:"u_telp", label:"Telp.", nilai:d.telp || "" })
-      +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" });
+      +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" })
+      +  field({ nama:"u_mode_ppn", label:"PPN", jenis:"select", nilai:modePpnDok(d), mati: !!d.po_id,   /* #30 */
+                 pilihan: MODE_PPN.map(function(o){ return { v:o[0], l:o[1] }; }),
+                 bantu: d.po_id ? "SP ini mengikuti mode PPN PO-nya — ubah lewat PO." : "" });
   }
 
   var isPoU = jenis === "po";
@@ -5739,11 +5784,17 @@ function formMintaUbah(jenis, id){
       kepala.tanggal = wajibIsi("u_tanggal", "Tanggal");
       kepala.nama_customer = wajibIsi("u_nama_customer", "Perusahaan");
       kepala.alamat = nilaiForm("u_alamat") || "";
+      kepala.mode_ppn = nilaiForm("u_mode_ppn") || modePpnDok(d);   /* #30 */
+      kepala.ppn_kena = kepala.mode_ppn !== "non";
     } else {
       kepala.kepada = wajibIsi("u_kepada", "Kepada");
       kepala.up = nilaiForm("u_up") || "";
       kepala.telp = nilaiForm("u_telp") || "";
       kepala.alamat = nilaiForm("u_alamat") || "";
+      if (!d.po_id) {   /* #30: SP dengan PO ikut PO — tidak dikirim */
+        kepala.mode_ppn = nilaiForm("u_mode_ppn") || modePpnDok(d);
+        kepala.ppn_kena = kepala.mode_ppn !== "non";
+      }
     }
     if (kurang) { tampilPesan(esc(kurang) + " tidak boleh dikosongkan."); return; }
     var isi = [], salahBaris = [];
@@ -5897,7 +5948,7 @@ function poBarisHtml(f){
       + poTotalBarisHtml(b, i)   /* #34 */
       + '<div class="bi-angka bi-po">'
       +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="po-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
-      +   '<div><label>Harga satuan</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"></div>'
+      +   '<div><label>Harga satuan'+(biaya || modePpnDok(f) !== "include" ? '' : ' <span class="muted">incl. PPN</span>')+'</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"></div>'   /* #30 */
       +   '<div><label>Diskon</label><div class="diskon-grup">'   /* #7: 2 mode Rp / % */
       +     '<select class="po-diskon-tipe" data-i="'+i+'" aria-label="Tipe diskon">'
       +       '<option value="rp"'+(b.diskon_tipe==="persen"?"":" selected")+'>Rp</option>'
@@ -5918,7 +5969,7 @@ function pasangPo(){
     f.no_po   = $("po-no").value;
     f.alamat  = $("po-alamat").value;
     f.sales_rep_id = $("po-rep").value || null;
-    f.ppn_kena = $("po-ppn").value === "1";
+    f.mode_ppn = $("po-ppn").value; f.ppn_kena = f.mode_ppn !== "non";   /* #30 */
     f.nama_customer = $("po-cust").value;
   }
   ["po-tanggal","po-alamat","po-rep"].forEach(function(id){
@@ -6213,7 +6264,8 @@ function simpanPo(){
       no_po: f.no_po.trim(), tanggal: f.tanggal, customer_id: f.customer_id,
       nama_customer: f.nama_customer.trim(), alamat: f.alamat || null,
       sales_rep_id: f.sales_rep_id ? Number(f.sales_rep_id) : null,
-      ppn_kena: f.ppn_kena, lampiran: f.lampiran || null, catatan: f.catatan || null
+      ppn_kena: modePpnDok(f) !== "non", mode_ppn: modePpnDok(f),   /* #30 */
+      lampiran: f.lampiran || null, catatan: f.catatan || null
     }, "return=representation")
   .then(function(r){
     var po = Array.isArray(r) ? r[0] : r;
@@ -6255,7 +6307,7 @@ function spFormBaru(){
   lupakanSalesPelanggan();
   return { po_id:null, menyusul:false, tanpaPo:false, alasanMenyusul:"",
            kepada:"", alamat:"", up:"", telp:"", no_seri:"", cash_minta:false, catatan:"",
-           sales_rep_id:null, ppn_kena:true, customer_id:null,
+           sales_rep_id:null, ppn_kena:true, mode_ppn:"exclude", customer_id:null,   /* #30 */
            baris: [] };
 }
 /* #10: mode "PO menyusul" dan "tanpa PO sama sekali" sama-sama TANPA PO —
@@ -6499,8 +6551,8 @@ function panelSp(){
           + '</div>'
           + '<div class="baris2" style="margin-top:12px">'
           +   medanAlur("Telp.", '<input type="text" id="sp-telp" value="'+esc(f.telp)+'">')
-          +   medanAlur("PPN", '<select id="sp-ppn"><option value="1"'+(f.ppn_kena?" selected":"")+'>Kena PPN 11%</option>'
-                + '<option value="0"'+(!f.ppn_kena?" selected":"")+'>Non-PPN</option></select>')
+          +   medanAlur("PPN" + (f.po_id ? ' <em>ikut PO</em>' : ''),   /* #30: SP dengan PO selalu memakai mode PPN PO */
+                '<select id="sp-ppn"' + (f.po_id ? ' disabled title="SP mengikuti mode PPN PO-nya"' : '') + '>' + opsiModePpn(modePpnDok(f)) + '</select>')
           + '</div>'
           + '<div class="baris2" style="margin-top:12px">'
           +   (cashKunci   /* #22 */
@@ -6536,16 +6588,14 @@ function panelSp(){
         h += '<div class="kotak"><div class="kotak-isi">' + spBarisHtml(f) + '</div></div>';
         var tt = spHitungLokal(f);
         h += '<div class="jumlahan-alur">'
-          + '<div><span>Barang</span><b>'+rp(tt.barang)+'</b></div>'
-          + '<div><span>EHC</span><b>'+rp(tt.ehc)+'</b></div>'
-          + (tt.biaya
-              ? '<div><span>Biaya / ongkos <i>tidak kena PPN</i></span><b>'+rp(tt.biaya)+'</b></div>'
-              : '')
-          + '<div><span>Sub total'+(tt.biaya?'':' <i>(nett + EHC) × qty</i>')+'</span><b>'+rp(tt.sub)+'</b></div>'
-          + '<div><span>PPN '+(f.ppn_kena?'11%':'(non-PPN)')
-          +   (tt.biaya && f.ppn_kena ? ' <i>dari '+rp(tt.dasar)+'</i>' : '')
-          +   '</span><b>'+(tt.ppn?rp(tt.ppn):'—')+'</b></div>'
-          + '<div class="besar"><span>Grand Total</span><b>'+rp(tt.grand)+'</b></div></div>';
+          + jumlahanPpnHtml(tt,   /* #30: tiga mode PPN */
+              '<div><span>Barang' + (tt.mode === "include" ? ' <i>termasuk PPN</i>' : '') + '</span><b>'+rp(tt.barang)+'</b></div>'
+            + '<div><span>EHC' + (tt.mode === "include" ? ' <i>termasuk PPN</i>' : '') + '</span><b>'+rp(tt.ehc)+'</b></div>')
+          + '</div>'
+          + (tt.mode === "include"
+              ? '<p class="muted" style="margin:6px 2px 0;font-size:12px">Include PPN: harga nett &amp; EHC yang diketik sudah termasuk PPN. '
+                + 'Price list, komisi, harga khusus, dan margin dihitung dari DPP-nya (÷ 1,11).</p>'
+              : '');
         if (tt.bawah) {
           h += '<div class="flag" style="margin-top:12px"><span class="f-ico">!</span><div>'
             + '<b>' + tt.bawah + ' baris di bawah price list.</b> SP tetap bisa disimpan dan dikirim ke '
@@ -6752,22 +6802,23 @@ function spNoPo(f){
    (sama cara poNilaiBaris1e4) supaya jumlahnya eksak, bukan float; hasil = so_ringkas / periksa_total_sp. */
 function kali1e4(q, h){ return Math.round((Number(q)||0) * 100) * Math.round((Number(h)||0) * 100); }
 function spHitungLokal(f){
-  var barang = 0, ehc = 0, biaya = 0, bawah = 0;
+  var barang = 0, ehc = 0, biaya = 0, bawah = 0, mode = modePpnDok(f);   /* #30 */
   f.baris.forEach(function(b){
     var q = Number(b.qty)||0;
     if (b.jenis === "biaya") { biaya += kali1e4(q, b.nett); return; }
     barang += kali1e4(q, b.nett);
     ehc    += kali1e4(q, b.ehc);
-    if (b.list && Number(b.nett) < Number(b.list)) bawah++;
+    if (b.list && bandingList(b.nett, b.list, mode) < 0) bawah++;   /* #30: price list tanpa PPN */
   });
   barang /= 10000; ehc /= 10000; biaya /= 10000;
   /* EHC tetap kena PPN: ia bagian dari harga barangnya, bukan biaya
      terpisah. Yang keluar dari dasar pengenaan cuma baris berjenis biaya. */
   var dasar = barang + ehc;
-  var sub = dasar + biaya;
-  var ppn = f.ppn_kena ? dasar * 0.11 : 0;   /* #12: PPN tidak dibulatkan */
-  return { barang:barang, ehc:ehc, biaya:biaya, dasar:dasar,
-           sub:sub, ppn:ppn, grand:sub+ppn, bawah:bawah };
+  /* #12: PPN tidak dibulatkan. #30 (= so_ringkas/periksa_total_sp): exclude → + 11%; include → grand = Σ baris
+     persis, DPP = (barang + EHC) ÷ 1,11; non → tanpa PPN. */
+  var x = hitungPpn(mode, dasar, biaya);
+  return { mode:mode, barang:barang, ehc:ehc, biaya:biaya, dasar:x.dpp,
+           sub:x.dpp + biaya, ppn:x.ppn, grand: mode === "exclude" ? dasar + biaya + x.ppn : dasar + biaya, bawah:bawah };
 }
 function spBarisHtml(f){
   return f.baris.map(function(b, i){
@@ -6776,8 +6827,9 @@ function spBarisHtml(f){
     var usulan = p && p.usulan;
     var q = Number(b.qty)||0;
     var total = q * ((Number(b.nett)||0) + (biaya ? 0 : (Number(b.ehc)||0)));   /* #12 */
-    var diubah = !biaya && b.list && Number(b.nett) !== Number(b.list);
-    var bawah  = !biaya && b.list && Number(b.nett) < Number(b.list);
+    var nettDpp = dppSatuan(b.nett, modePpnDok(f));   /* #30: dibanding price list (tanpa PPN) */
+    var diubah = !biaya && b.list && bandingList(b.nett, b.list, modePpnDok(f)) !== 0;
+    var bawah  = !biaya && b.list && bandingList(b.nett, b.list, modePpnDok(f)) < 0;
     var ket;
     if (biaya) ket = 'biaya — tidak dihitung komisi';
     else if (usulan) ket = 'item usulan · price list belum ada — SP ini masuk antrean GM';
@@ -6831,7 +6883,8 @@ function spBarisHtml(f){
                : (diubah ? '<span class="bi-tanda">di atas list</span>' : ''))+'</div>'
       + '<div class="bi-angka'+(spManual(f)?' bi-sp':'')+'">'
       +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="sp-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
-      +   '<div><label>'+(biaya?'Nilai':'Harga nett')+'</label><input type="text" inputmode="decimal" data-angka="2" class="sp-nett'+(bawah?" bawah":"")+'" data-i="'+i+'" value="'+ribu(b.nett)+'"></div>'
+      +   '<div><label>'+(biaya?'Nilai':'Harga nett')+(!biaya && modePpnDok(f) === "include" ? ' <span class="muted">incl. PPN</span>' : '')+'</label><input type="text" inputmode="decimal" data-angka="2" class="sp-nett'+(bawah?" bawah":"")+'" data-i="'+i+'" value="'+ribu(b.nett)+'">'
+      +     (!biaya && modePpnDok(f) === "include" && Number(b.nett) ? '<span class="bi-ket">DPP ' + rp(nettDpp) + '</span>' : '') + '</div>'   /* #30 */
       +   '<div><label>EHC / item</label>'+(biaya
             ? '<input type="text" value="—" disabled>'
             : '<input type="text" inputmode="decimal" data-angka="2" class="sp-ehc" data-i="'+i+'" value="'+ribu(b.ehc)+'">')+'</div>'
@@ -6884,6 +6937,7 @@ function pasangSp(poSiap){
     ALUR.spForm = {
       po_id: p.id, kepada: p.nama_customer, alamat: p.alamat || "", up:"", telp:"",
       no_seri:"", sales_rep_id: p.sales_rep_id, ppn_kena: p.ppn_kena,
+      mode_ppn: modePpnDok(p),   /* #30: SP ikut mode PPN PO-nya (DB juga memaksa) */
       customer_id: p.customer_id, cash_minta: false,
       baris: barisSp
     };
@@ -6909,7 +6963,7 @@ function pasangSpIsi(f){
     });
   });
   if ($("sp-ppn")) $("sp-ppn").addEventListener("change", function(){
-    f.ppn_kena = this.value === "1"; panelSp();
+    f.mode_ppn = this.value; f.ppn_kena = f.mode_ppn !== "non"; panelSp();   /* #30 */
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-sp .sp-qty, #p-sp .sp-nett, #p-sp .sp-ehc"), function(inp){
     inp.addEventListener("change", function(){
@@ -7159,7 +7213,7 @@ function spBarisPerluKhusus(f){
       if (!b.kode) return false;
       if (!(Number(b.qty) > 0)) return false;
       if (!(Number(b.nett) > 0)) return false;
-      return !b.list || Number(b.nett) < Number(b.list);
+      return !b.list || bandingList(b.nett, b.list, modePpnDok(f)) < 0;   /* #30: dari DPP */
     });
 }
 
@@ -7235,7 +7289,7 @@ function simpanSp(khusus){
       po_menyusul_alasan: f.menyusul ? String(f.alasanMenyusul).trim() : null,
       customer_id: f.customer_id, sales_rep_id: f.sales_rep_id ? Number(f.sales_rep_id) : null,
       kepada: f.kepada.trim(), alamat: f.alamat || null, up: f.up || null,
-      telp: f.telp || null, no_seri: f.no_seri || null, ppn_kena: f.ppn_kena,
+      telp: f.telp || null, no_seri: f.no_seri || null, ppn_kena: modePpnDok(f) !== "non", mode_ppn: modePpnDok(f),   /* #30 */
       /* Klaim sales, bukan fakta. cash_ok sengaja tidak dikirim dari sini:
          yang menaikkan komisi adalah kolom itu, dan hanya finance yang
          boleh menyentuhnya. */
@@ -7356,7 +7410,8 @@ function formHargaKhusus(){
         return '<tr><td class="l">' + esc(p ? (p.nama || p.kode) : String(b.kode))
           + (p && p.usulan ? ' <span class="pill p-sebagian">usulan</span>' : '')
           + '</td><td>' + (b.list ? rp(b.list) : '<span class="muted">belum ada</span>') + '</td>'
-          + '<td>' + rp(b.nett) + '</td><td>' + rp(b.ehc || 0) + '</td></tr>';
+          + '<td>' + rp(b.nett) + (modePpnDok(f) === "include" ? ' <span class="muted">(DPP ' + rp(dppSatuan(b.nett, "include")) + ')</span>' : '')   /* #30 */
+          + '</td><td>' + rp(b.ehc || 0) + '</td></tr>';
       }).join("")
     + '</tbody></table></div>'
     + field({ nama:"hk_alasan", label:"Alasan permintaan", jenis:"textarea", wajib:true,
@@ -7375,8 +7430,12 @@ function formHargaKhusus(){
         + "jadi harga khususnya tidak tahu harus menempel ke siapa.");
       return;
     }
+    /* #30: harga khusus selalu tanpa PPN (dibanding DPP baris SP di so_baris_hitung). Mode include → DPP
+       dipotong ke sen di BAWAHNYA (kolom 2 desimal), supaya baris SP ini tetap tertutup batasnya. */
+    var modeHk = modePpnDok(f);
+    function dppSen(x){ return modeHk === "include" ? Math.floor(dppSatuan(x, modeHk) * 100 + 1e-7) / 100 : (Number(x) || 0); }
     simpanSp({ alasan: alasan.trim(), item: perlu.map(function(b){
-      return { product_id: b.kode, harga_nett: Number(b.nett), ehc_item: Number(b.ehc) || 0 };
+      return { product_id: b.kode, harga_nett: dppSen(b.nett), ehc_item: dppSen(b.ehc) };
     }) });
   });
 }
@@ -10394,7 +10453,7 @@ function formCekVonny(s){
                 .slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); });
   var h = '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, tglTampil(s.tanggal))
-    + tile("Nilai", rp(r ? r.grand_total : null), "termasuk PPN")
+    + tile("Nilai", rp(r ? r.grand_total : null), ketPpn(r))   /* #30 */
     + tile("Sales", namaRepAlur(s.sales_rep_id) || "—", esc(s.kepada || ""))
     + '</div>'
     /* #36: nomor PO + lampirannya terbaca langsung di sini */
@@ -10679,7 +10738,7 @@ function formKirim(s){
       : '');
   h += '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, tglTampil(s.tanggal))
-    + tile("Nilai", rp(r ? r.grand_total : null), "termasuk PPN")
+    + tile("Nilai", rp(r ? r.grand_total : null), ketPpn(r))   /* #30 */
     + tile("Status", s.status || "—", "dihitung database")
     + '</div>'
     + (s.catatan ? '<div class="flag"><span class="f-ico">✎</span><div><b>Catatan dari sales untuk pengiriman:</b> ' + esc(s.catatan) + '</div></div>' : '')   /* #17 */
@@ -11147,7 +11206,7 @@ function blokUmurLunas(s, lunas, tgl){
   var telat = u !== null && u > 120;
   return '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, esc(s.kepada || ""))
-    + tile("Nilai invoice", rp(r ? r.grand_total : null), "termasuk PPN")
+    + tile("Nilai invoice", rp(r ? r.grand_total : null), ketPpn(r))   /* #30 */
     + tile("Umur invoice", u === null ? "—" : u + " hari",
            telat ? "lewat 120 hari" : (lunas && tgl ? "dibayar dalam 120 hari" : "sampai hari ini"),
            telat ? "alert" : "")
@@ -13284,7 +13343,7 @@ function panelGmAntre(){
    melihat bahwa sebelumnya 2 adalah persetujuan yang tidak diperiksa. */
 var UU_LABEL = {
   no_po:"No PO", tanggal:"Tanggal", nama_customer:"Perusahaan", alamat:"Alamat",
-  kepada:"Kepada", up:"UP.", telp:"Telp.", ppn_kena:"PPN"
+  kepada:"Kepada", up:"UP.", telp:"Telp.", ppn_kena:"PPN", mode_ppn:"Mode PPN"   /* #30 */
 };
 function uuTeks(v){
   if (v === null || v === undefined || v === "") return "—";
@@ -13315,6 +13374,7 @@ function formGmUsulUbah(ref){
     var brs = "";
     Object.keys(kb).forEach(function(k){
       var a = kl[k], b = kb[k];
+      if (k === "mode_ppn") { a = labelModePpn(modePpnDok(kl)); b = labelModePpn(modePpnDok(kb)); }   /* #30 */
       if (String(uuTeks(a)) === String(uuTeks(b))) return;
       brs += '<tr><td class="l">' + esc(UU_LABEL[k] || k) + '</td>'
         + '<td class="l"><s class="muted">' + esc(uuTeks(a)) + '</s></td>'
@@ -13374,9 +13434,11 @@ function formGmUsulUbah(ref){
         barisBeda(lbl + "nilai baris", rp(poTotalBaris(a)), rp(poTotalBaris(b)));
     });
     if (isPoUsul) {
-      var ppnBaru = (kb.ppn_kena === undefined || kb.ppn_kena === null) ? kl.ppn_kena : kb.ppn_kena;
-      var gtLama = poHitungLokal({ baris: lama.baris || [], ppn_kena: !!kl.ppn_kena }).grand;
-      var gtBaru = poHitungLokal({ baris: baru.baris ? baruBaris : (lama.baris || []), ppn_kena: !!ppnBaru }).grand;
+      /* #30: mode PPN usulan (klien lama: ppn_kena saja) */
+      var modeLama = modePpnDok(kl);
+      var modeBaru = kb.mode_ppn ? modePpnDok(kb) : ((kb.ppn_kena === undefined || kb.ppn_kena === null) ? modeLama : (kb.ppn_kena ? (modeLama === "non" ? "exclude" : modeLama) : "non"));
+      var gtLama = poHitungLokal({ baris: lama.baris || [], mode_ppn: modeLama }).grand;
+      var gtBaru = poHitungLokal({ baris: baru.baris ? baruBaris : (lama.baris || []), mode_ppn: modeBaru }).grand;
       if (!samaSen(gtLama, gtBaru)) barisBeda("Grand total PO", rp(gtLama), rp(gtBaru));   /* #12 */
     }
     /* Baris yang HILANG dari usulan juga perubahan — dan yang paling mudah

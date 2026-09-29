@@ -541,7 +541,8 @@ CREATE TABLE public.purchase_orders (
   nama_customer text NOT NULL,
   alamat text,
   sales_rep_id bigint,
-  ppn_kena boolean NOT NULL DEFAULT true,
+  ppn_kena boolean NOT NULL DEFAULT true,                     -- selalu = (mode_ppn <> 'non') (trigger, berkas 114)
+  mode_ppn text NOT NULL,                                     -- #30 (berkas 114): exclude | include | non
   lampiran text,
   catatan text,
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
@@ -559,6 +560,22 @@ CREATE TABLE public.purchase_orders (
   CONSTRAINT purchase_orders_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id),
   CONSTRAINT purchase_orders_dibatalkan_oleh_fkey FOREIGN KEY (dibatalkan_oleh) REFERENCES auth.users(id)
 );
+-- #30 #42 MODE PPN [berkas 114] (purchase_orders & sales_orders.mode_ppn, CHECK *_mode_ppn_cek: nilai sah &
+--   ppn_kena = mode <> 'non'):
+--   · exclude: grand = Σ nilai baris + 11% × Σ barang (rumus lama).  · non: grand = Σ nilai baris.
+--   · include: harga yang diketik SUDAH termasuk PPN → grand = Σ nilai baris PERSIS; dasar_ppn (DPP) = Σ barang ÷ 1,11;
+--     ppn = Σ barang − DPP; sub_total = grand − ppn. Baris biaya tidak pernah kena PPN (semua mode).
+--   Trigger po_a_mode_ppn / so_a_mode_ppn (BEFORE INSERT OR UPDATE) -> sinkron_mode_ppn() [DEFINER]: mode kosong
+--   saat insert (klien lama) diturunkan dari ppn_kena; update ppn_kena saja -> exclude/non; lalu ppn_kena := mode<>'non'.
+--   SP yang menunjuk PO memakai mode PO (saat insert, saat po_id berganti, saat mode/ppn_kena SP disentuh).
+--   Trigger po_mode_ppn_sp (AFTER UPDATE OF mode_ppn, ppn_kena, WHEN mode berubah) -> mode_ppn_po_ke_sp() [DEFINER]:
+--   SP (tidak batal) PO itu ikut; bila ada yang sudah ber-invoice -> ditolak (23514).
+--   dpp_ppn(nilai, mode, jenis) = nilai ÷ 1,11 untuk barang mode include, selain itu nilai. label_mode_ppn(mode).
+--   Include: komisi, tier price list (komisi_tier/_cash), harga khusus, margin (laporan_margin_sp/_produk,
+--   gm_konteks_keputusan), total_barang/total_ehc so_ringkas memakai DPP (so_baris_hitung.nett_dpp,
+--   nilai_barang_dpp, nilai_ehc_dpp, nilai_baris_dpp, mode_ppn — kolom di ujung). harga_khusus.harga_nett = DPP.
+--   View + mode_ppn di ujung: po_ringkas, so_ringkas, po_belum_sp. periksa_total_sp & tautkan_po_sp: mode SP harus
+--   = mode PO (include & non bisa sama grand-nya). putuskan_ubah menerapkan kepala.mode_ppn (PO & SP).
 -- Constraint trigger po_pelanggan_sp (AFTER UPDATE OF customer_id, DEFERRABLE INITIALLY DEFERRED)
 --   [berkas 89] -> jaga_pelanggan_sp_po(): SP (tidak batal) yang menunjuk PO ini harus berpelanggan sama.
 -- Berkas 112: purchase_orders.lampiran = jalur storage 'dokumen' berawalan po/ (#36). Policy storage.objects:
@@ -646,7 +663,8 @@ CREATE TABLE public.sales_orders (
   up text,
   telp text,
   no_seri text,
-  ppn_kena boolean NOT NULL DEFAULT true,
+  ppn_kena boolean NOT NULL DEFAULT true,                     -- selalu = (mode_ppn <> 'non') (trigger, berkas 114)
+  mode_ppn text NOT NULL,                                     -- #30 (berkas 114): = mode PO bila po_id terisi
   catatan text,
   kirim_syarat text,
   bayar_syarat text,
@@ -710,7 +728,7 @@ CREATE TABLE public.sales_orders (
 --   menolak peran lain, kecuali pengguguran sistem (flag rhj.vonny_gugur, hanya mengosongkan) [berkas 86, 88].
 -- Trigger so_status_dok (AFTER INSERT / UPDATE OF no_surat_jalan, no_invoice, no_faktur, lunas, batal,
 --   harga_ok, vonny_ok, cash_ok, customer_id, sales_rep_id) -> so_sesudah_ubah() hitung ulang status [berkas 86].
--- Trigger so_vonny_gugur (AFTER UPDATE, WHEN customer_id/kepada/alamat/up/telp/ppn_kena/catatan berubah,
+-- Trigger so_vonny_gugur (AFTER UPDATE, WHEN customer_id/kepada/alamat/up/telp/ppn_kena/mode_ppn (114)/catatan berubah,
 --   PO dilepas/diganti, atau po_menyusul/alasannya berganti pada SP tanpa PO) oleh selain owner/gm/vonny
 --   -> gugurkan_cek_vonny(): vonny_ok/oleh/pada -> null selama barang belum keluar [berkas 88].
 -- RPC tandai_sp_tanpa_po: selain owner/gm hanya PEMBUAT SP, sebelum cek Vonny & sebelum barang keluar [berkas 88].
