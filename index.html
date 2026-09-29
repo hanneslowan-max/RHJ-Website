@@ -4447,8 +4447,8 @@ function panelPo(){
       + '<td>'+esc(namaRepAlur(p.sales_rep_id))+'</td>'
       + '<td class="potong" title="'+esc(brs)+'">'+esc(brs)+'</td>'
       + '<td class="r">'+(p.ringkas?rp(p.ringkas.grand_total):'—')
-      +   (function(pb){ return pb   /* #18: batal sebagian di SP-nya */
-            ? ' <span class="pill p-sebagian" title="dibatalkan di SP '+esc(rp(pb.nilai_batal))+' · efektif '+esc(rp(pb.grand_total_efektif))+'">batal sebagian</span>'
+      +   (function(pb){ return pb   /* #18: batal sebagian di SP-nya; batal_semua = semua barang dibatalkan customer */
+            ? ' <span class="pill '+(pb.batal_semua ? 'p-belum' : 'p-sebagian')+'" title="dibatalkan di SP '+esc(rp(pb.nilai_batal))+' · efektif '+esc(rp(pb.grand_total_efektif))+'">'+(pb.batal_semua ? 'dibatalkan' : 'batal sebagian')+'</span>'
               + '<br><span class="muted" style="font-size:11px">efektif '+rp(pb.grand_total_efektif)+'</span>'
             : ''; })(poBatalInfo(p.id))
       + '</td>'
@@ -4935,7 +4935,9 @@ function formDetailDoc(jenis, row){
     if (pb) h += '<div class="tiles" style="margin-bottom:4px">'
       + tile("Dibatalkan di SP", rp(pb.nilai_batal), pb.jml_sp + " SP terkait", "alert")
       + tile("Nilai efektif", rp(pb.grand_total_efektif), "PO " + rp(pb.grand_total_po) + " − batal")
-      + '</div><div class="flag"><span class="f-ico">i</span><div><b>Batal sebagian.</b> PO adalah dokumen '
+      + '</div><div class="flag"><span class="f-ico">i</span><div><b>' + (pb.batal_semua
+          ? 'Dibatalkan.</b> Semua barang di SP-nya dibatalkan customer' + (row.batal ? ' — PO ikut ditandai batal' : '') + '. PO adalah dokumen '
+          : 'Batal sebagian.</b> PO adalah dokumen ')
       + 'pelanggan dan tidak diubah — pembatalan item tercatat di SP-nya. Kecocokan SP = PO tetap '
       + 'dibandingkan pada nilai awal.</div></div>';
   } else {

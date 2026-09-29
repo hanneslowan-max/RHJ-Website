@@ -692,6 +692,12 @@ CREATE TABLE public.sales_order_lines (
 -- View po_batal_ringkas [berkas 98]: per PO jml_sp, nilai_batal, grand_total_po, grand_total_efektif,
 --   batal_sebagian. Invarian SP = PO dibandingkan pada NILAI AWAL (periksa_total_sp, sp_beda_po.total_sp,
 --   sp_selisih_po); sp_beda_po punya kolom tambahan total_sp_efektif. PO sendiri tidak diubah.
+-- #18 [berkas 100]: sales_orders.batal_karena_barang boolean default false = SP batal karena seluruh barangnya
+--   dibatalkan customer lewat batalkan_baris_sp (bukan batalkan_sp biasa). Jalur itu juga menandai PO batal
+--   (alasan "Semua barang dibatalkan customer (SP ..)") bila PO tak punya SP lain yang berlaku.
+--   po_batal_ringkas ikut menghitung SP batal_karena_barang (nilai_batal = nilai awal SP, efektif 0) + kolom
+--   batal_semua. po_belum_sp mengecualikan PO yang SP-nya batal_karena_barang. batalkan_sp biasa: PO tetap
+--   kembali ke antrean (SP salah input dibuat ulang).
 -- laporan_margin_produk / laporan_margin_sp / gm_konteks_keputusan memakai qty efektif [berkas 98].
 CREATE TABLE public.so_kirim (   -- surat jalan bertahap (#15, berkas 76)
   id bigint NOT NULL DEFAULT nextval('so_kirim_id_seq'::regclass),
