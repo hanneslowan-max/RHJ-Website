@@ -357,11 +357,23 @@ END,
   perlu_konfirmasi boolean NOT NULL DEFAULT false,
   alasan_konfirmasi text,
   sales_rep_id bigint,
+  nama_lama text,       -- [berkas 71/100, #20] nama asli sebelum dirapikan (cadangan sekali; dikunci trigger)
+  industri_lama text,   -- [#25] teks industri dari sheet lama (apa adanya, tidak diubah)
+  nama_urut text GENERATED ALWAYS AS (regexp_replace(lower(COALESCE(nama, ''::text)), '^(pt|cv|ud|pd|tb|fa|toko|rs)\s+'::text, ''::text)) STORED,  -- [berkas 100] urut A→Z tanpa awalan badan usaha
+  CONSTRAINT customers_industri_cek CHECK (industri IS NULL OR industri = ANY (ARRAY['Otomotif'::text, 'Non Otomotif'::text, 'Bengkel Otomotif'::text])),
   CONSTRAINT customers_pkey PRIMARY KEY (id),
   CONSTRAINT customers_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
   CONSTRAINT customers_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id),
   CONSTRAINT customers_sales_rep_id_fkey FOREIGN KEY (sales_rep_id) REFERENCES public.sales_reps(id)
 );
+-- customers [berkas 100, #20]: trigger customers_rapi_nama (BEFORE INSERT / UPDATE OF nama, nama_lama) merapikan
+--   nama lewat rhj_nama_rapi() (PT/CV/UD/PD/TB/FA/Toko ke depan, Tbk di belakang, isi kurung, singkatan
+--   dipertahankan); nama asli → nama_lama bila masih kosong; nama_lama tak bisa diubah lewat REST. Jalur admin
+--   (terapkan_rapi_nama / pulihkan_nama_pelanggan, gerbang owner/gm/vonny) memakai GUC rhj.lewati_rapi_nama.
+--   Pulihkan melewati baris yang namanya sudah diganti manual (rhj_nama_sidik beda). Index customers_nama_urut_idx.
+-- customers.industri [berkas 101, #25]: diisi lewat form CRM (RLS cust_ubah) atau RPC
+--   set_industri_pelanggan(p_customer, p_industri) (owner/gm/vonny, atau owner/gm/staff/sales — sales hanya
+--   pelanggan miliknya/belum bertuan). Tebakan dari industri_lama: rhj_industri_tebak(text).
 CREATE TABLE public.leads (
   id bigint NOT NULL DEFAULT nextval('leads_id_seq'::regclass),
   customer_id bigint NOT NULL,
@@ -1050,8 +1062,22 @@ CREATE TABLE public.view_sebelum_57 (
   dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT view_sebelum_57_pkey PRIMARY KEY (nama)
 );
-
-
-
-
-
+CREATE TABLE public.customers_nama_sebelum_100 (   -- [berkas 100, #20] cadangan nama sebelum dirapikan (RLS, tanpa akses klien)
+  id bigint NOT NULL,
+  nama text NOT NULL,
+  nama_lama text,
+  diubah_oleh uuid,
+  diubah_pada timestamp with time zone,
+  dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT customers_nama_sebelum_100_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.customers_industri_sebelum_101 (   -- [berkas 101, #25] cadangan industri sebelum diisi dari industri_lama
+  id bigint NOT NULL,
+  industri text,
+  industri_lama text,
+  industri_baru text NOT NULL,
+  diubah_oleh uuid,
+  diubah_pada timestamp with time zone,
+  dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT customers_industri_sebelum_101_pkey PRIMARY KEY (id)
+);

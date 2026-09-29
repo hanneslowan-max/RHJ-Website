@@ -1566,7 +1566,7 @@ function formLeadBaru(){
     + 'riwayatnya langsung terisi — tidak perlu diketik ulang.</div></div>'
     + field({nama:"nb_hp", label:"Nomor HP", wajib:true, tempel:"0812…", bantu:"&nbsp;"})
     + '<div id="nb-temuan"></div>'
-    + field({nama:"nb_nama", label:"Nama perusahaan", wajib:true})
+    + field({nama:"nb_nama", label:"Nama perusahaan", wajib:true, bantu:"&nbsp;"})   /* #20: pratinjau nama rapi */
     + field({nama:"nb_pic", label:"Nama PIC"})
     + field({nama:"nb_lokasi", label:"Lokasi"})
     + field({nama:"nb_kategori", label:"Kategori", jenis:"select", nilai:"Roda",
@@ -1582,6 +1582,7 @@ function formLeadBaru(){
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-nb-simpan" type="button">Simpan lead</button>';
   bukaLaci("Lead baru");
+  pasangPratinjauNama("nb_nama");   /* #20 */
 
   var hpEl = $("f_nb_hp");
   function cariPelanggan(){
@@ -1647,7 +1648,7 @@ function panelPelanggan(){
     + 'bukan ditarik semuanya saat login.</div></div>'
     + '<div class="baris-alat"><input type="search" id="pl-cari" placeholder="Cari nama perusahaan atau nomor HP… (minimal 2 huruf)" value="'
     + esc(CRM.cariPelanggan) + '">'
-    + (bolehKonfirmasiKirim() ? '<button class="btn" id="pl-rapi" type="button" title="Rapikan penulisan nama: PT/CV/UD ke depan + huruf besar-kecil rapi">🧹 Rapikan Nama</button>' : '')
+    + (bolehKonfirmasiKirim() ? '<button class="btn" id="pl-rapi" type="button" title="Rapikan penulisan nama: PT/CV/UD ke depan, Tbk di belakang, huruf besar-kecil rapi, singkatan dipertahankan">🧹 Rapikan Nama</button>' : '')
     + '</div><div id="pl-hasil"></div>';
   el.innerHTML = h;
   if ($("pl-rapi")) $("pl-rapi").addEventListener("click", alatRapiNama);   /* #20 */
@@ -1672,9 +1673,10 @@ function gambarRapiNama(d){
   var n = d.length;
   var maxTampil = 300;
   var info = '<div class="flag"><span class="f-ico">i</span><div>'
-    + 'Nama dirapikan otomatis: <b>PT/CV/UD/PD dipindah ke depan</b> dan penulisan '
-    + 'diseragamkan (Huruf Besar Di Awal Kata). Nama asli dicadangkan, jadi bisa '
-    + '<b>dipulihkan</b> kapan saja.</div></div>';
+    + 'Nama dirapikan otomatis: <b>PT/CV/UD/PD/Toko ke depan, Tbk di belakang</b>, termasuk '
+    + 'yang di dalam kurung; penulisan diseragamkan (Huruf Besar Di Awal Kata) dan '
+    + '<b>singkatan (mis. PLN, RPX, ID) dipertahankan</b>. Nama baru/diubah juga dirapikan '
+    + 'otomatis saat disimpan. Nama asli dicadangkan, jadi bisa <b>dipulihkan</b>.</div></div>';   /* #20 v2 */
   var h = info;
   if (!n) {
     h += '<p class="muted">Semua nama sudah rapi — tidak ada yang perlu diubah.</p>';
@@ -1697,17 +1699,52 @@ function gambarRapiNama(d){
     sibuk(true, "Merapikan…");
     api("POST", "/rpc/terapkan_rapi_nama", { p_ids: null })
       .then(function(jml){ sibuk(false); tutupLaci();
+        LANJUT.pelanggan.dimuat = false; LANJUT.pelanggan.ringkas = null;
         toast(ribu(jml) + " nama dirapikan."); if (CRM.cariPelanggan.length >= 2) cariPelangganServer(); })
       .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
   });
   if ($("btn-rapi-pulih")) $("btn-rapi-pulih").addEventListener("click", function(){
+    if (!confirm("Kembalikan SEMUA nama pelanggan ke tulisan aslinya (sebelum dirapikan)?\n"
+      + "Nama yang sudah diganti manual tidak disentuh.")) return;   /* #20 */
     sibuk(true, "Memulihkan…");
     api("POST", "/rpc/pulihkan_nama_pelanggan", { p_ids: null })
       .then(function(jml){ sibuk(false); tutupLaci();
-        toast(jml ? (ribu(jml) + " nama dipulihkan ke aslinya.") : "Tidak ada cadangan untuk dipulihkan.");
+        LANJUT.pelanggan.dimuat = false; LANJUT.pelanggan.ringkas = null;
+        toast(jml ? (ribu(jml) + " nama dipulihkan ke aslinya (nama yang sudah diganti manual tidak disentuh).")
+                  : "Tidak ada cadangan untuk dipulihkan.");
         if (CRM.cariPelanggan.length >= 2) cariPelangganServer(); })
       .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
   });
+}
+/* #20: nama pelanggan dirapikan database (trigger customers_rapi_nama, berkas 100) — "ABC, PT"
+   tersimpan "PT ABC". Pencarian ikut longgar: tanda baca & PT/CV/UD/… dibuang, kata dirangkai
+   dengan "*", dicocokkan ke nama kini DAN nama asli (nama_lama). "abc, pt" menemukan "PT ABC …". */
+function polaCariNama(q){
+  var kata = String(q || "").toLowerCase().replace(/[(),"*.;:\/\\&%_'`]/g, " ").split(/\s+/)
+    .filter(function(k){ return k && ["pt","cv","ud","pd","tb","tbk","toko"].indexOf(k) < 0; });
+  return kata.length ? "*" + kata.join("*") + "*" : "";
+}
+function saringNama(q){   /* potongan or=(...) — nama & nama_lama */
+  var p = polaCariNama(q) || ("*" + String(q || "").replace(/[(),"*]/g, " ").trim() + "*");
+  var e = encodeURIComponent(p);
+  return "nama.ilike." + e + ",nama_lama.ilike." + e;
+}
+/* #20: pratinjau "Akan disimpan sebagai …" — hasil dari server (rhj_nama_rapi), jadi tidak
+   ada algoritma kembar di JS. Jawaban lama diabaikan lewat penghitung urutan. */
+function pasangPratinjauNama(nama){
+  var inp = $("f_" + nama), b = $("b_" + nama);
+  if (!inp || !b) return;
+  var urut = 0, t = null, asli = inp.value;
+  function cek(){
+    var v = inp.value.trim(), ke = ++urut;
+    /* nama tidak diubah → database tidak merapikannya (trigger hanya saat nama berubah) */
+    if (!v || inp.value === asli) { b.innerHTML = "&nbsp;"; return; }
+    api("POST", "/rpc/rhj_nama_rapi", { p: v }).then(function(r){
+      if (ke !== urut) return;
+      b.innerHTML = (r && r !== v) ? "Akan disimpan sebagai <b>" + esc(r) + "</b>" : "&nbsp;";
+    }).catch(function(){ if (ke === urut) b.innerHTML = "&nbsp;"; });
+  }
+  inp.addEventListener("input", function(){ clearTimeout(t); t = setTimeout(cek, 350); });
 }
 function cariPelangganServer(){
   var q = CRM.cariPelanggan.trim();
@@ -1720,10 +1757,10 @@ function cariPelangganServer(){
   if (/^[\d\s+()\-]+$/.test(q) && angkaSaja.length >= 3) {
     syarat = "hp=like.*" + encodeURIComponent(angkaSaja.replace(/^(62|0)/, "")) + "*";
   } else {
-    syarat = "nama=ilike.*" + encodeURIComponent(q) + "*";
+    syarat = "or=(" + saringNama(q) + ")";   /* #20: juga cocok ke nama asli, abaikan PT/CV & tanda baca */
   }
   $("pl-hasil").innerHTML = '<p class="muted">Mencari…</p>';
-  api("GET", "/customers?select=id,nama,hp,lokasi,pic&" + syarat + "&order=nama&limit=100")
+  api("GET", "/customers?select=id,nama,hp,lokasi,pic&" + syarat + "&order=nama_urut,id&limit=100")
     .then(gambarHasilPelanggan)
     .catch(function(e){ $("pl-hasil").innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; });
 }
@@ -1747,7 +1784,8 @@ function gambarHasilPelanggan(d){
   });
 }
 function formPelanggan(c){
-  var h = field({nama:"pc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:!bolehUbahCrm()})
+  var h = field({nama:"pc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:!bolehUbahCrm(),
+                 bantu:"&nbsp;"})   /* #20: pratinjau nama rapi */
     + field({nama:"pc_hp", label:"Nomor HP", nilai:c.hp, mati:!bolehUbahCrm(),
              bantu:"Kunci penggabungan. Mengubahnya bisa memisahkan riwayat."})
     + field({nama:"pc_pic", label:"Nama PIC", nilai:c.pic, mati:!bolehUbahCrm()})
@@ -1757,6 +1795,7 @@ function formPelanggan(c){
   $("laci-kaki").innerHTML = bolehUbahCrm()
     ? '<button class="btn utama" id="btn-pc-simpan" type="button">Simpan</button>' : '';
   bukaLaci("Pelanggan — " + c.nama);
+  if (bolehUbahCrm()) pasangPratinjauNama("pc_nama");   /* #20 */
 
   api("GET", "/leads?select=id,tanggal,tahap,permintaan,no_so&customer_id=eq." + c.id + "&order=tanggal.desc&limit=50")
     .then(function(d){
@@ -3944,15 +3983,19 @@ var CARI_PEL = { kolomPenuh: true, catatan: "", tanpaCekPemilik: false, catatanP
 function cariPelanggan(q, opsi){
   var t = String(q || "").trim();
   if (t.length < 2) return Promise.resolve([]);
-  var enc = encodeURIComponent("*" + t + "*");
   var dasar = "id,nama,hp,telp,lokasi,cabang,blacklist";
-  var ekor  = "&nama=ilike." + enc + "&order=nama&limit=20";
   var rep   = opsi && opsi.rep ? Number(opsi.rep) : null;
-  function minta(kol, saring){ return api("GET", "/customers?select=" + kol + ekor + (saring || "")); }
+  /* #20: cocok ke nama kini & nama asli, abaikan PT/CV & tanda baca. Dua syarat "atau"
+     digabung lewat and=(or(..),or(..)) — satu kueri tidak boleh punya dua parameter or. */
+  var namaOr = "or(" + saringNama(t) + ")";
+  var ekor  = "&order=nama_urut,id&limit=20";
+  function minta(kol, saring){
+    return api("GET", "/customers?select=" + kol + "&" + (saring ? "and=(" + namaOr + "," + saring + ")" : "or=(" + saringNama(t) + ")") + ekor);
+  }
 
   if (!CARI_PEL.kolomPenuh) return minta(dasar);
   return minta(dasar + ",sales_rep_id",
-               rep ? "&or=(sales_rep_id.eq." + rep + ",sales_rep_id.is.null)" : "").catch(function(e){
+               rep ? "or(sales_rep_id.eq." + rep + ",sales_rep_id.is.null)" : "").catch(function(e){
     var pesan = String((e && e.message) || "");
     /* Hanya galat KOLOM yang dimundurkan. Galat lain — jaringan putus,
        sesi kedaluwarsa, izin dicabut — harus tetap terdengar; menelannya
@@ -3975,6 +4018,9 @@ function cariPelanggan(q, opsi){
 function cekPemilikPelanggan(q, rep){
   var t = String(q || "").trim();
   if (t.length < 3 || CARI_PEL.tanpaCekPemilik) return Promise.resolve({ baris: [], galat: "" });
+  /* #20: nama tersimpan sudah rapi ("PT ABC Sentosa") — ketikan "abc sentosa, pt" dibersihkan dulu */
+  var bersih = polaCariNama(t).replace(/\*/g, " ").trim();
+  if (bersih.length >= 3) t = bersih;
   return api("POST", "/rpc/cek_pemilik_pelanggan", { p_nama: t, p_rep: rep ? Number(rep) : null })
     .then(function(r){ return { baris: r || [], galat: "" }; })
     .catch(function(e){
@@ -6992,7 +7038,7 @@ function panelBelum(id){
 
 var LANJUT = {
   pelanggan:{ baris:[], total:null, ringkas:null, cari:"", sumber:"", cabang:"", hitam:"",
-              sales:"", urut:"master", hal:0, per:50, memuat:false, dimuat:false },
+              sales:"", industri:"", urut:"master", hal:0, per:50, memuat:false, dimuat:false },   /* #25: industri */
   penawaran:{ baris:[], dimuat:false, memuat:false, form:null, pesan:"" },
   set:{ baris:[], dimuat:false, memuat:false },   /* #1: set roda (definisi set→komponen) */
   /* Periode Performa Sales (titik 16). Sebelumnya cuma tiga pilihan tetap
@@ -7156,8 +7202,11 @@ function plKunci(){
              + encodeURIComponent(a) + "*)");
     } else {
       var e = encodeURIComponent(q);
-      s.push("or=(nama.ilike.*" + e + "*,pic.ilike.*" + e + "*,lokasi.ilike.*" + e
-           + "*,cabang.ilike.*" + e + "*,industri.ilike.*" + e + "*,salesman_teks.ilike.*" + e + "*)");
+      /* #20: nama dicocokkan longgar (tanpa PT/CV & tanda baca) ke nama kini & nama asli;
+         #25: teks industri sheet lama ikut dicari */
+      s.push("or=(" + saringNama(q) + ",pic.ilike.*" + e + "*,lokasi.ilike.*" + e
+           + "*,cabang.ilike.*" + e + "*,industri.ilike.*" + e + "*,industri_lama.ilike.*" + e
+           + "*,salesman_teks.ilike.*" + e + "*)");
     }
   }
   if (P.sumber === "pipeline") s.push("sumber=in.(pipeline,keduanya)");
@@ -7170,6 +7219,9 @@ function plKunci(){
      saringan biasa: pelanggan tanpa sales tidak masuk hitungan siapa pun. */
   if (P.sales === "kosong") s.push("sales_rep_id=is.null");
   else if (P.sales) s.push("sales_rep_id=eq." + encodeURIComponent(P.sales));
+  /* #25: daftar kerja "industri belum diisi" + saring per kategori */
+  if (P.industri === "kosong") s.push("industri=is.null");
+  else if (P.industri) s.push("industri=eq." + encodeURIComponent(P.industri));
   return s.join("&");
 }
 
@@ -7182,10 +7234,12 @@ function plKunci(){
    aplikasi. Sengaja kolom tersendiri, bukan `order by sumber`: yang
    terakhir itu kebetulan benar hari ini karena urutan alfabetnya, dan
    akan diam-diam salah begitu ada nilai sumber baru. */
+/* #20: nama_urut = nama tanpa awalan PT/CV/UD/… (kolom generated, berkas 100) — sesudah nama
+   dirapikan "PT …" di depan, urut per `nama` akan menumpuk ribuan pelanggan di huruf P. */
 var URUT_PELANGGAN = {
-  master: { l:"Sheet master dulu, lalu pipeline", q:"urut_sumber.asc,nama.asc,id.asc" },
-  nama:   { l:"Nama A → Z",                      q:"nama.asc,id.asc" },
-  namaZ:  { l:"Nama Z → A",                      q:"nama.desc,id.asc" },
+  master: { l:"Sheet master dulu, lalu pipeline", q:"urut_sumber.asc,nama_urut.asc,id.asc" },
+  nama:   { l:"Nama A → Z",                      q:"nama_urut.asc,id.asc" },
+  namaZ:  { l:"Nama Z → A",                      q:"nama_urut.desc,id.asc" },
   baru:   { l:"Terakhir ditambahkan",            q:"id.desc" }
 };
 
@@ -7194,7 +7248,8 @@ function muatPelanggan(){
   if (P.memuat) return Promise.resolve();
   P.memuat = true;
   var kol = "id,nama,hp,telp,pic,lokasi,industri,cabang,salesman_teks,sumber,"
-          + "blacklist,alasan_blacklist,perlu_konfirmasi,alasan_konfirmasi,sales_rep_id";
+          + "blacklist,alasan_blacklist,perlu_konfirmasi,alasan_konfirmasi,sales_rep_id,"
+          + "industri_lama,nama_lama";   /* #25 / #20 */
   var syarat = plKunci();
   var u = URUT_PELANGGAN[P.urut] || URUT_PELANGGAN.master;
   var path = "/customers?select=" + kol + (syarat ? "&" + syarat : "") + "&order=" + u.q;
@@ -7343,6 +7398,11 @@ function panelPelangganTab(){
            return [String(r.id), labelRep(r)]; }))
            .map(function(o){ return '<option value="'+esc(o[0])+'"'+(String(P.sales)===String(o[0])?" selected":"")+'>'+esc(o[1])+'</option>'; }).join("")
     +  '</select>'
+    +  '<select id="pl-industri" aria-label="Industri">'   /* #25 */
+    +    [["","Semua industri"],["kosong","Industri belum diisi"],["Otomotif","Otomotif"],
+          ["Non Otomotif","Non Otomotif"],["Bengkel Otomotif","Bengkel Otomotif"]]
+           .map(function(o){ return '<option value="'+esc(o[0])+'"'+(P.industri===o[0]?" selected":"")+'>'+esc(o[1])+'</option>'; }).join("")
+    +  '</select>'
     +  '<select id="pl-urut" aria-label="Urutan">'
     +    Object.keys(URUT_PELANGGAN).map(function(k){
            return '<option value="'+k+'"'+(P.urut===k?" selected":"")+'>'+esc(URUT_PELANGGAN[k].l)+'</option>'; }).join("")
@@ -7352,7 +7412,7 @@ function panelPelangganTab(){
     +  '</div>';
 
   if (!P.baris.length) {
-    h += kosong(P.cari || P.sumber || P.hitam
+    h += kosong(P.cari || P.sumber || P.hitam || P.sales || P.industri
       ? "Tidak ada pelanggan yang cocok dengan saringan ini."
       : "Belum ada pelanggan. Jalankan seed CRM, atau tambah lewat tombol Pelanggan baru.");
   } else {
@@ -7376,7 +7436,12 @@ function panelPelangganTab(){
              + '<td class="l">' + esc(hpTampil(c.hp)) + '</td>'
              + '<td class="l">' + esc(c.pic || "—") + '</td>'
              + '<td class="l">' + esc(c.cabang || "—") + '</td>'
-             + '<td class="l">' + esc(c.industri || "—") + '</td>'
+             /* #25: kategori belum diisi → teks sheet lama abu-abu sebagai petunjuk */
+             + '<td class="l">' + (c.industri ? esc(c.industri)
+                 : (c.industri_lama
+                     ? '<span class="muted" title="dari sheet lama, kategori belum diisi">'
+                       + esc(c.industri_lama) + ' <i>(sheet)</i></span>'
+                     : '<span class="muted">—</span>')) + '</td>'
              + '<td class="l"><span class="pill ' + (c.sumber === "keduanya" ? "p-owner" : c.sumber ? "p-jalan" : "p-none") + '">'
              +   esc(SUMBER_LABEL[c.sumber] || "—") + '</span></td>'
              + '<td class="l">' + (c.blacklist
@@ -7418,6 +7483,10 @@ function panelPelangganTab(){
   });
   $("pl-sales").addEventListener("change", function(){
     P.sales = this.value; P.hal = 0; P.dimuat = false;
+    muatPelanggan().then(panelPelangganTab).catch(function(e){ el.innerHTML = kotakGalat(e); });
+  });
+  $("pl-industri").addEventListener("change", function(){   /* #25 */
+    P.industri = this.value; P.hal = 0; P.dimuat = false;
     muatPelanggan().then(panelPelangganTab).catch(function(e){ el.innerHTML = kotakGalat(e); });
   });
   $("pl-urut").addEventListener("change", function(){
@@ -7492,7 +7561,8 @@ function formPelangganTab(c){
   var baru = !c;
   c = c || {};
   var kunci = !bolehUbahCrm();
-  var h = field({ nama:"plc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:kunci })
+  var h = field({ nama:"plc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:kunci,
+                  bantu: kunci ? "" : "&nbsp;" })   /* #20: pratinjau nama rapi */
     + '<div class="baris2">'
     +   field({ nama:"plc_hp", label:"Nomor HP", nilai:c.hp, mati:kunci,
                 bantu:"Kunci penggabungan. Mengubahnya bisa memisahkan riwayat lead." })
@@ -7506,7 +7576,8 @@ function formPelangganTab(c){
     + '<div class="baris2">'
     +   field({ nama:"plc_industri", label:"Industri", jenis:"select", nilai:c.industri || "", mati:kunci,
                 pilihan:[{v:"",l:"— belum ditentukan —"},{v:"Otomotif",l:"Otomotif"},
-                         {v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}] })   /* #25 */
+                         {v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}],
+                bantu: c.industri_lama ? "Catatan sheet lama: <b>" + esc(c.industri_lama) + "</b>" : "" })   /* #25 */
     +   field({ nama:"plc_sales", label:"Salesman (dari sheet)", nilai:c.salesman_teks, mati:true,
                 bantu:"Teks apa adanya dari sheet lama, bukan tautan ke akun sales." })
     + '</div>'
@@ -7549,6 +7620,7 @@ function formPelangganTab(c){
   bukaLaci(baru ? "Pelanggan baru" : "Pelanggan — " + c.nama);
 
   if (!kunci) $("btn-plc-simpan").addEventListener("click", function(){ simpanPelangganTab(c, baru); });
+  if (!kunci) pasangPratinjauNama("plc_nama");   /* #20 */
 
   if (!baru) {
     api("GET", "/leads?select=id,tanggal,tahap,permintaan,no_so&customer_id=eq." + c.id
@@ -7608,8 +7680,12 @@ function simpanPelangganTab(c, baru){
     ? api("POST", "/customers", badan, "return=representation")
     : api("PATCH", "/customers?id=eq." + c.id, badan, "return=representation");
 
-  janji.then(function(){
-    tutupLaci(); toast(baru ? "Pelanggan ditambahkan." : "Pelanggan disimpan.");
+  janji.then(function(r){
+    /* #20: database merapikan nama (trigger) — kabarkan bila hasilnya beda dari ketikan */
+    var tersimpan = r && r[0] && r[0].nama;
+    var kabar = baru ? "Pelanggan ditambahkan" : "Pelanggan disimpan";
+    tutupLaci();
+    toast(tersimpan && tersimpan !== nama.trim() ? kabar + " sebagai " + tersimpan + "." : kabar + ".");
     LANJUT.pelanggan.dimuat = false; LANJUT.pelanggan.ringkas = null;
     muatPelanggan().then(panelPelangganTab).catch(function(){});
   }).catch(function(e){
@@ -8960,7 +9036,7 @@ function kolomSp(){
   return "id,no_sp,tanggal,kepada,sales_rep_id,status,batal,lunas,tgl_lunas,telat,"
        + "no_surat_jalan,tgl_surat_jalan,no_invoice,tgl_invoice,no_faktur,tgl_faktur,"
        + "cash_minta,cash_ok,kirim_ok,kirim_alasan,catatan,vonny_ok,vonny_alasan,customer_id,"
-       + "po_id,po_menyusul,tanpa_po_ok,customers(industri,perlu_konfirmasi)";   /* #15: cermin gerbang kirim */
+       + "po_id,po_menyusul,tanpa_po_ok,customers(industri,industri_lama,perlu_konfirmasi)";   /* #25: industri_lama */   /* #15: cermin gerbang kirim */
 }
 
 var KOL_TGL_KIRIM = [
@@ -8992,7 +9068,7 @@ function kirimHal(id){
 /* ═══ TAB · DOUBLE CHECK VONNY (#8) ══════════════════════════════════════
    SP berstatus 'menunggu vonny' dikumpulkan di sini untuk dicek Vonny sebelum
    masuk Pengiriman. Peran: owner/gm/vonny (RLS juga membatasi barisnya). */
-var VONNY_KOLOM = "/sales_orders?select=*,customers(industri),sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal,qty_batal)";   /* #18: qty_batal */
+var VONNY_KOLOM = "/sales_orders?select=*,customers(industri,industri_lama),sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal,qty_batal)";   /* #18: qty_batal */
 function muatVonnyCek(){
   var V = LANJUT.vonnycek;
   if (V.memuat) return Promise.resolve();
@@ -9055,6 +9131,15 @@ function segarkanVonnyCek(){
   ALUR.dimuatSp = false;                           /* #8: pill status di daftar SP ikut segar */
   muatVonnyCek().then(panelVonnyCek).catch(function(){});
 }
+/* #25: kategori pelanggan lewat RPC set_industri_pelanggan (berkas 101). PATCH /customers
+   dulu ditolak RLS untuk Vonny tanpa galat (0 baris) — isiannya tidak pernah tersimpan. */
+function simpanIndustri(cid, kat){
+  return api("POST", "/rpc/set_industri_pelanggan", { p_customer: cid, p_industri: kat });
+}
+function bantuIndustriLama(s){
+  var t = s && s.customers && s.customers.industri_lama;
+  return t ? "Catatan sheet lama: <b>" + esc(t) + "</b>" : "";
+}
 function formCekVonny(s){
   if (!bolehKonfirmasiKirim()) { toast("Hanya owner, GM, atau Vonny yang boleh mengecek.", true); return; }
   var r = ringkasSo(s);
@@ -9094,7 +9179,8 @@ function formCekVonny(s){
     +   (s.vonny_ok === false && s.vonny_alasan ? '<br><span class="muted">Sebelumnya ditahan — ' + esc(s.vonny_alasan) + '</span>' : '')
     +   (perluKat ? '<div style="margin-top:10px">'
         + field({ nama:"vk_kat", label:"Kategori customer (wajib diisi dulu)", jenis:"select", nilai:"",
-                  pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}] })
+                  pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}],
+                  bantu: bantuIndustriLama(s) })   /* #25 */
         + '</div>' : '')
     +   '<div class="baris-alat" style="margin-top:10px">'
     +   '<button class="btn utama" id="btn-vc-ok" type="button">Nyatakan layak diproses</button> '
@@ -9109,7 +9195,7 @@ function formCekVonny(s){
     if (perluKat && !kat) { tampilPesan("Isi kategori customer dulu sebelum SP diloloskan."); return; }
     sibuk(true);
     Promise.resolve()
-      .then(function(){ return (perluKat && kat && s.customer_id) ? api("PATCH", "/customers?id=eq." + s.customer_id, { industri: kat }) : null; })
+      .then(function(){ return (perluKat && kat && s.customer_id) ? simpanIndustri(s.customer_id, kat) : null; })   /* #25 */
       .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
       .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — masuk ke Pengiriman."); segarkanVonnyCek(); })
       .catch(function(e){ tampilPesan(esc(e.message)); })
@@ -9308,7 +9394,8 @@ function formKirim(s){
           + ((s.customers && s.customers.industri && String(s.customers.industri).trim()) ? ''
              : '<div style="margin-top:10px">'
                + field({ nama:"vk_kat", label:"Kategori customer (wajib diisi dulu)", jenis:"select", nilai:"",
-                         pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}] })
+                         pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}],
+                         bantu: bantuIndustriLama(s) })   /* #25 */
                + '</div>')
           + '<div class="baris-alat" style="margin-top:10px">'
           + '<button class="btn utama" id="btn-vonny-ok" type="button">Nyatakan layak diproses</button> '
@@ -9354,7 +9441,7 @@ function formKirim(s){
       sibuk(true);
       Promise.resolve()
         .then(function(){ return (perluKat && kat && s.customer_id)
-          ? api("PATCH", "/customers?id=eq." + s.customer_id, { industri: kat }) : null; })
+          ? simpanIndustri(s.customer_id, kat) : null; })   /* #25 */
         .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
         .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " dinyatakan layak diproses.");
           LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8 */
