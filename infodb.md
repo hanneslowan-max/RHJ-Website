@@ -703,6 +703,14 @@ CREATE TABLE public.sales_order_lines (
 --   batal_semua. po_belum_sp mengecualikan PO yang SP-nya batal_karena_barang. batalkan_sp biasa: PO tetap
 --   kembali ke antrean (SP salah input dibuat ulang).
 -- laporan_margin_produk / laporan_margin_sp / gm_konteks_keputusan memakai qty efektif [berkas 98].
+-- #12 [berkas 106] RUPIAH BERSEN, TANPA PEMBULATAN: po_ringkas, so_baris_hitung, so_ringkas, sp_nilai_batal,
+--   cash_belum_cocok, komisi_hitung, laporan_margin_* menghitung presisi penuh (numeric eksak; PPN = dasar × 0,11
+--   tidak dibulatkan, komisi = nilai × pct tidak dibulatkan). "SP = PO" = sama SAMPAI SEN:
+--   round(sp,2) <> round(po,2) → tolak (periksa_total_sp, tautkan_po_sp, sp_beda_po); round() hanya di pembanding.
+--   ajukan_klaim_ehc: nominal dibanding EHC sampai sen. Fungsi rp_teks(numeric) → 'Rp 1.234,56' (lepas dari
+--   lc_numeric) untuk pesan galat & keterangan antrean_gm. Kolom/tipe view tidak berubah; security_invoker tetap on.
+--   Sengaja dibiarkan: isi_nilai_* round(x,2) (= presisi kolom numeric(18,2)), hitung_edit_massal (opsi
+--   pembulatan pilihan pengguna), round(…,1) margin_pct (persen).
 -- #10 [berkas 103]: view sp_menunggu_po (security_invoker) + kolom di ujung: po_menyusul, tanpa_po_alasan,
 --   dibuat_oleh, vonny_ok, mode_po ('tanpa_po' | 'menyusul' | 'belum' = mode PO belum dinyatakan).
 -- #21 [berkas 104]: gm_konteks_keputusan(p_jenis, p_ref) kini juga untuk 'ehc_dini' (ref = SP) dan 'ubah'

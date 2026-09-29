@@ -1018,7 +1018,15 @@ function bolehHapus(){        return saya.peran === "owner"; }
 function bolehKelolaPengguna(){ return saya.peran === "owner"; }
 
 /* ── alat angka & tanggal ───────────────────────────────────────────── */
-function rp(n){ return n === null || n === undefined ? "—" : "Rp" + Math.round(n).toLocaleString("id-ID"); }
+/* #12: rupiah SELALU bersen "Rp 1.234,56", negatif "Rp -5,00". Nilai TIDAK dibulatkan di hitungan mana pun;
+   sen (keSen) hanya dipakai untuk menampilkan & membandingkan — setengah sen menjauhi nol, sama round() Postgres. */
+function keSen(n){ n = Number(n) || 0; var s = Math.round(n * 100 + (n < 0 ? -1e-6 : 1e-6)); return s === 0 ? 0 : s; }
+function samaSen(a, b){ return keSen(a) === keSen(b); }
+function rp(n){
+  if (n === null || n === undefined || n === "") return "—";
+  n = Number(n); if (!isFinite(n)) return "—";
+  return "Rp " + (keSen(n) / 100).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 /* #12: tidak ada pembulatan/penyingkatan — angka penuh di semua tempat (Nilai PO dll).
    Dulu menyingkat jadi "1,2 miliar"/"3,4 juta"; sekarang selalu angka penuh via rp(). */
 function rpS(n){ return rp(n); }
@@ -1026,7 +1034,8 @@ function fx(n, cur){
   if (n === null || n === undefined) return "—";
   return Number(n).toLocaleString("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}) + (cur ? " " + cur : "");
 }
-/* terima "588.728,38" maupun "588728.38" */
+/* terima "588.728,38" maupun "588728.38" — MENEBAK format; HANYA untuk berkas luar (Excel katalog).
+   Ketikan pengguna selalu lewat angkaId() (#14). */
 function angka(v){
   if (v === null || v === undefined) return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
@@ -1037,8 +1046,47 @@ function angka(v){
   var n = parseFloat(s);
   return isFinite(n) ? n : null;
 }
-/* #14: format angka dengan pemisah ribuan id-ID untuk ditaruh di value input. */
-function ribu(n){ n = angka(n); return n === null ? "" : n.toLocaleString("id-ID", { maximumFractionDigits: 2 }); }
+/* #14: SATU pengurai untuk semua kotak isian angka — format Indonesia KETAT: titik = ribuan, koma = desimal.
+   Aman karena kotaknya diformat saat mengetik (rapikanKetik): yang terlihat = yang tersimpan.
+   "1.000.000"→1000000 · "1.234,56"→1234,56 · "2,5"→2,5 · "-1.000"→-1000 · ""/teks→null */
+function angkaId(v){
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return isFinite(v) ? v : null;
+  var s = String(v).replace(/[\s\u00a0]/g, "").replace(/^Rp/i, "");
+  var neg = s.charAt(0) === "-"; if (neg) s = s.slice(1);
+  if (!s || !/^[\d.]*(,\d*)?$/.test(s)) return null;
+  var p = s.split(","), bulat = p[0].replace(/\./g, ""), pecahan = p[1] || "";
+  if (!bulat && !pecahan) return null;
+  var n = Number((bulat || "0") + (pecahan ? "." + pecahan : ""));
+  if (!isFinite(n)) return null;
+  return neg && n !== 0 ? -n : n;
+}
+/* #14: angka (number / teks mesin PostgREST "1234.5") → "1.234,5" (maks desimal, bawaan 2). Bukan untuk teks terformat. */
+function angkaTeks(n, maks){
+  if (n === null || n === undefined || n === "") return "";
+  n = Number(n); if (!isFinite(n)) return "";
+  return n.toLocaleString("id-ID", { maximumFractionDigits: maks === undefined ? 2 : maks });
+}
+/* #14: pemisah ribuan id-ID untuk tampilan & value kotak isian (nama lama, dipakai banyak tempat). */
+function ribu(n){ return angkaTeks(n, 2); }
+function angkaSaja(v){ return angkaId(v); }                        /* #14: nama lama → pengurai baru */
+function angkaAlur(v){ var n = angkaId(v); return n === null ? 0 : n; }
+/* #14: format saat mengetik — titik ribuan, satu koma desimal (maks `des` digit; kelebihan DITOLAK,
+   tidak dibulatkan), minus hanya bila diizinkan. */
+function rapikanKetik(s, des, minus){
+  s = String(s || ""); var neg = !!minus && /^\s*-/.test(s);
+  s = s.replace(des ? /[^\d,]/g : /\D/g, ""); var k = s.indexOf(",");
+  var bulat = (k < 0 ? s : s.slice(0, k)).replace(/^0+(?=\d)/, "");
+  var pecah = k < 0 || !des ? null : s.slice(k + 1).replace(/,/g, "").slice(0, des);
+  var g = bulat.replace(/\B(?=(\d{3})+(?!\d))/g, "."); if (!g && pecah !== null) g = "0";
+  return (neg ? "-" : "") + g + (pecah !== null ? "," + pecah : "");
+}
+/* posisi kursor sesudah diformat: jumlah digit/koma/minus di kiri kursor dipertahankan */
+function kursorBaru(lama, pos, baru){
+  var kiri = lama.slice(0, pos).replace(/[^\d,\-]/g, "").length, i = 0, n = 0;
+  while (i < baru.length && n < kiri) { if (/[\d,\-]/.test(baru.charAt(i))) n++; i++; }
+  return i;
+}
 function tglTampil(s){ return s ? s.slice(8,10)+"/"+s.slice(5,7)+"/"+s.slice(0,4) : null; }
 /* ── waktu Jakarta ────────────────────────────────────────────────────
    Kolom timestamptz dikirim database dalam UTC. Menampilkannya apa adanya
@@ -2010,7 +2058,7 @@ function xlsxTulis(lembar){
            4 angka terkunci · 5 angka boleh diisi */
   var styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + '<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0"/></numFmts>'
+    + '<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>'
     + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
     + '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>'
     + '<fills count="4"><fill><patternFill patternType="none"/></fill>'
@@ -3243,7 +3291,7 @@ function hitungTurunan(){
       o._sisaFx = null; o._sisaIdr = 0; o._status = "Belum ada nilai";
     } else {
       o._sisaFx = Number(o.total_nilai) - a.fx;
-      o._sisaIdr = o.kurs_estimasi ? Math.round(o._sisaFx * Number(o.kurs_estimasi)) : 0;
+      o._sisaIdr = o.kurs_estimasi ? o._sisaFx * Number(o.kurs_estimasi) : 0;   /* #12 */
       o._status = o._sisaFx <= 0.005 ? "Lunas" : (a.fx > 0 ? "Sebagian" : "Belum Bayar");
     }
     o._umurTiba = o.tanggal_tiba ? selisihHari(o.tanggal_tiba, hariIni()) : null;
@@ -4136,7 +4184,7 @@ function poFormBaru(){
 function poDiskonRp(b){
   var base = (Number(b.qty)||0) * (Number(b.harga)||0);
   var d = Number(b.diskon)||0;
-  return b.diskon_tipe === "persen" ? base * d / 100 : d;   /* tak dibulatkan di sini; round di total */
+  return b.diskon_tipe === "persen" ? base * d / 100 : d;   /* #12: tak dibulatkan di mana pun */
 }
 /* #7: nilai bersih baris PO dihitung BULAT, bukan float. Float (qty×harga − potongan) bisa jatuh
    ke x,4999… padahal nilai pastinya x,50 → Math.round turun, round() numeric po_ringkas naik →
@@ -4154,16 +4202,15 @@ function bagiBulat(n, d){
   if (r * 2 >= d) q += 1;
   return (n < 0 && q) ? -q : q;
 }
-/* Nilai baris PO dalam SEN (bilangan bulat) = rumus po_ringkas. SATUAN = pembulatan po_ringkas
-   dalam 1/10.000 Rp: 10000 = round() ke rupiah (kini). #12 (tanpa pembulatan, sen): ubah jadi 100
-   seiring po_ringkas/periksa_total_sp — dan qty×harga harus dijaga habis dalam sen (CHECK), karena
-   harga_nett SP numeric(14,2) tidak bisa meniru pecahan di bawah sen. */
+/* Nilai baris PO dalam SEN (bilangan bulat) — HANYA untuk memecah baris PO ke baris SP (spBarisDariPo),
+   karena harga_nett SP numeric(14,2) tidak bisa meniru pecahan di bawah sen. #12: po_ringkas tidak lagi
+   membulatkan; periksa_total_sp membandingkan grand total SP = PO sampai sen (round(…,2)). */
 function poNilaiBarisSen(b){
-  var SATUAN = 10000;
+  var SATUAN = 100;   /* #12: sen (dulu 10000 = rupiah) */
   return bagiBulat(poNilaiBaris1e4(b), SATUAN) * (SATUAN / 100);
 }
 function poTotalBaris(b){
-  return poNilaiBarisSen(b) / 100;
+  return poNilaiBaris1e4(b) / 10000;   /* #12: nilai penuh, tanpa pembulatan (= po_ringkas) */
 }
 /* #7: rupiah → sen (bilangan bulat). Math.round di sini HANYA membuang derau float (0,1+0,2),
    bukan pembulatan bisnis — yang masuk sudah dipastikan habis dalam sen (habisSen). */
@@ -4222,7 +4269,7 @@ function poKomponenSet(l){
 function poRincianSet(l){
   return poKomponenSet(l).map(function(c){
     var pp = produkById(c.product_id);
-    return (Number(c.qty) || 0) + '× ' + (pp ? (pp.kode || pp.nama || ('#' + c.product_id)) : ('#' + c.product_id));
+    return angkaTeks(Number(c.qty) || 0) + '× ' + (pp ? (pp.kode || pp.nama || ('#' + c.product_id)) : ('#' + c.product_id));
   }).join(", ");
 }
 /* #7 #1: satu baris PO → baris SP (per pcs) yang jumlahnya PERSIS nilai baris PO (poNilaiBarisSen,
@@ -4240,11 +4287,11 @@ function spBarisDariPo(l){
   }
   if (!l.set_id && !(Number(l.diskon) > 0))
     return [ jadi(l.product_id, l.deskripsi, l.jenis || "barang", { qty: Number(l.qty), nett: Number(l.harga) }) ];
-  var tSen = poNilaiBarisSen(l), pc;   /* bulat, = po_ringkas (bukan float — lihat poNilaiBaris1e4) */
+  var tSen = poNilaiBarisSen(l), pc;   /* bulat (sen), nilai po_ringkas sampai sen — #12: SP = PO dibanding sampai sen */
   if (!l.set_id) {
     pc = pecahNettSen(tSen, l.qty);
     if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon tidak bisa dibagi rata ke qty '
-      + l.qty + '. Pakai qty bilangan bulat di PO.');
+      + angkaTeks(l.qty) + '. Pakai qty bilangan bulat di PO.');
     return pc.map(function(x){ return jadi(l.product_id, l.deskripsi, l.jenis || "barang", x); });
   }
   var komp = poKomponenSet(l), nSet = Number(l.qty) || 0;
@@ -4269,23 +4316,23 @@ function spBarisDariPo(l){
     var q = nSet * (Number(c.qty) || 0), pr = produkById(c.product_id);
     var pk = pecahNettSen(bagian * unit, q);
     if (!pk) throw new Error('Set "' + nama + '": bagian komponen ' + (pr ? pr.kode : ('#' + c.product_id))
-      + ' tidak bisa dibagi ke ' + q + ' pcs.');
+      + ' tidak bisa dibagi ke ' + angkaTeks(q) + ' pcs.');
     pk.forEach(function(x){ hasil.push(jadi(c.product_id, pr ? (pr.nama || pr.kode) : null, "barang", x)); });
   });
   return hasil;
 }
 function poHitungLokal(f){
-  /* #7: dijumlah dalam SEN bulat (poNilaiBarisSen), bukan float rupiah — sama po_ringkas.
-     PPN = round(dasar × 0,11) ke rupiah (po_ringkas); #12 (sen): pembagi 10000 → 100. */
-  var barangSen = 0, biayaSen = 0;
+  /* #7: dijumlah dalam 1/10.000 Rp bulat (poNilaiBaris1e4), bukan float rupiah — sama po_ringkas.
+     #12: TANPA pembulatan — PPN = dasar × 0,11 apa adanya (po_ringkas); tampil/banding sampai sen. */
+  var barang4 = 0, biaya4 = 0;
   f.baris.forEach(function(b){
-    var n = poNilaiBarisSen(b);   /* #7 */
-    if (b.jenis === "biaya") biayaSen += n; else barangSen += n;
+    var n = poNilaiBaris1e4(b);
+    if (b.jenis === "biaya") biaya4 += n; else barang4 += n;
   });
-  var ppnSen = f.ppn_kena ? bagiBulat(barangSen * 11, 10000) * 100 : 0;
-  var subSen = barangSen + biayaSen;
-  return { sub: subSen / 100, barang: barangSen / 100, biaya: biayaSen / 100, dasar: barangSen / 100,
-           ppn: ppnSen / 100, grand: (subSen + ppnSen) / 100 };
+  var barang = barang4 / 10000, biaya = biaya4 / 10000;
+  var ppn = f.ppn_kena ? barang * 0.11 : 0;
+  return { sub: barang + biaya, barang: barang, biaya: biaya, dasar: barang,
+           ppn: ppn, grand: barang + biaya + ppn };
 }
 
 /* #24: sorting daftar dengan klik header.
@@ -4658,7 +4705,7 @@ function panelPo(){
     var brs = (p.po_lines || []).map(function(l){
       if (l.set_id) return (l.deskripsi || "Set") + " = " + Number(l.qty) + " set";   /* #1 */
       var pr = produkById(l.product_id);
-      return (pr ? pr.kode : (l.deskripsi || "?")) + " = " + Number(l.qty) + " pcs"; }).join(" / ");
+      return (pr ? pr.kode : (l.deskripsi || "?")) + " = " + angkaTeks(l.qty) + " pcs"; }).join(" / ");
     h += '<tr class="baris-klik'+(p.batal ? ' baris-batal' : (d?' baris-dobel':''))+'" data-po-detail="'+p.id+'" tabindex="0">'   /* #19 */
       + '<td>'+esc(tglPendekAlur(p.tanggal))+'</td>'
       + '<td class="muted" style="white-space:nowrap">'+esc(p.dibuat_pada ? waktuJkt(p.dibuat_pada) : "—")+'</td>'   /* #24 */
@@ -4983,7 +5030,7 @@ function gambarTautkanPo(so, totalSp, kandidat, tot, opsi){
     return so.customer_id && String(p.customer_id) === String(so.customer_id); });
   var lain = kandidat.filter(function(p){
     return !(so.customer_id && String(p.customer_id) === String(so.customer_id)); });
-  var cocokTotal = function(p){ return tot[p.po_id] === totalSp ? 0 : 1; };
+  var cocokTotal = function(p){ return tot[p.po_id] !== undefined && samaSen(tot[p.po_id], totalSp) ? 0 : 1; };   /* #12: sampai sen */
   sama.sort(function(a,b){ return cocokTotal(a) - cocokTotal(b); });
 
   function opsi(p, tandai){
@@ -4991,7 +5038,7 @@ function gambarTautkanPo(so, totalSp, kandidat, tot, opsi){
     return '<option value="' + p.po_id + '" data-total="' + (t === undefined ? "" : t) + '">'
       + esc(p.no_po + " · " + p.nama_customer
             + (t === undefined ? "" : " · " + rp(t))
-            + (t === totalSp ? "  ✓ total sama" : "")
+            + (t !== undefined && samaSen(t, totalSp) ? "  ✓ total sama" : "")
             + (tandai ? "  — pelanggan lain" : "")) + '</option>';
   }
 
@@ -5081,7 +5128,7 @@ function gambarTautkanPo(so, totalSp, kandidat, tot, opsi){
     var t = o && o.dataset ? o.dataset.total : "";
     var kotak = $("tp-beda");
     if (!this.value || t === "" || t === undefined) { kotak.innerHTML = ""; return; }
-    var beda = Number(t) - totalSp;
+    var beda = (keSen(t) - keSen(totalSp)) / 100;   /* #12: sama sampai sen (= tautkan_po_sp) */
     kotak.innerHTML = beda === 0
       ? '<div class="flag" style="margin-top:10px"><span class="f-ico">✓</span><div>'
         + 'Total PO sama persis dengan SP — ' + rp(totalSp) + '.</div></div>'
@@ -5222,7 +5269,7 @@ function formDetailDoc(jenis, row){
       var potong = poDiskonRp(l);
       var tot = poTotalBaris(l);
       var diskonTampil = (l.diskon_tipe==="persen")
-        ? (esc(ribu(l.diskon||0))+'% <span class="muted">('+rp(potong)+')</span>')
+        ? (esc(angkaTeks(l.diskon||0, 4))+'% <span class="muted">('+rp(potong)+')</span>')
         : rp(l.diskon||0);
       if (l.set_id) nama = l.deskripsi || "Set";
       var rinciSet = l.set_id ? poRincianSet(l) : "";   /* #1: snapshot saat PO disimpan */
@@ -5313,7 +5360,7 @@ function barisSpDetailHtml(lines, info, bisaBatal, bisaPulih){
     var kq = (info && !biaya) ? (info.kirim[l.id] || 0) : null;
     var sisa = info ? (biaya ? ef : ef - kq) : null;
     var penuh = bq > 0 && bq >= pesan, sebagian = bq > 0 && !penuh;
-    var tt = Math.round(ef * ((Number(l.harga_nett) || 0) + (Number(l.ehc_item) || 0)));
+    var tt = ef * ((Number(l.harga_nett) || 0) + (Number(l.ehc_item) || 0));   /* #12 */
     h += '<tr' + (penuh ? ' style="opacity:.55"' : '') + '>'
       + '<td class="l"><span' + (penuh ? ' style="text-decoration:line-through"' : '') + '>' + esc(nama) + '</span>'
       +   (penuh ? ' <span class="pill p-belum" title="' + esc(l.batal_alasan || "") + '">dibatalkan</span>' : '')
@@ -5349,7 +5396,7 @@ function formBatalQty(aksi, row, lines, l, info){
     + '<p class="muted" style="margin:4px 0 8px">Pesan ' + fmtQty(pesan) + ' · terkirim ' + fmtQty(kq)
     + ' · batal ' + fmtQty(bq) + ' · sisa ' + fmtQty(sisa) + '</p>'
     + medanAlur(aksi === "batal" ? "Qty dibatalkan (maks " + fmtQty(maks) + ")" : "Qty dipulihkan (maks " + fmtQty(maks) + ")",
-        '<input type="text" inputmode="decimal" id="dd-bq-qty" value="' + esc(String(maks)) + '" style="width:120px;text-align:right">')
+        '<input type="text" inputmode="decimal" data-angka="2" id="dd-bq-qty" value="' + angkaTeks(maks) + '" style="width:120px;text-align:right">')
     + (aksi === "batal"
         ? '<div style="margin-top:8px">' + medanAlur("Alasan (wajib)", '<input type="text" id="dd-bq-alasan" placeholder="mis. customer batalkan sisa item ini">') + '</div>'
         : '')
@@ -5363,9 +5410,9 @@ function formBatalQty(aksi, row, lines, l, info){
   box.innerHTML = h;
   $("dd-bq-tutup").addEventListener("click", function(){ box.innerHTML = ""; });
   $("dd-bq-simpan").addEventListener("click", function(){
-    var q = angka($("dd-bq-qty").value);
+    var q = angkaId($("dd-bq-qty").value);   /* #14 */
     if (!q || q <= 0) { toast("Qty harus lebih dari 0.", true); return; }
-    if (q > maks) { toast("Qty melebihi batas (" + fmtQty(maks) + ").", true); return; }
+    if (keSen(q) > keSen(maks)) { toast("Qty melebihi batas (" + fmtQty(maks) + ").", true); return; }
     var alasan = "";
     if (aksi === "batal") {
       alasan = String($("dd-bq-alasan").value || "").trim();
@@ -5456,10 +5503,10 @@ function formMintaUbah(jenis, id){
       + '<input type="hidden" class="uu-des" value="' + esc(l.deskripsi || "") + '">'
       + '<input type="hidden" class="uu-jen" value="' + esc(l.jenis || "barang") + '">'
       + '<input type="hidden" class="uu-urut" value="' + ((l.urut || i + 1)) + '"></td>'
-      + '<td class="r"><input type="number" step="1" min="0" class="uu-qty" value="' + Number(l.qty || 0) + '" style="width:90px"></td>'
+      + '<td class="r"><input type="text" inputmode="decimal" data-angka="2" class="uu-qty" value="' + angkaTeks(Number(l.qty || 0)) + '" style="width:90px;text-align:right"></td>'
       /* #1: harga per set terkunci dari definisi set (sama seperti form PO) */
-      + '<td class="r"><input type="number" step="1" min="0" class="uu-harga" value="'
-      + Number(isPoU ? (l.harga || 0) : (l.harga_nett || 0)) + '" style="width:130px"'
+      + '<td class="r"><input type="text" inputmode="decimal" data-angka="2" class="uu-harga" value="'
+      + angkaTeks(Number(isPoU ? (l.harga || 0) : (l.harga_nett || 0))) + '" style="width:130px;text-align:right"'
       + (isPoU && l.set_id ? ' disabled title="Harga per set mengikuti isi set saat PO dibuat"' : '') + '></td>'
       + (isPoU
           /* #6 #7: diskon (Rp/%) & keterangan baris ikut bisa diubah — dan ikut terkirim, supaya
@@ -5467,11 +5514,11 @@ function formMintaUbah(jenis, id){
           ? '<td class="r" style="white-space:nowrap"><select class="uu-dtipe" aria-label="Tipe diskon">'
             + '<option value="rp"' + (l.diskon_tipe === "persen" ? "" : " selected") + '>Rp</option>'
             + '<option value="persen"' + (l.diskon_tipe === "persen" ? " selected" : "") + '>%</option></select> '
-            + '<input type="text" inputmode="decimal" class="uu-diskon" value="' + esc(ribu(l.diskon || 0)) + '" style="width:110px"></td>'
+            + '<input type="text" inputmode="decimal" data-angka="4" class="uu-diskon" value="' + esc(angkaTeks(l.diskon || 0, 4)) + '" style="width:110px"></td>'
             + '<td>' + (l.jenis === "biaya" ? '<span class="muted">—</span>'
                 : '<input type="text" class="uu-ket" value="' + esc(l.keterangan || "") + '" placeholder="opsional" style="width:160px">') + '</td>'
-          : '<td class="r"><input type="number" step="1" min="0" class="uu-ehc" value="'
-            + Number(l.ehc_item || 0) + '" style="width:110px"></td>')
+          : '<td class="r"><input type="text" inputmode="decimal" data-angka="2" class="uu-ehc" value="'
+            + angkaTeks(Number(l.ehc_item || 0)) + '" style="width:110px;text-align:right"></td>')
       + '</tr>';
   });
   if (!baris.length) h += '<tr><td colspan="5" class="kosong">Dokumen ini belum punya baris.</td></tr>';
@@ -5536,14 +5583,14 @@ function formMintaUbah(jenis, id){
                 product_id: pid.value === "" ? null : Number(pid.value),
                 deskripsi: tr.querySelector(".uu-des").value,
                 jenis: tr.querySelector(".uu-jen").value,
-                qty: Number(tr.querySelector(".uu-qty").value) || 0 };
+                qty: angkaId(tr.querySelector(".uu-qty").value) || 0 };   /* #14 */
       if (jenis === "po") {
         /* #1 #6 #7: seluruh kolom baris ikut — id, set_id, diskon, tipe diskon, keterangan. Dulu hanya
            qty & harga, sehingga set_id/diskon/keterangan hilang saat usulannya diterapkan. */
         var idEl = tr.querySelector(".uu-id"), setEl = tr.querySelector(".uu-set"), ketEl = tr.querySelector(".uu-ket");
         b.id = idEl && idEl.value !== "" ? Number(idEl.value) : null;
         b.set_id = setEl && setEl.value !== "" ? Number(setEl.value) : null;
-        b.harga = Number(tr.querySelector(".uu-harga").value) || 0;
+        b.harga = angkaId(tr.querySelector(".uu-harga").value) || 0;
         b.diskon = angkaAlur(tr.querySelector(".uu-diskon").value);
         b.diskon_tipe = tr.querySelector(".uu-dtipe").value === "persen" ? "persen" : "rp";
         b.keterangan = ketEl ? (ketEl.value.trim() || null) : null;
@@ -5551,8 +5598,8 @@ function formMintaUbah(jenis, id){
         var gd = cekDiskonPo(b, "Baris " + b.urut + ": ");
         if (gd) salahBaris.push(gd);
       } else {
-        b.harga_nett = Number(tr.querySelector(".uu-harga").value) || 0;
-        b.ehc_item = Number(tr.querySelector(".uu-ehc").value) || 0;
+        b.harga_nett = angkaId(tr.querySelector(".uu-harga").value) || 0;
+        b.ehc_item = angkaId(tr.querySelector(".uu-ehc").value) || 0;
       }
       isi.push(b);
     });
@@ -5598,7 +5645,7 @@ function poBarisHtml(f){
     if (b.set_id) {
       var rincian = (b.setKomp||[]).map(function(c){
         var pp = produkById(c.product_id);
-        return (Number(c.qty)||0) + '× ' + (pp ? (pp.kode || pp.nama || ('#'+c.product_id)) : ('#'+c.product_id));
+        return angkaTeks(Number(c.qty)||0) + '× ' + (pp ? (pp.kode || pp.nama || ('#'+c.product_id)) : ('#'+c.product_id));
       }).join(", ");
       return '<div class="baris-item" data-i="'+i+'">'
         + '<div class="bi-produk">'
@@ -5611,14 +5658,14 @@ function poBarisHtml(f){
         +   '<input type="text" class="po-ket" data-i="'+i+'" value="'+esc(b.keterangan||"")+'" placeholder="opsional — catatan untuk baris ini"></div>'
         + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b></div>'
         + '<div class="bi-angka bi-po">'
-        +   '<div><label>Qty (set)</label><input type="text" inputmode="numeric" class="po-qty" data-i="'+i+'" value="'+esc(b.qty)+'"></div>'
-        +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'" disabled></div>'
+        +   '<div><label>Qty (set)</label><input type="text" inputmode="numeric" data-angka="0" class="po-qty" data-i="'+i+'" value="'+angkaTeks(b.qty,0)+'"></div>'
+        +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'" disabled></div>'
         +   '<div><label>Diskon</label><div class="diskon-grup">'   /* #7: diskon set (dialokasikan ke komponen saat SP) */
         +     '<select class="po-diskon-tipe" data-i="'+i+'" aria-label="Tipe diskon">'
         +       '<option value="rp"'+(b.diskon_tipe==="persen"?"":" selected")+'>Rp</option>'
         +       '<option value="persen"'+(b.diskon_tipe==="persen"?" selected":"")+'>%</option>'
         +     '</select>'
-        +     '<input type="text" inputmode="decimal" class="po-diskon" data-i="'+i+'" value="'+ribu(b.diskon)+'" placeholder="'+(b.diskon_tipe==="persen"?"0–100":"0")+'">'
+        +     '<input type="text" inputmode="decimal" data-angka="'+(b.diskon_tipe==="persen"?4:2)+'" class="po-diskon" data-i="'+i+'" value="'+angkaTeks(b.diskon,b.diskon_tipe==="persen"?4:2)+'" placeholder="'+(b.diskon_tipe==="persen"?"0–100":"0")+'">'
         +   '</div></div>'
         +   '<div><label>&nbsp;</label><button class="btn kecil bahaya po-hapus" data-i="'+i+'" type="button" title="Hapus baris">×</button></div>'
         + '</div></div>';
@@ -5662,14 +5709,14 @@ function poBarisHtml(f){
       +   '<input type="text" class="po-ket" data-i="'+i+'" value="'+esc(b.keterangan||"")+'" placeholder="opsional — catatan untuk baris ini"></div>')   /* #6 */
       + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b></div>'
       + '<div class="bi-angka bi-po">'
-      +   '<div><label>Qty</label><input type="text" inputmode="decimal" class="po-qty" data-i="'+i+'" value="'+esc(b.qty)+'"></div>'
-      +   '<div><label>Harga satuan</label><input type="text" inputmode="decimal" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"></div>'
+      +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="po-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
+      +   '<div><label>Harga satuan</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"></div>'
       +   '<div><label>Diskon</label><div class="diskon-grup">'   /* #7: 2 mode Rp / % */
       +     '<select class="po-diskon-tipe" data-i="'+i+'" aria-label="Tipe diskon">'
       +       '<option value="rp"'+(b.diskon_tipe==="persen"?"":" selected")+'>Rp</option>'
       +       '<option value="persen"'+(b.diskon_tipe==="persen"?" selected":"")+'>%</option>'
       +     '</select>'
-      +     '<input type="text" inputmode="decimal" class="po-diskon" data-i="'+i+'" value="'+ribu(b.diskon)+'" placeholder="'+(b.diskon_tipe==="persen"?"0–100":"0")+'">'
+      +     '<input type="text" inputmode="decimal" data-angka="'+(b.diskon_tipe==="persen"?4:2)+'" class="po-diskon" data-i="'+i+'" value="'+angkaTeks(b.diskon,b.diskon_tipe==="persen"?4:2)+'" placeholder="'+(b.diskon_tipe==="persen"?"0–100":"0")+'">'
       +   '</div></div>'
       +   '<div><label>&nbsp;</label><button class="btn kecil bahaya po-hapus" data-i="'+i+'" type="button" title="Hapus baris">×</button></div>'
       + '</div></div>';
@@ -6424,26 +6471,30 @@ function spTotalPo(f){
 function spSelisihPo(f, tt){
   var po = spTotalPo(f);
   if (po === null || isNaN(po)) return null;
-  return (tt || spHitungLokal(f)).grand - po;
+  return (keSen((tt || spHitungLokal(f)).grand) - keSen(po)) / 100;   /* #12: sama SAMPAI SEN (= periksa_total_sp) */
 }
 function spNoPo(f){
   var p = poCari(f.po_id);
   return p ? (p.no_po || "") : "";
 }
+/* #12: qty × harga TANPA pembulatan. qty & harga numeric(…,2) → dikali dalam 1/10.000 Rp bulat
+   (sama cara poNilaiBaris1e4) supaya jumlahnya eksak, bukan float; hasil = so_ringkas / periksa_total_sp. */
+function kali1e4(q, h){ return Math.round((Number(q)||0) * 100) * Math.round((Number(h)||0) * 100); }
 function spHitungLokal(f){
   var barang = 0, ehc = 0, biaya = 0, bawah = 0;
   f.baris.forEach(function(b){
     var q = Number(b.qty)||0;
-    if (b.jenis === "biaya") { biaya += Math.round(q * (Number(b.nett)||0)); return; }
-    barang += Math.round(q * (Number(b.nett)||0));
-    ehc    += Math.round(q * (Number(b.ehc)||0));
+    if (b.jenis === "biaya") { biaya += kali1e4(q, b.nett); return; }
+    barang += kali1e4(q, b.nett);
+    ehc    += kali1e4(q, b.ehc);
     if (b.list && Number(b.nett) < Number(b.list)) bawah++;
   });
+  barang /= 10000; ehc /= 10000; biaya /= 10000;
   /* EHC tetap kena PPN: ia bagian dari harga barangnya, bukan biaya
      terpisah. Yang keluar dari dasar pengenaan cuma baris berjenis biaya. */
   var dasar = barang + ehc;
   var sub = dasar + biaya;
-  var ppn = f.ppn_kena ? Math.round(dasar * 0.11) : 0;
+  var ppn = f.ppn_kena ? dasar * 0.11 : 0;   /* #12: PPN tidak dibulatkan */
   return { barang:barang, ehc:ehc, biaya:biaya, dasar:dasar,
            sub:sub, ppn:ppn, grand:sub+ppn, bawah:bawah };
 }
@@ -6453,7 +6504,7 @@ function spBarisHtml(f){
     var p = biaya ? null : produkById(b.kode);
     var usulan = p && p.usulan;
     var q = Number(b.qty)||0;
-    var total = Math.round(q * ((Number(b.nett)||0) + (biaya ? 0 : (Number(b.ehc)||0))));
+    var total = q * ((Number(b.nett)||0) + (biaya ? 0 : (Number(b.ehc)||0)));   /* #12 */
     var diubah = !biaya && b.list && Number(b.nett) !== Number(b.list);
     var bawah  = !biaya && b.list && Number(b.nett) < Number(b.list);
     var ket;
@@ -6508,11 +6559,11 @@ function spBarisHtml(f){
       +   (bawah ? '<span class="bi-tanda bad">di bawah list</span>'
                : (diubah ? '<span class="bi-tanda">di atas list</span>' : ''))+'</div>'
       + '<div class="bi-angka'+(spManual(f)?' bi-sp':'')+'">'
-      +   '<div><label>Qty</label><input type="text" inputmode="decimal" class="sp-qty" data-i="'+i+'" value="'+esc(b.qty)+'"></div>'
-      +   '<div><label>'+(biaya?'Nilai':'Harga nett')+'</label><input type="text" inputmode="decimal" class="sp-nett'+(bawah?" bawah":"")+'" data-i="'+i+'" value="'+ribu(b.nett)+'"></div>'
+      +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="sp-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
+      +   '<div><label>'+(biaya?'Nilai':'Harga nett')+'</label><input type="text" inputmode="decimal" data-angka="2" class="sp-nett'+(bawah?" bawah":"")+'" data-i="'+i+'" value="'+ribu(b.nett)+'"></div>'
       +   '<div><label>EHC / item</label>'+(biaya
             ? '<input type="text" value="—" disabled>'
-            : '<input type="text" inputmode="decimal" class="sp-ehc" data-i="'+i+'" value="'+ribu(b.ehc)+'">')+'</div>'
+            : '<input type="text" inputmode="decimal" data-angka="2" class="sp-ehc" data-i="'+i+'" value="'+ribu(b.ehc)+'">')+'</div>'
       +   (spManual(f)
             ? '<div><label>&nbsp;</label><button class="btn kecil bahaya spm-hapus" data-i="'+i+'" type="button" title="Hapus baris">×</button></div>'
             : '')
@@ -7040,10 +7091,6 @@ function formHargaKhusus(){
 function medanAlur(label, kendali){
   return '<label class="medan-alur"><span>'+label+'</span>'+kendali+'</label>';
 }
-function angkaAlur(v){
-  var n = Number(String(v).replace(/[^0-9,.\-]/g, "").replace(/\./g, "").replace(",", "."));
-  return isNaN(n) ? 0 : n;
-}
 function tglPendekAlur(t){
   if (!t) return "—";
   var b = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
@@ -7442,11 +7489,6 @@ function kotakGerbang(isi){
   return '<div class="flag" style="margin-top:16px"><span class="f-ico">i</span><div>' + isi + '</div></div>';
 }
 
-function angkaSaja(v){
-  if (v === null || v === undefined || v === "") return null;
-  var a = String(v).replace(/[^\d.-]/g, "");
-  return a === "" ? null : Number(a);
-}
 
 /* Pencarian lentur: satu kotak, banyak kolom. Tiap kata harus ketemu di
    salah satu kolom — jadi "sarjono 45" mengerucut ke SP milik Sarjono yang
@@ -8080,7 +8122,7 @@ function setHargaSet(s){
 function setRincian(s){
   return (s.komponen||[]).map(function(c){
     var p = produkById(c.product_id);
-    return (Number(c.qty)||0) + '× ' + (p ? (p.kode || p.nama || ('#'+c.product_id)) : ('#'+c.product_id));
+    return angkaTeks(Number(c.qty)||0) + '× ' + (p ? (p.kode || p.nama || ('#'+c.product_id)) : ('#'+c.product_id));
   }).join(", ");
 }
 /* daftar + kelola set */
@@ -8111,7 +8153,7 @@ function cekKomposisiSetLokal(komp){
     var k = String(c.product_id);
     if (!per[k]) { per[k] = { product_id:c.product_id, qty:0, nettSalah:false }; urutan.push(per[k]); }
     per[k].qty += Number(c.qty) || 0;
-    var h = angka(c.harga_nett) || 0;
+    var h = Number(c.harga_nett) || 0;   /* #14: nilai mesin (number/teks PostgREST), bukan ketikan */
     if (h < 0 || !habisSen(h)) per[k].nettSalah = true;
   });
   if (!urutan.length) return "Set harus punya komponen — 1 set roda = 4 pcs roda.";
@@ -8183,7 +8225,7 @@ function formSetEdit(s){
   if (!SET_EDIT.komponen.length) SET_EDIT.komponen.push({ product_id:null, qty:2, harga_nett:0, ketikan:"" });
   gambarSetEdit();
 }
-function setHargaSetLokal(e){ return e.komponen.reduce(function(a,c){ return a + (Number(c.qty)||0)*(angka(c.harga_nett)||0); }, 0); }
+function setHargaSetLokal(e){ return e.komponen.reduce(function(a,c){ return a + (Number(c.qty)||0)*(Number(c.harga_nett)||0); }, 0); }
 function setKompHtml(e){
   return e.komponen.map(function(c,i){
     var p = c.product_id ? produkById(c.product_id) : null;
@@ -8194,8 +8236,8 @@ function setKompHtml(e){
              : '<input type="text" class="setk-cari" data-i="'+i+'" value="'+esc(c.ketikan||"")+'" placeholder="ketik kode/nama produk…" autocomplete="off"><div class="cari-hasil" hidden></div>')
       + '</div>'
       + '<div class="bi-angka bi-mini">'
-      +   '<div><label>Qty</label><input type="text" inputmode="decimal" class="setk-qty" data-i="'+i+'" value="'+esc(c.qty)+'"></div>'
-      +   '<div><label>Harga nett/pcs</label><input type="text" inputmode="decimal" class="setk-nett" data-i="'+i+'" value="'+ribu(c.harga_nett)+'"></div>'
+      +   '<div><label>Qty</label><input type="text" inputmode="numeric" data-angka="0" class="setk-qty" data-i="'+i+'" value="'+angkaTeks(c.qty)+'"></div>'
+      +   '<div><label>Harga nett/pcs</label><input type="text" inputmode="decimal" data-angka="2" class="setk-nett" data-i="'+i+'" value="'+ribu(c.harga_nett)+'"></div>'
       +   '<div><label>&nbsp;</label><button class="btn kecil bahaya setk-hapus" data-i="'+i+'" type="button">×</button></div>'
       + '</div></div>';
   }).join("");
@@ -8238,8 +8280,8 @@ function bacaSetForm(){
   if ($("f_set_kode")) e.kode = nilaiForm("set_kode") || "";
   if ($("f_set_kat"))  e.kategori = nilaiForm("set_kat") || "";
   if ($("set_aktif"))  e.aktif = $("set_aktif").value === "1";
-  Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-qty"), function(inp){ e.komponen[+inp.dataset.i].qty = angka(inp.value) || 0; });
-  Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-nett"), function(inp){ e.komponen[+inp.dataset.i].harga_nett = angka(inp.value) || 0; });
+  Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-qty"), function(inp){ e.komponen[+inp.dataset.i].qty = angkaId(inp.value) || 0; });   /* #14 */
+  Array.prototype.forEach.call($("laci-form").querySelectorAll(".setk-nett"), function(inp){ e.komponen[+inp.dataset.i].harga_nett = angkaId(inp.value) || 0; });
 }
 function pasangSetEdit(){
   var e = SET_EDIT;
@@ -8250,7 +8292,7 @@ function pasangSetEdit(){
     pasangCariProduk(inp, function(p){
       bacaSetForm(); var i = +inp.dataset.i;
       e.komponen[i].product_id = p.id;
-      if (!angka(e.komponen[i].harga_nett)) { var hl = hargaListProduk(p.id); if (hl) e.komponen[i].harga_nett = hl; }
+      if (!Number(e.komponen[i].harga_nett)) { var hl = hargaListProduk(p.id); if (hl) e.komponen[i].harga_nett = hl; }
       gambarSetEdit();
     });
   });
@@ -8269,7 +8311,7 @@ function simpanSet(){
   if (!String(e.nama).trim()) { toast("Nama set wajib diisi.", true); return; }
   /* #1: baris tanpa produk diabaikan; sisanya diperiksa aturan set roda (sama dengan database). */
   var komp = e.komponen.filter(function(c){ return c.product_id; }).map(function(c){
-    return { product_id: c.product_id, qty: Number(c.qty) || 0, harga_nett: angka(c.harga_nett) || 0 };
+    return { product_id: c.product_id, qty: Number(c.qty) || 0, harga_nett: Number(c.harga_nett) || 0 };
   });
   var galat = cekKomposisiSetLokal(komp);
   if (galat) { tampilPesan(esc(galat)); return; }
@@ -8489,14 +8531,14 @@ function pnwBarisHtml(f){
         + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(totSet) + '</b>'
         +   (bawahSet ? '<span class="bi-tanda bad">di bawah harga set</span>' : '') + '</div>'
         + '<div class="bi-angka bi-mini">'
-        +   '<div><label>Qty (set)</label><input type="text" inputmode="decimal" class="pnw-qty" data-i="' + i + '" value="' + esc(b.qty) + '"></div>'
-        +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" class="pnw-harga' + (bawahSet ? " bawah" : "")
+        +   '<div><label>Qty (set)</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-qty" data-i="' + i + '" value="' + ribu(b.qty) + '"></div>'
+        +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-harga' + (bawahSet ? " bawah" : "")
         +     '" data-i="' + i + '" value="' + ribu(b.harga) + '"></div>'
         +   '<div><label>&nbsp;</label><button class="btn kecil bahaya pnw-hapus" data-i="' + i + '" type="button">×</button></div>'
         + '</div></div>';
     }
     var p = b.kode ? produkById(b.kode) : null;
-    var total = Math.round((Number(b.qty)||0) * (Number(b.harga)||0));
+    var total = (Number(b.qty)||0) * (Number(b.harga)||0);   /* #12 */
     var bawah = b.list && Number(b.harga) < Number(b.list);
     return '<div class="baris-item" data-i="' + i + '">'
       + '<div class="bi-produk"><label>Nama barang</label>'
@@ -8512,8 +8554,8 @@ function pnwBarisHtml(f){
       + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(total) + '</b>'
       +   (bawah ? '<span class="bi-tanda bad">di bawah list</span>' : '') + '</div>'
       + '<div class="bi-angka bi-mini">'
-      +   '<div><label>Qty</label><input type="text" inputmode="decimal" class="pnw-qty" data-i="' + i + '" value="' + esc(b.qty) + '"></div>'
-      +   '<div><label>Harga</label><input type="text" inputmode="decimal" class="pnw-harga' + (bawah ? " bawah" : "")
+      +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-qty" data-i="' + i + '" value="' + ribu(b.qty) + '"></div>'
+      +   '<div><label>Harga</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-harga' + (bawah ? " bawah" : "")
       +     '" data-i="' + i + '" value="' + ribu(b.harga) + '"></div>'
       +   '<div><label>&nbsp;</label><button class="btn kecil bahaya pnw-hapus" data-i="' + i + '" type="button">×</button></div>'
       + '</div></div>';
@@ -8579,10 +8621,10 @@ function pasangPenawaran(){
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll(".pnw-qty"), function(inp){
-    inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].qty = inp.value; ulang0(); });
+    inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].qty = n === null ? "" : n; ulang0(); });   /* #14 */
   });
   Array.prototype.forEach.call(document.querySelectorAll(".pnw-harga"), function(inp){
-    inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].harga = angka(inp.value); ulang0(); });   /* #14 */
+    inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].harga = angkaId(inp.value); ulang0(); });   /* #14 */
   });
   Array.prototype.forEach.call(document.querySelectorAll(".pnw-spek"), function(inp){   /* #3 */
     inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].spesifikasi = inp.value; });
@@ -8603,7 +8645,7 @@ function pasangPenawaran(){
     Array.prototype.forEach.call(document.querySelectorAll("#pnw-baris .baris-item"), function(el, i){
       var b = f.baris[i]; if (!b) return;
       var t = el.querySelector(".bi-hasil b");
-      if (t) t.textContent = rp(Math.round((Number(b.qty)||0) * (Number(b.harga)||0)));
+      if (t) t.textContent = rp((Number(b.qty)||0) * (Number(b.harga)||0));   /* #12 */
     });
   }
 }
@@ -8691,7 +8733,7 @@ function formDetailPenawaran(q){
           + (pr && l.deskripsi && l.deskripsi !== pr.kode ? '<div class="muted" style="font-size:11.5px">' + esc(l.deskripsi) + '</div>' : '')
           + (l.spesifikasi ? '<div class="muted" style="font-size:11.5px">Spesifikasi: ' + esc(l.spesifikasi) + '</div>' : '')
           + '</td>'
-          + '<td>' + esc(l.qty) + ' ' + esc(l.satuan || "") + '</td>'
+          + '<td>' + esc(angkaTeks(l.qty)) + ' ' + esc(l.satuan || "") + '</td>'
           + '<td class="r">' + rp(l.harga)
           +   (bawah ? '<div><span class="pill p-belum" title="price list ' + esc(rp(l.harga_list)) + '">di bawah list</span></div>' : '')
           + '</td>'
@@ -9477,7 +9519,7 @@ function formCekVonny(s){
     + lines.map(function(l){ var pr = produkById(l.product_id);
         var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
         var ef = qtyEfektif(l), bq = qtyBatal(l);   /* #18: qty efektif = pesan − batal */
-        var tt = Math.round(ef*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0)));
+        var tt = ef*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0));   /* #12 */
         return '<tr><td class="l">'+esc(nama)+'</td><td>'+fmtQty(ef)
           +(bq ? ' <span class="muted">(pesan '+fmtQty(l.qty)+', batal '+fmtQty(bq)+')</span>' : '')
           +'</td><td class="r">'+rp(l.harga_nett)+'</td><td class="r">'+rp(l.ehc_item)+'</td><td class="r">'+rp(tt)+'</td></tr>';
@@ -9831,7 +9873,7 @@ function gambarKirimPartial(s, lines, kirimList){
     var bq = qtyBatal(l);   /* #18: sisa = pesan − batal − terkirim */
     return { id:l.id, nama: p ? (p.kode + (p.brand ? " · " + p.brand : "")) : (l.deskripsi || "—"),
              qty: Number(l.qty)||0, batal: bq, alasan: l.batal_alasan || "", terkirim: terkirim,
-             sisa: (Number(l.qty)||0) - bq - terkirim };
+             sisa: (keSen(l.qty) - keSen(bq) - keSen(terkirim)) / 100 };   /* #14: dalam 0,01 — bebas sisa float */
   });
   var pakaiBertahap = kirimList.length > 0;
   var semuaTerkirim = rows.length > 0 && rows.every(function(r){ return r.sisa <= 0; });
@@ -9882,7 +9924,7 @@ function gambarKirimPartial(s, lines, kirimList){
           + '<td class="r">'+fmtQty(r.terkirim)+'</td><td class="r">'+(r.batal ? fmtQty(r.batal) : '<span class="muted">0</span>')+'</td>'
           + '<td class="r">'+fmtQty(r.sisa)+'</td>'
           + (formKirimQty ? '<td class="r">'+(r.sisa > 0
-              ? '<input type="text" inputmode="decimal" class="kr-kirim-qty" data-id="'+r.id+'" data-sisa="'+r.sisa+'" value="'+r.sisa+'" style="width:84px;text-align:right">'
+              ? '<input type="text" inputmode="decimal" data-angka="2" class="kr-kirim-qty" data-id="'+r.id+'" data-sisa="'+r.sisa+'" value="'+angkaTeks(r.sisa)+'" style="width:84px;text-align:right">'
               : '<span class="muted">selesai</span>')+'</td>' : '')
           + '</tr>';
       }).join("") + '</tbody></table></div>';
@@ -9939,9 +9981,9 @@ function terbitkanSjPartial(s){
   if (!tgl) { toast("Tanggal surat jalan wajib diisi.", true); return; }
   var baris = [], lebih = "";
   Array.prototype.forEach.call(document.querySelectorAll("#kr-partial .kr-kirim-qty"), function(inp){
-    var q = angka(inp.value), sisa = Number(inp.dataset.sisa);
+    var q = angkaId(inp.value), sisa = Number(inp.dataset.sisa);   /* #14 */
     if (q && q > 0) {
-      if (q > sisa) lebih = lebih || ("Qty kirim " + fmtQty(q) + " melebihi sisa " + fmtQty(sisa) + ".");   /* #15: tidak dipotong diam-diam */
+      if (keSen(q) > keSen(sisa)) lebih = lebih || ("Qty kirim " + fmtQty(q) + " melebihi sisa " + fmtQty(sisa) + ".");   /* #15: tidak dipotong diam-diam */
       baris.push({ so_line_id: Number(inp.dataset.id), qty: q });
     }
   });
@@ -10058,7 +10100,7 @@ function panelLunas(){
   var d = saringLentur(dasar, L.cari, function(s){
     var r = ringkasSo(s);
     return [s.no_sp, s.no_invoice, s.kepada, namaRepAlur(s.sales_rep_id), s.status,
-            r ? String(Math.round(r.grand_total)) : "",
+            r ? String(Number(r.grand_total)) : "",   /* #12 */
             r ? rp(r.grand_total) : ""];
   });
 
@@ -10992,7 +11034,7 @@ function simpanKlaimEhc(cepat){
   /* #23: bukti EHC tidak lagi wajib — pemeriksaan lampiran dihapus. */
   var so = E.siap.filter(function(s){ return String(s.so_id) === String(soId); })[0] || {};
   var totalEhc = Number(so.total_ehc) || 0;
-  if (nominal > totalEhc) {
+  if (keSen(nominal) > keSen(totalEhc)) {   /* #12: sampai sen (= ajukan_klaim_ehc) */
     tampilPesan("Nominal " + rp(nominal) + " melebihi EHC di SP itu (" + rp(totalEhc) + ").");
     return;
   }
@@ -11278,7 +11320,7 @@ function panelKomisi(){
                          : '<span class="pill p-sebagian">belum ditransfer</span>')
              +   (k.telat
                  ? '<br><span class="pill p-sebagian">telat · ' + (k.pct_gm !== null && k.pct_gm !== undefined
-                     ? (Number(k.pct_gm) * 100).toFixed(2).replace(/\.?0+$/, "") + "%" : "GM") + '</span>'
+                     ? angkaTeks(Number(k.pct_gm) * 100, 2) + "%" : "GM")   /* #14: koma desimal */ + '</span>'
                  : '') + '</td></tr>';
          }).join("") + '</tbody></table></div>';
   }
@@ -12391,14 +12433,14 @@ function formGmUsulUbah(ref){
         barisBeda(lbl + "diskon", teksDiskon(a), teksDiskon(b));
       if (isPoUsul && String(a.keterangan || "") !== String(b.keterangan || ""))
         barisBeda(lbl + "keterangan", a.keterangan || "—", b.keterangan || "—");
-      if (isPoUsul && pl[k] && poTotalBaris(a) !== poTotalBaris(b))
+      if (isPoUsul && pl[k] && !samaSen(poTotalBaris(a), poTotalBaris(b)))
         barisBeda(lbl + "nilai baris", rp(poTotalBaris(a)), rp(poTotalBaris(b)));
     });
     if (isPoUsul) {
       var ppnBaru = (kb.ppn_kena === undefined || kb.ppn_kena === null) ? kl.ppn_kena : kb.ppn_kena;
       var gtLama = poHitungLokal({ baris: lama.baris || [], ppn_kena: !!kl.ppn_kena }).grand;
       var gtBaru = poHitungLokal({ baris: baru.baris ? baruBaris : (lama.baris || []), ppn_kena: !!ppnBaru }).grand;
-      if (gtLama !== gtBaru) barisBeda("Grand total PO", rp(gtLama), rp(gtBaru));
+      if (!samaSen(gtLama, gtBaru)) barisBeda("Grand total PO", rp(gtLama), rp(gtBaru));   /* #12 */
     }
     /* Baris yang HILANG dari usulan juga perubahan — dan yang paling mudah
        lolos kalau yang ditampilkan cuma isi usulannya. */
@@ -12736,7 +12778,7 @@ function muatKhusus(){
 
 function pctTampil(p){
   if (p === null || p === undefined) return "—";
-  return (Number(p) * 100).toFixed(2).replace(/\.?0+$/, "") + "%";
+  return angkaTeks(Number(p) * 100, 2) + "%";   /* #14: koma desimal */
 }
 
 function panelKhusus(){
@@ -12857,13 +12899,13 @@ function formUbahKhusus(id){
     + (x.alasan ? '<br><span class="muted">Alasan permintaan: ' + esc(x.alasan) + '</span>' : '')
     + '</div></div>'
     + field({ nama:"uk_harga", label:"Batas bawah harga nett", jenis:"angka", wajib:true,
-              nilai:Math.round(Number(x.harga_nett)),
+              nilai:Number(x.harga_nett),   /* #12: sen tidak dipotong */
               bantu:"SP dengan harga di bawah angka ini kembali ke antrean GM." })
     + field({ nama:"uk_ehc", label:"EHC per item", jenis:"angka",
-              nilai:Math.round(Number(x.ehc_item) || 0) })
+              nilai:Number(x.ehc_item) || 0 })
     + field({ nama:"uk_pct", label:"Komisi khusus (%)", jenis:"angka",
               nilai: x.komisi_pct === null || x.komisi_pct === undefined
-                       ? "" : String(Number(x.komisi_pct) * 100),
+                       ? "" : Number(x.komisi_pct) * 100,
               bantu:"Persentase dari harga nett." })
     + field({ nama:"uk_aktif", label:"Status", jenis:"select",
               nilai: x.status === "aktif" ? "1" : "0",
@@ -13270,8 +13312,8 @@ function selLaporan(nilai, jenis){
   if (jenis === "rupiah")  return rp(nilai);
   if (jenis === "tanggal") return esc(tglPendekAlur(nilai));
   if (jenis === "yatidak") return nilai ? "ya" : "tidak";
-  if (jenis === "angka")   return esc(Number(nilai).toLocaleString("id-ID"));
-  if (jenis === "persen")   return esc(Number(nilai).toLocaleString("id-ID")) + "%";
+  if (jenis === "angka")   return esc(angkaTeks(nilai, 2));          /* #14 */
+  if (jenis === "persen")   return esc(angkaTeks(nilai, 2)) + "%";
   return esc(String(nilai));
 }
 function tabelLaporan(L, baris){
@@ -13716,7 +13758,7 @@ function panelRingkas(T){
     +  '<span style="width:'+(100-pct).toFixed(2)+'%;background:#8c3b23">'+(100-pct>=12?(100-pct).toFixed(0)+"%":"")+'</span></div>'
     +  '<div class="legend"><span><i style="background:#1d4a20"></i>Sudah dibayar <b>'+rp(T.dibayar)+'</b></span>'
     +  '<span><i style="background:#8c3b23"></i>Sisa <b>'+rp(T.sisa)+'</b></span></div>';
-  if (Math.abs(T.selisihKurs) >= 1) {
+  if (keSen(T.selisihKurs) !== 0) {   /* #12: selisih sen pun ditampilkan */
     h += '<div class="flag"><span class="f-ico">i</span><div><b>Selisih kurs '+rp(T.selisihKurs)+'.</b> '
       +  'Nilai order dikurangi yang sudah dibayar tidak sama persis dengan sisa pembayaran, karena nilai order '
       +  'memakai kurs estimasi sedangkan pembayaran memakai kurs riil saat transfer. '
@@ -14163,7 +14205,7 @@ function panelBayar(T){
       + '<td class="l">'+(b.metode?esc(b.metode):'<span class="muted">—</span>')+'</td>'
       + '<td>'+td(b.tanggal_bayar)+(telat > 0 ? ' <span class="neg">+'+telat+'h</span>' : '')+'</td>'
       + '<td>'+(b.jumlah_dibayar === null ? '<span class="muted">—</span>' : fx(b.jumlah_dibayar, o?o.mata_uang:""))+'</td>'
-      + '<td>'+(b.kurs_bayar === null ? '<span class="muted">—</span>' : Number(b.kurs_bayar).toLocaleString("id-ID",{maximumFractionDigits:2}))+'</td>'
+      + '<td>'+(b.kurs_bayar === null ? '<span class="muted">—</span>' : angkaTeks(b.kurs_bayar, 4))   /* #14: kolom 4 desimal */+'</td>'
       + '<td>'+rp(b.nilai_idr)+'</td>'
       + '<td class="l">'+(b.referensi?esc(b.referensi):'<span class="muted">—</span>')+'</td>'
       + '<td class="l">'+(b.pic?esc(b.pic):'<span class="muted">—</span>')+'</td></tr>';
@@ -14690,7 +14732,7 @@ function panelSinkron(){
           + '<td>' + (u.harga_lama === null ? '<span class="num0">belum ada</span>' : rp(u.harga_lama)) + '</td>'
           + '<td><b>' + rp(u.harga) + '</b></td>'
           + '<td>' + (p === null ? pill("baru","p-jalan")
-              : '<b>' + (p > 0 ? "\u2191 +" : "\u2193 ") + p.toFixed(1) + '%</b>') + '</td></tr>';
+              : '<b>' + (p > 0 ? "\u2191 +" : "\u2193 ") + angkaTeks(p, 1) + '%</b>') + '</td></tr>';
       });
       h += '</tbody></table></div>';
       if (PRATINJAU.ubah.length > 400) {
@@ -14785,7 +14827,7 @@ function formSumber(s){
     + field({ nama:"kolom_harga", label:"Nama kolom harga", wajib:true, nilai:s.kolom_harga, tempel:"harga" })
     + '</fieldset>'
     + '<fieldset><legend>Tripwire — penjaga saat sheet salah</legend>'
-    + field({ nama:"min_baris", label:"Tolak kalau baris kurang dari", jenis:"angka", nilai:s.min_baris,
+    + field({ nama:"min_baris", label:"Tolak kalau baris kurang dari", jenis:"angka", desimal:0, nilai:s.min_baris,
               bantu:"Menangkap sheet kosong, gid keliru, atau sheet terhapus." })
     + field({ nama:"maks_ubah_persen", label:"Tolak kalau harga berubah lebih dari (%)", jenis:"angka", nilai:s.maks_ubah_persen,
               bantu:"Menangkap kolom ketuker atau baris kegeser." })
@@ -14812,9 +14854,9 @@ function formSumber(s){
       sheet_id: t.id, gid: t.gid,
       kolom_kode:  $("f_kolom_kode").value.trim()  || "kode",
       kolom_harga: $("f_kolom_harga").value.trim() || "harga",
-      min_baris:            angka1($("f_min_baris").value) || 0,
-      maks_ubah_persen:     angka1($("f_maks_ubah_persen").value) || 0,
-      maks_lonjakan_persen: angka1($("f_maks_lonjakan_persen").value) || 0,
+      min_baris:            angkaId($("f_min_baris").value) || 0,             /* #14 */
+      maks_ubah_persen:     angkaId($("f_maks_ubah_persen").value) || 0,
+      maks_lonjakan_persen: angkaId($("f_maks_lonjakan_persen").value) || 0,
       jadwal_aktif: $("f_jadwal_aktif").value === "ya",
       otomatis:     $("f_otomatis").value === "ya",
       aktif: true
@@ -14932,7 +14974,13 @@ function field(o){
   } else {
     if (o.jenis === "date" && !o.bantu) o.bantu = "&nbsp;";
     var tipe = o.jenis === "date" ? "date" : "text";
-    var im = o.jenis === "angka" ? ' inputmode="decimal"' : '';
+    var im = "";
+    if (o.jenis === "angka") {                    /* #14: angka Indonesia, diformat saat mengetik */
+      var des = o.desimal === undefined ? 2 : o.desimal;
+      if (typeof isi === "number" || (isi !== "" && !isNaN(Number(isi)))) isi = angkaTeks(isi, des);
+      /* papan desimal iOS tidak punya tombol minus → kotak yang boleh negatif pakai papan biasa */
+      im = (o.minus ? ' data-minus' : ' inputmode="decimal"') + ' data-angka="' + des + '" autocomplete="off"';
+    }
     kendali = '<input type="'+tipe+'" id="'+id+'" name="'+o.nama+'" value="'+esc(isi)+'"'+mati+im+
               (o.tempel?' placeholder="'+esc(o.tempel)+'"':'')+(o.daftar?' list="'+o.daftar+'"':'')+'>';
   }
@@ -14955,7 +15003,45 @@ function nilaiForm(nama){
   var v = el.value;
   return v === "" ? null : v;
 }
-function angkaForm(nama){ var v = nilaiForm(nama); return v === null ? null : angka(v); }
+function angkaForm(nama){ var v = nilaiForm(nama); return v === null ? null : angkaId(v); }   /* #14 */
+/* #14: format angka Indonesia SAAT MENGETIK untuk setiap <input data-angka="desimal"> (+data-minus).
+   Fase capture: berjalan sebelum handler kotaknya sendiri, jadi handler itu selalu membaca teks rapi. */
+(function(){
+  function kotak(el){ return el && el.tagName === "INPUT" && el.hasAttribute("data-angka") ? el : null; }
+  function sisipKoma(el){
+    var des = +el.getAttribute("data-angka");
+    if (!des || el.value.indexOf(",") > -1) return false;
+    var a = el.selectionStart, b = el.selectionEnd;
+    if (a === null) return false;
+    el.setRangeText(",", a, b, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  document.addEventListener("input", function(e){
+    var el = kotak(e.target); if (!el || e.isComposing) return;
+    var lama = el.value, baru = rapikanKetik(lama, +el.getAttribute("data-angka"), el.hasAttribute("data-minus"));
+    if (baru === lama) return;
+    var pos = el.selectionStart === null ? lama.length : el.selectionStart;
+    el.value = baru;
+    try { var k = kursorBaru(lama, pos, baru); el.setSelectionRange(k, k); } catch (x) {}
+  }, true);
+  /* tombol desimal numpad → koma (di lokal US numpad mengetik titik) */
+  document.addEventListener("keydown", function(e){
+    var el = kotak(e.target); if (!el) return;
+    if (e.code === "NumpadDecimal" || e.key === "Decimal") { if (sisipKoma(el) || el.value.indexOf(",") > -1) e.preventDefault(); }
+  }, true);
+  /* papan desimal HP berlokal US hanya punya titik → di layar sentuh titik dianggap koma */
+  document.addEventListener("beforeinput", function(e){
+    var el = kotak(e.target); if (!el || e.data !== ".") return;
+    if (!(window.matchMedia && matchMedia("(pointer:coarse)").matches)) return;
+    if (sisipKoma(el)) e.preventDefault();
+  }, true);
+  /* koma menggantung di ujung dibuang saat keluar kotak */
+  document.addEventListener("focusout", function(e){
+    var el = kotak(e.target); if (!el) return;
+    if (/,$/.test(el.value)) el.value = el.value.slice(0, -1);   /* nilainya sama: "12," = 12 */
+  }, true);
+})();
 
 function tampilPesan(teks, ok){
   var p = $("laci-form").querySelector(".pesan");
@@ -14991,7 +15077,7 @@ function formOrder(o){
     + '</div><div class="baris">'
     + field({nama:"total_nilai", label:"Total nilai (mata uang asing)", jenis:"angka", nilai:o.total_nilai, mati:kunciOwner,
              tempel:"588.728,38"})
-    + field({nama:"kurs_estimasi", label:"Kurs estimasi ke IDR", jenis:"angka", nilai:o.kurs_estimasi, mati:kunciOwner,
+    + field({nama:"kurs_estimasi", label:"Kurs estimasi ke IDR", jenis:"angka", desimal:4, nilai:o.kurs_estimasi, mati:kunciOwner,
              tempel:"2.670"})
     + '</div>'
     + field({nama:"nilai_estimasi", label:"Nilai estimasi (IDR)", jenis:"angka", nilai:o.nilai_estimasi, mati:kunciOwner,
@@ -15046,20 +15132,20 @@ function formOrder(o){
 
   /* nilai_estimasi mengikuti nilai × kurs selama belum ditimpa manual */
   var ditimpa = !baru && o.total_nilai && o.kurs_estimasi &&
-                Math.abs(Number(o.nilai_estimasi) - Number(o.total_nilai)*Number(o.kurs_estimasi)) > 0.5;
+                !samaSen(o.nilai_estimasi, Number(o.total_nilai)*Number(o.kurs_estimasi));   /* #12 */
   function hitungUlang(){
     var tn = angkaForm("total_nilai"), kr = angkaForm("kurs_estimasi"), b = $("b_nilai_estimasi");
     if (tn !== null && kr !== null) {
-      var auto = Math.round(tn * kr * 100) / 100;
-      if (!ditimpa) $("f_nilai_estimasi").value = auto.toLocaleString("id-ID",{maximumFractionDigits:2});
+      var auto = tn * kr;   /* #12: tanpa pembulatan; kolomnya numeric(18,2) → tampil sampai sen */
+      if (!ditimpa) $("f_nilai_estimasi").value = angkaTeks(auto, 2);
       var kini = angkaForm("nilai_estimasi");
-      if (kini !== null && Math.abs(kini - auto) > 0.5) {
+      if (kini !== null && !samaSen(kini, auto)) {
         b.className = "bantu"; b.innerHTML = "Ditimpa manual. Otomatisnya " + rp(auto) +
           ' · <button type="button" class="btn kecil" id="btn-reset-nilai">pakai otomatis</button>';
         var rb = $("btn-reset-nilai");
         if (rb) rb.addEventListener("click", function(){ ditimpa = false; hitungUlang(); });
       } else {
-        b.className = "bantu hitung"; b.textContent = "Otomatis: " + fx(tn) + " × " + fx(kr) + " = " + rp(auto);
+        b.className = "bantu hitung"; b.textContent = "Otomatis: " + fx(tn) + " × " + angkaTeks(kr, 4) + " = " + rp(auto);
       }
     } else {
       b.className = "bantu"; b.textContent = "Terisi otomatis begitu nilai dan kurs diisi.";
@@ -15214,7 +15300,7 @@ function formBayar(b){
     + '</div><div class="baris">'
     + field({nama:"tanggal_bayar", label:"Tanggal bayar", jenis:"date", nilai:b.tanggal_bayar})
     + field({nama:"jumlah_dibayar", label:"Jumlah dibayar (asing)", jenis:"angka", nilai:b.jumlah_dibayar})
-    + field({nama:"kurs_bayar", label:"Kurs riil saat transfer", jenis:"angka", nilai:b.kurs_bayar,
+    + field({nama:"kurs_bayar", label:"Kurs riil saat transfer", jenis:"angka", desimal:4, nilai:b.kurs_bayar,
              tempel:"2.651,50"})
     + '</div>'
     + field({nama:"nilai_idr", label:"Nilai dibayar (IDR)", jenis:"angka", nilai:b.nilai_idr,
@@ -15232,21 +15318,21 @@ function formBayar(b){
   $("laci-form").innerHTML = h;
 
   var ditimpa = !baru && b.jumlah_dibayar && b.kurs_bayar &&
-                Math.abs(Number(b.nilai_idr) - Number(b.jumlah_dibayar)*Number(b.kurs_bayar)) > 0.5;
+                !samaSen(b.nilai_idr, Number(b.jumlah_dibayar)*Number(b.kurs_bayar));   /* #12 */
   function hitungUlang(){
     var jd = angkaForm("jumlah_dibayar"), kb = angkaForm("kurs_bayar"), el = $("b_nilai_idr");
     if (jd !== null && kb !== null) {
-      var auto = Math.round(jd * kb * 100) / 100;
-      if (!ditimpa) $("f_nilai_idr").value = auto.toLocaleString("id-ID",{maximumFractionDigits:2});
+      var auto = jd * kb;   /* #12: tanpa pembulatan; kolomnya numeric(18,2) → tampil sampai sen */
+      if (!ditimpa) $("f_nilai_idr").value = angkaTeks(auto, 2);
       var kini = angkaForm("nilai_idr");
-      if (kini !== null && Math.abs(kini - auto) > 0.5) {
+      if (kini !== null && !samaSen(kini, auto)) {
         el.className = "bantu";
         el.innerHTML = "Ditimpa manual. Otomatisnya " + rp(auto) +
           ' · <button type="button" class="btn kecil" id="btn-reset-idr">pakai otomatis</button>';
         var rb = $("btn-reset-idr");
         if (rb) rb.addEventListener("click", function(){ ditimpa = false; hitungUlang(); });
       } else {
-        el.className = "bantu hitung"; el.textContent = "Otomatis: " + fx(jd) + " × " + fx(kb) + " = " + rp(auto);
+        el.className = "bantu hitung"; el.textContent = "Otomatis: " + fx(jd) + " × " + angkaTeks(kb, 4) + " = " + rp(auto);
       }
     } else { el.className = "bantu"; el.textContent = "Terisi otomatis begitu jumlah dan kurs diisi."; }
   }
@@ -15432,8 +15518,8 @@ function panelHarga(){
                     + ' Belum termasuk ongkos kirim, bea masuk, dan EMKL.">'
                     + (p._hppInvEst ? 'inv est' : 'inv') + '</span>'
                   : ''))+'</td>'
-            + '<td>'+(p._margin===null?'<span class="muted">—</span>':p._margin.toFixed(2)+'x')+'</td>'
-            + '<td>'+(p._gm===null?'<span class="muted">—</span>':p._gm.toFixed(1)+'%')+'</td>'
+            + '<td>'+(p._margin===null?'<span class="muted">—</span>':angkaTeks(p._margin,2)+'x')+'</td>'
+            + '<td>'+(p._gm===null?'<span class="muted">—</span>':angkaTeks(p._gm,1)+'%')+'</td>'
             + '<td class="l">'+(st?pill(st,CLS_MARGIN[st]):'<span class="muted">—</span>')+'</td>' : '')
         + '</tr>';
     });
@@ -15502,7 +15588,7 @@ function formHargaHpp(p){
 
   if (p._harga !== null && p._hpp !== null) {
     h += '<div class="flag"><span class="f-ico">i</span><div>Dengan angka sekarang: margin <b>'
-      + p._margin.toFixed(2) + 'x</b>, GM <b>' + p._gm.toFixed(1) + '%</b>.</div></div>';
+      + angkaTeks(p._margin, 2) + 'x</b>, GM <b>' + angkaTeks(p._gm, 1) + '%</b>.</div></div>';
   }
 
   $("laci-form").innerHTML = h;
@@ -15781,7 +15867,7 @@ function formEditMassal(jenis, daftar){
     /* cara "tetap" — bentuk medannya ikut kolomnya */
     if (jenisAngka(j)) {
       el.innerHTML = '<div class="baris">'
-        + field({nama:"besar", label:"Besarnya", jenis:"angka", tempel:"5  (boleh minus)"})
+        + field({nama:"besar", label:"Besarnya", jenis:"angka", minus:true, tempel:"5  (boleh minus)"})
         + field({nama:"bulat", label:"Pembulatan", jenis:"select", pilihan:BULAT_MASSAL})
         + '</div>';
     } else if (j === "bracket") {
@@ -15846,7 +15932,7 @@ function formEditMassal(jenis, daftar){
     if (c === "tempel") {
       var t = bacaTempel();
       if (!t.pasang.length) { tampilPesan("Belum ada baris yang bisa dibaca dari tempelan."); return; }
-      tempel = angka ? t.pasang.map(function(x){ return { product_id:x.product_id, nilai:angka1(x.nilai) }; })
+      tempel = angka ? t.pasang.map(function(x){ return { product_id:x.product_id, nilai:angka1(x.nilai, "auto") }; })
                      : t.pasang;
       idsPakai = t.pasang.map(function(x){ return x.product_id; });
       if (t.tidakDikenal.length) {
@@ -16075,8 +16161,6 @@ function formEditMassal(jenis, daftar){
   bukaLaci("Ubah massal");
 }
 
-/* angka() mengembalikan null untuk teks; dipakai saat tempelan harga */
-function angka1(v){ var n = angka(v); return n === null ? null : n; }
 
 /* pintu lama tetap dipakai tombol di tab Price List */
 function formHargaMassal(){ formEditMassal("harga"); }
@@ -16155,7 +16239,7 @@ function blokUsulanProduk(){
     + USULAN.baris.map(function(u){
         return '<tr><td class="l"><b>' + esc(u.usulan_teks || u.kode) + '</b></td>'
           + '<td class="l">' + esc(u.customer || "—") + '</td>'
-          + '<td>' + esc(u.qty_diminta || 0) + '</td>'
+          + '<td>' + esc(angkaTeks(u.qty_diminta || 0)) + '</td>'
           + '<td>' + (u.dipakai_po || 0) + '</td>'
           + '<td>' + (u.dipakai_sp || 0) + '</td>'
           + '<td style="text-align:right;white-space:nowrap">' + (boleh
@@ -16568,7 +16652,7 @@ function formOrderLihat(o){
     + [["No invoice", esc(o.no_invoice)], ["Supplier", esc(o.supplier)],
        ["Tanggal order", o.tanggal_order ? tglTampil(o.tanggal_order) : "—"],
        ["Nilai", o.total_nilai === null ? "—" : fx(o.total_nilai, o.mata_uang)],
-       ["Kurs estimasi", o.kurs_estimasi === null ? "—" : Number(o.kurs_estimasi).toLocaleString("id-ID")],
+       ["Kurs estimasi", o.kurs_estimasi === null ? "—" : angkaTeks(o.kurs_estimasi, 4)],
        ["Nilai estimasi", o._nilai === null ? "—" : rp(o._nilai)],
        ["Status produksi", esc(o.status_produksi)],
        ["ETD / ETA / tiba", [o.etd, o.eta, o.tanggal_tiba].map(function(x){ return x ? tglTampil(x) : "—"; }).join(" · ")]]
@@ -16766,7 +16850,7 @@ function buatBerkasPriceList(daftar, opt){
           return '<p class="th">' + esc(k) + '</p><div class="rows">'
             + g.per[k].map(function(p){
                 return '<div class="row"><span class="kd">' + esc(p.kode) + '</span>'
-                  + '<span class="ld"></span><span class="hg">Rp' + Math.round(p._harga).toLocaleString("id-ID")
+                  + '<span class="ld"></span><span class="hg">' + rp(p._harga)   /* #12 */
                   + (p.satuan !== "pcs" ? ' <i>/' + esc(p.satuan) + '</i>' : '') + '</span></div>';
               }).join("")
             + '</div>';
@@ -17276,7 +17360,7 @@ function tingkatSelisih(d){
 }
 function tandaSelisih(d){
   if (d === null) return '<span class="muted">baru</span>';
-  var t = tingkatSelisih(d), s = (d > 0 ? "+" : "") + (d*100).toFixed(1) + "%";
+  var t = tingkatSelisih(d), s = (d > 0 ? "+" : "") + angkaTeks(d*100, 1) + "%";
   if (t === "kecil") return '<span class="muted">'+s+'</span>';
   return pill(s, d > 0 ? (t === "genting" ? "p-belum" : "p-sebagian") : "p-lunas");
 }
