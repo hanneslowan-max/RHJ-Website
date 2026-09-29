@@ -63,3 +63,6 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - Nama pelanggan dirapikan otomatis: PT/CV/UD di depan, kapitalisasi seragam, singkatan dipertahankan; nama asli disimpan di nama_lama.
 - Industri pelanggan: Otomotif, Non Otomotif, Bengkel Otomotif.
 - Kategori produk: Roda, Pallet Mesh, Hospital, Filing Cabinet, Trolley, Hand Pallet, Lainnya.
+- Hapus produk hanya owner (#32): produk yang belum pernah dipakai (PO, SP, penawaran, lead, set roda, order impor, harga khusus) dihapus permanen beserta price list/HPP-nya; yang sudah dipakai tidak dihapus, melainkan dinonaktifkan. Produk nonaktif tidak ditawarkan lagi di pilihan barang.
+- Pencarian barang di form PO/penawaran/SP mencocokkan kode, merek, kelompok/seri, kategori, fungsi, bahan, ukuran, dan kode pabrik (#31).
+- Baris SP yang produknya belum punya price list (mis. produk baru/usulan) tetap ke keputusan GM, tetapi alasannya ditulis "belum ada price list", bukan "di bawah price list" (#33).

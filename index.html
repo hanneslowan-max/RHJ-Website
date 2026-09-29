@@ -3307,7 +3307,8 @@ function hitungProduk(){
                     : ukuranProduk(p.kode, p.kelompok)) || TAK_TERBACA;
     p._cari = (p.kode + " " + (p.brand||"") + " " + (p.kelompok||"") + " " + (p.kategori||"") + " " + (p.fungsi||"") + " " +   /* #26 */
                p._bahan + " " + p._ukuran + " " +
-               p._kodePabrik.map(function(k){ return k.kode_pabrik; }).join(" ")).toLowerCase().replace(/["”]/g,"");
+               p._kodePabrik.map(function(k){ return k.kode_pabrik; }).join(" "));
+    p._cari = normalCari(p._cari);   /* #31: dibakukan sama dengan teks yang diketik */
   });
 }
 
@@ -4160,15 +4161,35 @@ function bolehPindahSales(c){
    akan terlihat seperti SKU sah dan dipilih berulang kali — padahal justru
    sedang menunggu diputuskan: disahkan, atau digabungkan ke SKU yang sudah
    ada. Yang menampilkannya hanya antrean usulan di tab Produk. */
+/* #31: teks cari dibakukan sama di kedua sisi — huruf kecil, tanpa tanda petik/inci (" ” “ ″ '),
+   tanda pisah panjang jadi "-", spasi tunggal. `OSJB 5"` dan `osjb 5` jadi sama. */
+function normalCari(t){
+  return String(t || "").toLowerCase().replace(/["”“″′']/g, "").replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+}
+/* #31: cari di SEMUA kolom pengenal produk (indeks _cari hitungProduk: kode, merek, kelompok/seri,
+   kategori, fungsi, bahan, ukuran, kode pabrik), bukan cuma kode+merek. Dulu dipotong 20 hasil dalam
+   urutan merek→kode, jadi mengetik "osaka" menampilkan 20 produk OSAKA pertama dan sisanya tak
+   pernah terlihat. Sekarang diurutkan menurut kecocokan KODE (awalan dulu), maks. 40, dan jumlah
+   seluruh hasil disebut. #32: produk nonaktif tidak ditawarkan untuk transaksi baru. */
 function cariProdukLokal(q){
-  var t = String(q || "").trim().toLowerCase();
-  var sah = PRODUK.filter(function(p){ return !p.usulan; });
+  var t = normalCari(q);
+  var sah = PRODUK.filter(function(p){ return !p.usulan && p.aktif !== false; });
+  cariProdukLokal.jumlah = sah.length;
   if (!t) return sah.slice(0, 20);
-  var kata = t.split(/\s+/);
-  return sah.filter(function(p){
-    var s = ((p.kode || "") + " " + (p.nama || "") + " " + (p.brand || "")).toLowerCase();
-    return kata.every(function(w){ return s.indexOf(w) > -1; });
-  }).slice(0, 20);
+  var kata = t.split(" "), hasil = [];
+  sah.forEach(function(p){
+    var idx = p._cari || normalCari((p.kode || "") + " " + (p.brand || "") + " " + (p.kelompok || "") + " " + (p.kategori || ""));
+    if (!kata.every(function(w){ return idx.indexOf(w) > -1; })) return;
+    var kode = normalCari(p.kode), skor = 0;
+    if (kode.indexOf(kata[0]) === 0) skor += 4;
+    kata.forEach(function(w){ if (kode.indexOf(w) > -1) skor += 2; });
+    hasil.push({ p: p, s: skor });
+  });
+  hasil.sort(function(a, b){
+    return b.s - a.s || String(a.p.kode).localeCompare(String(b.p.kode), "id", { numeric: true });
+  });
+  cariProdukLokal.jumlah = hasil.length;
+  return hasil.slice(0, 40).map(function(x){ return x.p; });
 }
 /* Apakah ADA produk sah yang memuat teks ini utuh? Diperiksa ke seluruh
    PRODUK, bukan ke hasil pencarian yang sudah dipotong 20 baris — kalau
@@ -7443,9 +7464,11 @@ function pasangCariProduk(inp, pilih, usulkan){
        membuat yang baru. */
     var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q));
     if (!r.length && !tawaran) { box.hidden = true; return; }
+    var lebih = String(inp.value || "").trim() && cariProdukLokal.jumlah > r.length ? cariProdukLokal.jumlah - r.length : 0;   /* #31 */
     box.innerHTML = r.map(function(p){
         return '<div class="cari-opsi" data-id="'+p.id+'"><b>'+esc(p.nama || p.kode)+'</b>'
-          + '<span>'+esc(p.kode)+' · '+esc(p.brand || "")+'</span></div>'; }).join("")
+          + '<span>'+esc(p.brand || "")+(p.kelompok ? ' · '+esc(p.kelompok) : '')+(p.kategori && p.kategori !== "Roda" ? ' · '+esc(p.kategori) : '')+'</span></div>'; }).join("")
+      + (lebih ? '<div class="cari-kosong">+' + lebih + ' produk lain cocok — ketik lebih spesifik (mis. tambah ukuran atau fungsi).</div>' : '')
       + (tawaran
           ? '<div class="cari-opsi cari-usul" data-usul="1">'
             + '<b>+ Pakai "'+esc(q)+'" sebagai item baru</b>'
@@ -7453,7 +7476,7 @@ function pasangCariProduk(inp, pilih, usulkan){
             + '</div>'
           : '');
     box.hidden = false;
-    Array.prototype.forEach.call(box.children, function(d){
+    Array.prototype.forEach.call(box.querySelectorAll(".cari-opsi"), function(d){
       d.addEventListener("mousedown", function(ev){
         ev.preventDefault();
         if (d.dataset.usul) { box.hidden = true; usulkan(q); return; }
@@ -10325,6 +10348,15 @@ function panelKirim(){
   });
 }
 
+/* #33: alasan SP tertahan di GM — dulu selalu "di bawah price list", padahal baris yang produknya
+   BELUM PUNYA price list (mis. produk baru/usulan) juga tertahan (komisinya tak bisa dihitung).
+   so_ringkas.n_bawah_list / n_tanpa_list (berkas 110). */
+function alasanGmHarga(r){
+  var nb = r ? Number(r.n_bawah_list) || 0 : 0, nt = r ? Number(r.n_tanpa_list) || 0 : 0;
+  if (nt && !nb) return 'Ada ' + nt + ' barang yang <b>belum punya price list</b> (produk baru/usulan) — komisinya perlu diputus GM.';
+  if (nt && nb)  return 'Ada ' + nb + ' baris di bawah price list dan ' + nt + ' barang yang belum punya price list.';
+  return 'Ada harga di bawah price list.';
+}
 function formKirim(s){
   /* Dikunci juga kalau SP-nya masih menunggu keputusan GM. Database
      menolaknya sejak berkas 39, tapi menolak SESUDAH orangnya mengetik
@@ -10344,8 +10376,8 @@ function formKirim(s){
   var r = ringkasSo(s);
   var h = tahanGm
     ? '<div class="flag merah"><span class="f-ico">!</span><div>'
-      + '<b>Surat Pesanan ini masih menunggu keputusan GM.</b> Ada harga di bawah price '
-      + 'list, dan selama itu belum diputuskan, surat jalan dan invoice belum boleh diisi — '
+      + '<b>Surat Pesanan ini masih menunggu keputusan GM.</b> ' + alasanGmHarga(r) + ' Selama '
+      + 'itu belum diputuskan, surat jalan dan invoice belum boleh diisi — '
       + 'barangnya belum boleh keluar. Kotaknya dikunci di sini, dan database juga '
       + 'menolaknya.<br>Buka tab <b>Menunggu Konfirmasi GM</b> untuk memutuskan harganya '
       + 'dulu.</div></div>'
@@ -12832,7 +12864,7 @@ function namaBulan(ym){
    ═══════════════════════════════════════════════════════════════════════ */
 
 var GM_LABEL = {
-  harga:    { l:"Harga di bawah list", k:"p-sebagian" },
+  harga:    { l:"Harga di bawah / tanpa list", k:"p-sebagian" },   /* #33 */
   telat:    { l:"Invoice lewat 120 hari", k:"p-belum" },
   ehc_dini: { l:"Klaim EHC dini", k:"p-jalan" },
   rekening: { l:"Ubah rekening PIC", k:"p-ungu" },
@@ -12879,7 +12911,7 @@ function panelGmAntre(){
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile("Menunggu keputusan", G.baris.length + nUsulan, "termasuk usulan item",
            (G.baris.length + nUsulan) ? "alert" : "", "gm:semua")
-    + tile("Harga di bawah list", per.harga || 0, "SP tertahan", "", "gm:harga")
+    + tile("Harga di bawah / tanpa list", per.harga || 0, "SP tertahan", "", "gm:harga")   /* #33 */
     + tile("Invoice lewat 120 hari", per.telat || 0, "komisi perlu diputuskan", "", "gm:telat")
     + tile("Harga khusus", per.harga_khusus || 0, "menunggu persentase komisi",
            per.harga_khusus ? "alert" : "", "gm:harga_khusus")
@@ -17181,12 +17213,26 @@ function formProduk(p){
   $("laci-form").innerHTML = h;
   var kaki = boleh ? '<button class="btn utama" id="btn-simpan" type="button">'+(baru?"Simpan produk":"Simpan perubahan")+'</button>' : '';
   kaki += '<button class="btn" id="btn-batal" type="button">'+(boleh?"Batal":"Tutup")+'</button>';
+  if (!baru && bolehHapus()) kaki += '<button class="btn bahaya" id="btn-hapus-produk" type="button" style="margin-left:auto">Hapus produk</button>';   /* #32 */
   $("laci-kaki").innerHTML = kaki;
   $("btn-batal").addEventListener("click", tutupLaci);
+  if ($("btn-hapus-produk")) $("btn-hapus-produk").addEventListener("click", function(){ hapusProduk(p); });
   pasangPilihKetik("brand");
   pasangPilihKetik("kelompok");
   if (boleh) $("btn-simpan").addEventListener("click", function(){ simpanProduk(p, baru); });
   bukaLaci(baru ? "Produk baru" : p.kode);
+}
+
+/* #32: owner — produk yang belum pernah dipakai dihapus permanen (beserta price list/HPP-nya); yang sudah
+   dipakai PO/SP/penawaran/lead/set/impor/harga khusus dinonaktifkan. Keputusannya di database (hapus_produk). */
+function hapusProduk(p){
+  if (!confirm("Hapus produk " + p.kode + "?\n\nKalau belum pernah dipakai transaksi, produk ini beserta price list & HPP-nya "
+      + "dihapus permanen. Kalau sudah pernah dipakai, produk tidak dihapus — hanya dinonaktifkan supaya riwayatnya utuh.")) return;
+  sibuk(true, "Menghapus…");
+  api("POST", "/rpc/hapus_produk", { p_id: p.id })
+    .then(function(pesan){ return muatSemua().then(function(){ return pesan; }); })
+    .then(function(pesan){ tutupLaci(); gambar(); toast(String(pesan || "Selesai.")); })
+    .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
 }
 
 function simpanProduk(p, baru){
@@ -18520,7 +18566,7 @@ function mulai(){
   /* pencarian di sidebar melompat ke Price List dan menyaring di sana */
   var tg;
   $("cari-global").addEventListener("input", function(e){
-    var v = e.target.value.toLowerCase().replace(/["”]/g,"").trim();
+    var v = normalCari(e.target.value);   /* #31 */
     clearTimeout(tg);
     tg = setTimeout(function(){
       if (!saya) return;

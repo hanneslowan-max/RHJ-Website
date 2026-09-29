@@ -115,6 +115,12 @@ CREATE TABLE public.products (
 -- tipe_roda(kode) [berkas 94]: kunci tipe roda dari kode — produk yang hanya beda fungsi (H/M/R/S,
 --   OSJ/OSK/OSJB, OSNJ/OSNJB/OSNBK, SPJ/SPK/SPJB, HSUCJ/HSUCJB/HSUCK, JCB/KCB/JBCB, TSH/TFH/TSHJB,
 --   Hammer 320S/320SR, 500BPS/500BPR) mendapat kunci sama; dibandingkan tanpa spasi.
+-- Berkas 110: hapus_produk(p_id) [DEFINER, owner] -> teks — hapus permanen bila belum dipakai (po_lines,
+--   sales_order_lines, quote_lines, leads, product_set_components, import_lines, harga_khusus); price_list,
+--   product_costs, edit_massal_nilai, spesifikasi_sales ikut (cascade); factory_codes.product_id dilepas (NULL).
+--   Sudah dipakai -> aktif = false.
+--   View so_ringkas (+ n_bawah_list, n_tanpa_list di ujung — alasan pct NULL); antrean_gm 'harga' keterangan
+--   'Belum ada price list (produk baru/usulan) …' / 'Harga di bawah price list' (+ campuran).
 CREATE TABLE public.product_sets (   -- #1 set roda (berkas 74; dipakai PO sejak 85; aturan & snapshot 94)
   id bigint NOT NULL DEFAULT nextval('product_sets_id_seq'::regclass),
   kode text UNIQUE,
