@@ -10424,8 +10424,9 @@ function panelEhc(){
   h += kotakGerbang('<b>Tiga hal di sini dijaga database, bukan layar.</b><br>'
     + '1 · Klaim ditolak kalau SP-nya belum lunas — kecuali GM sudah menyetujui klaim dini. '
     + 'Penolakannya datang dari trigger <code>jaga_gerbang_klaim()</code>.<br>'
-    + '2 · Klaim tanpa bukti ditolak fungsi <code>ajukan_klaim_ehc()</code>, dan jalur simpan '
-    + 'langsung sudah ditutup — jadi aturannya tidak bisa dilewati dengan mematikan JavaScript.<br>'
+    + '2 · Klaim hanya lewat fungsi <code>ajukan_klaim_ehc()</code> — jalur simpan langsung ditutup, '
+    + 'jadi nominal ≤ EHC di SP, PIC penerima, dan rekening (untuk transfer) tidak bisa dilewati. '
+    + 'Bukti tidak wajib (#23); lampiran klaim lama tetap bisa diunduh di kolom Bukti.<br>'
     + '3 · Nominal klaim disimpan di tabel terpisah <code>ehc_klaim_nilai</code> dengan policy sendiri, '
     + 'karena RLS menyaring baris, bukan kolom. Kolom nominal yang tampil "—" berarti peran Anda '
     + 'memang tidak dikirimi angkanya — bukan datanya hilang.<br><br>'
@@ -10556,18 +10557,15 @@ function unduhBukti(jalur, nama){
        rekening yang BARU diisi langsung terkunci, dan yang sudah
        terkunci tidak bisa diganti dari sini — itu tetap lewat GM.
 
-   2 · Bukti transaksi wajib. Kalau tidak ada satu pun berkas, tombolnya
-       menolak — dan kalaupun tombolnya dipaksa, fungsi database yang
-       menolak. Layar hanya menjelaskan lebih awal.
+   2 · #23: bukti transaksi TIDAK wajib lagi, dan lampiran dari laci ini
+       dihapus. Yang menjaga klaim: ajukan_klaim_ehc() (nominal ≤ EHC,
+       PIC, rekening untuk transfer). Lampiran klaim lama tetap terbaca.
 
-   3 · Berkasnya baru diunggah saat klaim diajukan, bukan saat dipilih.
-       Kalau diunggah saat dipilih, orang yang lalu menutup laci akan
-       meninggalkan berkas yatim di storage yang tidak ada yang tahu. */
+   3 · BUKTI_JENIS, ukuranTampil & amanNama tetap ada — dipakai komisi. */
 var BUKTI_JENIS = ".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.csv,.docx,.doc";
 
 function formEhcBaru(soAwal){
   var E = LANJUT.ehc;
-  E.berkas = [];
   E.pic = [];
   /* Daftarnya hanya SP yang EHC-nya di atas nol. SP tanpa EHC memang
      bisa dimasukkan sebagai klaim Rp 0, tapi tidak ada gunanya sama
@@ -10588,7 +10586,7 @@ function formEhcBaru(soAwal){
               pilihan:[{v:"transfer",l:"Transfer ke rekening PIC"},
                        {v:"tunai",l:"Tunai — diserahkan langsung ke PIC"}],
               bantu:"Ada PIC yang tidak mau ditransfer. Untuk tunai, rekening tidak diperlukan — "
-                  + "yang menggantikan jejak banknya adalah nama PIC penerima dan buktinya." })
+                  + "jejak banknya adalah nama PIC penerima." })
     + field({ nama:"eh_nominal", label:"Nominal diserahkan ke PIC", jenis:"angka", wajib:true,
               bantu:"Sisanya otomatis jadi kas sales." })
     + field({ nama:"eh_tanggal", label:"Tanggal klaim", jenis:"date",
@@ -10630,29 +10628,6 @@ function formEhcBaru(soAwal){
       + "menyetujuinya satu per satu.\n\n"
       + "Kalau tidak mendesak, tekan \"Ajukan klaim\" yang biasa.")) return;
     simpanKlaimEhc(true);
-  });
-}
-
-function gambarBerkasEhc(){
-  var el = $("eh-berkas-daftar"); if (!el) return;
-  var b = LANJUT.ehc.berkas || [];
-  if (!b.length) {
-    el.innerHTML = '<div class="flag bad" id="eh-bukti-kosong"><span class="f-ico">!</span><div>'
-      + '<b>Belum ada bukti yang dilampirkan.</b> Klaim tidak bisa diajukan tanpa bukti — '
-      + 'penolakannya datang dari database, bukan dari tombol ini.</div></div>';
-    return;
-  }
-  el.innerHTML = '<div class="slot-grup">' + b.map(function(f, i){
-    return '<div class="slot ada"><div class="slot-berkas">'
-      + '<span>' + esc(f.name) + ' · ' + ukuranTampil(f.size) + '</span>'
-      + '<span class="slot-aksi"><button type="button" class="btn kecil bahaya" '
-      + 'data-buangberkas="' + i + '">Buang</button></span></div></div>';
-  }).join("") + '</div>';
-  Array.prototype.forEach.call(el.querySelectorAll("[data-buangberkas]"), function(x){
-    x.addEventListener("click", function(){
-      LANJUT.ehc.berkas.splice(Number(x.dataset.buangberkas), 1);
-      gambarBerkasEhc();
-    });
   });
 }
 
@@ -10698,8 +10673,7 @@ function gambarRekPic(nilai){
       ? '<div class="flag"><span class="f-ico">i</span><div>'
         + '<b>' + esc(pt.nama) + '</b> menerima uangnya langsung, tunai.<br>'
         + 'Rekening tidak diperlukan dan tidak ikut tersimpan. Yang menggantikan jejak banknya '
-        + 'adalah nama PIC di atas dan bukti yang Anda lampirkan — kuitansi bertanda tangan, '
-        + 'misalnya.</div></div>'
+        + 'adalah nama PIC di atas.</div></div>'
       : "";
     return;
   }
@@ -10786,7 +10760,6 @@ function simpanKlaimEhc(cepat){
       + "atau ganti cara bayarnya jadi tunai kalau uangnya memang diserahkan langsung."); return;
   }
 
-  var terunggah = [];
   sibuk(true, "Menyimpan klaim…");
   Promise.resolve()
     .then(function(){
@@ -10802,22 +10775,6 @@ function simpanKlaimEhc(cepat){
       }).then(function(r){ return Number(Array.isArray(r) ? r[0] : r); });
     })
     .then(function(picId){
-      sibuk(true, "Mengunggah bukti…");
-      var urut = Promise.resolve();
-      var kunci = Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-      E.berkas.forEach(function(f){
-        urut = urut.then(function(){
-          var jalur = "ehc/" + kunci + "/" + Date.now() + "-" + amanNama(f.name);
-          return storage("POST", "/object/dokumen/" + encodeURI(jalur), f,
-                         f.type || "application/octet-stream")
-            .then(function(){
-              terunggah.push({ nama_berkas:f.name, path:jalur, ukuran:f.size, mime:f.type || null });
-            });
-        });
-      });
-      return urut.then(function(){ return picId; });
-    })
-    .then(function(picId){
       sibuk(true, cepat ? "Mengajukan klaim cepat…" : "Mengajukan klaim…");
       /* Satu RPC, bukan dua. Kalau klaimnya dibuat lebih dulu lalu
          permintaan cepatnya dikirim terpisah, yang kedua bisa gagal dan
@@ -10827,10 +10784,10 @@ function simpanKlaimEhc(cepat){
       return api("POST", cepat ? "/rpc/ajukan_klaim_ehc_cepat" : "/rpc/ajukan_klaim_ehc",
         cepat
           ? { p_so: Number(soId), p_pic: picId, p_nominal: nominal,
-              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: terunggah, p_cara_bayar: cara,
+              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: [], p_cara_bayar: cara,
               p_alasan: alasanCepat }
           : { p_so: Number(soId), p_pic: picId, p_nominal: nominal,
-              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: terunggah, p_cara_bayar: cara });
+              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: [], p_cara_bayar: cara });   /* #23: tanpa lampiran */
     })
     .then(function(){
       tutupLaci();
@@ -10838,20 +10795,9 @@ function simpanKlaimEhc(cepat){
         ? "Klaim EHC tersimpan dan diajukan sebagai KLAIM CEPAT — menunggu putusan GM."
         : "Klaim EHC tersimpan.");
       E.dimuat = false; LANJUT.kas.dimuat = false;
-      E.berkas = [];
       muatEhc().then(panelEhc).catch(function(){});
     })
-    .catch(function(e){
-      /* Klaimnya gagal, jadi berkas yang sudah naik tidak punya pemilik.
-         Dibersihkan di sini; kalau pembersihannya sendiri gagal, klaimnya
-         tetap dilaporkan gagal — itu yang perlu diketahui orangnya. */
-      var buang = terunggah.length
-        ? storage("DELETE", "/object/dokumen",
-            JSON.stringify({ prefixes: terunggah.map(function(x){ return x.path; }) }),
-            "application/json").catch(function(){})
-        : Promise.resolve();
-      return buang.then(function(){ tampilPesan(esc(e.message)); });
-    })
+    .catch(function(e){ tampilPesan(esc(e.message)); })
     .then(function(){ sibuk(false); });
 }
 
