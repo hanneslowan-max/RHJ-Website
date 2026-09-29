@@ -5,7 +5,8 @@
 
 # Ruflo config & runtime — kept local, not committed to the repo
 # (files stay on disk so Claude Code still reads them; git just ignores them)
-.claude/
+.claude/*
+!.claude/settings.json
 .claude-flow/
 .agents/
 .swarm/
