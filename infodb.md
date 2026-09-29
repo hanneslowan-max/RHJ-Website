@@ -699,6 +699,13 @@ CREATE TABLE public.sales_order_lines (
 --   batal_semua. po_belum_sp mengecualikan PO yang SP-nya batal_karena_barang. batalkan_sp biasa: PO tetap
 --   kembali ke antrean (SP salah input dibuat ulang).
 -- laporan_margin_produk / laporan_margin_sp / gm_konteks_keputusan memakai qty efektif [berkas 98].
+-- #10 [berkas 103]: view sp_menunggu_po (security_invoker) + kolom di ujung: po_menyusul, tanpa_po_alasan,
+--   dibuat_oleh, vonny_ok, mode_po ('tanpa_po' | 'menyusul' | 'belum' = mode PO belum dinyatakan).
+-- #21 [berkas 104]: gm_konteks_keputusan(p_jenis, p_ref) kini juga untuk 'ehc_dini' (ref = SP) dan 'ubah'
+--   (ref = usul_ubah.id; baris versi 'sebelum'/'sesudah'). Hasil: kode, qty (efektif), harga_nett, ehc, hpp,
+--   margin (= nett − HPP, sesudah EHC; NULL bila HPP kosong), harga_jual (= nett + EHC), margin_kotor
+--   (= harga_jual − HPP, sebelum EHC), margin_pct, margin_total (= margin × qty), versi, urut. Baris batal
+--   disaring. Untuk usul PO: harga_jual = harga efektif sesudah diskon, margin_kotor = harga_jual − HPP.
 CREATE TABLE public.so_kirim (   -- surat jalan bertahap (#15, berkas 76)
   id bigint NOT NULL DEFAULT nextval('so_kirim_id_seq'::regclass),
   so_id bigint NOT NULL,
