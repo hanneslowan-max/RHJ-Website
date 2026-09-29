@@ -405,6 +405,12 @@
   @media (max-width:760px){ .tw.beku{max-height:calc(100vh - 190px)} }
   .muted{color:var(--ink-3)}
   .neg{color:var(--bad-tx);font-weight:550}
+  /* #16: kartu angka yang bisa diklik + sorotan tujuan */
+  .tile.klik{cursor:pointer;transition:border-color .15s, box-shadow .15s}
+  .tile.klik:hover{border-color:var(--ink-3)}
+  .tile.klik:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:2px}
+  @keyframes sorot{0%{box-shadow:0 0 0 3px rgba(37,99,235,.45)}100%{box-shadow:0 0 0 3px rgba(37,99,235,0)}}
+  .sorot{animation:sorot 1.6s ease-out}
   /* #24: kepala kolom yang bisa diurutkan */
   th[data-urut],th.urut-dom{cursor:pointer;user-select:none;white-space:nowrap}
   th[data-urut]:hover,th.urut-dom:hover{text-decoration:underline}
@@ -1341,11 +1347,11 @@ function panelCrm(){
   var win = nLead ? Math.round(nDeal / nLead * 1000) / 10 : 0;
 
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Lead", nLead, CRM.hari ? CRM.hari + " hari terakhir" : "sejak awal", "", "pelanggan")
-    + tile("Penawaran terkirim", per["Penawaran Terkirim"].length, "", "", "penawaran")
-    + tile("Deal", nDeal, "", "", "po")
-    + tile("Win rate", win + "%", "deal ÷ lead", "", "crm")
-    + tile("Diam lebih dari 10 hari", lambat, "menunggu kabar", lambat ? "alert" : "", "crm")
+    + tile("Lead", nLead, CRM.hari ? CRM.hari + " hari terakhir" : "sejak awal", "", "crm:tabel")
+    + tile("Penawaran terkirim", per["Penawaran Terkirim"].length, "", "", ["penawaran","crm:tabel"])
+    + tile("Deal", nDeal, "", "", ["po","crm:tabel"])
+    + tile("Win rate", win + "%", "deal ÷ lead", "", "crm:tabel")
+    + tile("Diam lebih dari 10 hari", lambat, "menunggu kabar", lambat ? "alert" : "", "crm:lambat")
     + '</div>';
 
   h += '<div class="baris-alat" style="margin-top:16px">'
@@ -1367,8 +1373,18 @@ function panelCrm(){
     +    '<button class="btn'+(CRM.tampil==="tabel"?" utama":"")+'" data-v="tabel" type="button">Tabel</button>'
     +  '</div></div>';
 
-  h += CRM.tampil === "papan" ? papanCrm(per) : tabelCrm(d);
+  /* #16: saringan "diam > 10 hari" dari tile — terlihat & bisa dihapus */
+  if (CRM.lambat) {
+    var dLambat = d.filter(function(l){ return l.tahap === "Menunggu Kabar" && umurLead(l) > 10; });
+    h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>Hanya lead <b>Menunggu Kabar</b> '
+      + 'yang diam lebih dari 10 hari (' + dLambat.length + '). '
+      + '<button class="btn kecil" id="btn-crm-lambat-hapus" type="button">Tampilkan semua</button></div></div>';
+    h += tabelCrm(dLambat);
+  } else {
+    h += CRM.tampil === "papan" ? papanCrm(per) : tabelCrm(d);
+  }
   el.innerHTML = h;
+  if ($("btn-crm-lambat-hapus")) $("btn-crm-lambat-hapus").addEventListener("click", function(){ CRM.lambat = false; panelCrm(); });
 
   $("crm-hari").addEventListener("change", function(){
     CRM.hari = Number(this.value); CRM.dimuat = false; panelCrm();
@@ -1416,7 +1432,7 @@ function papanCrm(per){
 function tabelCrm(d){
   if (!d.length) return '<p class="muted" style="margin-top:16px">Tidak ada lead pada saringan ini.</p>';
   var pakaiNilai = bolehLihatHpp();
-  return '<div class="tw" style="margin-top:14px"><table><thead><tr>'
+  return '<div class="tw" id="daftar-crm" style="margin-top:14px"><table><thead><tr>'
     + '<th>Tanggal</th><th class="l">Pelanggan</th><th class="l">Permintaan</th>'
     + '<th class="l">Sales</th><th class="l">Tahap</th><th>Umur</th>'
     + (pakaiNilai ? '<th class="r">Nilai</th>' : '') + '</tr></thead><tbody>'
@@ -4520,13 +4536,13 @@ function panelPo(){
 
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile(cari ? "Hasil pencarian" : "PO tersubmit", ALUR.po.length,
-           cari ? 'untuk "' + esc(cari) + '" · seluruh waktu' : labelPeriodePo(), "", "sp")
+           cari ? 'untuk "' + esc(cari) + '" · seluruh waktu' : labelPeriodePo(), "", "po")
     + tile("Belum jadi SP", nBelum + (ALUR.belumTerpotong ? "+" : ""),
-           "seluruh waktu, bukan cuma yang tampil", nBelum ? "alert" : "", "sp")
+           "seluruh waktu, bukan cuma yang tampil", nBelum ? "alert" : "", (bolehAlurJual() ? ["sp:buat","po:belum"] : "po:belum"))
     + tile("Nilai PO", rpS(ALUR.po.reduce(function(a,p){
         return a + (p.ringkas ? Number(p.ringkas.sub_total) : 0); }, 0)),
-        String(ALUR.poPeriode) === "0" ? "tanpa PPN" : "tanpa PPN · " + labelPeriodePo(), "", "report")
-    + tile("Nomor PO dobel", nDobel, "seluruh waktu", nDobel ? "alert" : "", "po")
+        String(ALUR.poPeriode) === "0" ? "tanpa PPN" : "tanpa PPN · " + labelPeriodePo(), "", "po:nilai")
+    + tile("Nomor PO dobel", nDobel, "seluruh waktu", nDobel ? "alert" : "", "po:dobel")
     + '</div>';
   if (cari) {
     h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
@@ -4601,7 +4617,7 @@ function panelPo(){
       + '<span class="muted" id="po-pesan">'+ALUR.pesan+'</span></div>';
   }
 
-  h += '<h3 class="sec">' + (cari ? 'Hasil pencarian' : 'PO tersubmit') + '</h3>'
+  h += '<h3 class="sec" id="daftar-po">' + (cari ? 'Hasil pencarian' : 'PO tersubmit') + '</h3>'
      + alatPo();
   var bolehUsulPo = bolehInputPo();
   h += '<div class="tw"><table><thead><tr>'
@@ -4620,7 +4636,19 @@ function panelPo(){
         : 'Belum ada PO dalam ' + esc(labelPeriodePo())
           + '. Ubah periodenya tepat di atas tabel ini kalau mencari PO yang lebih lama.')
     + '</td></tr>';
-  var poUrut = sortBaris(ALUR.po, ALUR.poSort);   /* #24 */
+  /* #16: saringan dari tile ("belum jadi SP" / "nomor dobel") — terlihat & bisa dihapus */
+  var poSumber = ALUR.po;
+  if (ALUR.poSaring === "belum") {
+    var idBelum = {}; (ALUR.poBelum || []).forEach(function(x){ idBelum[x.id] = 1; });
+    poSumber = poSumber.filter(function(p){ return idBelum[p.id]; });
+  } else if (ALUR.poSaring === "dobel") {
+    poSumber = poSumber.filter(function(p){ return !!kunciDobel[String(p.no_po).trim().toLowerCase()]; });
+  }
+  if (ALUR.poSaring) h += '<tr><td colspan="9" class="l"><span class="pill p-sebagian">'
+    + (ALUR.poSaring === "belum" ? "Hanya PO yang belum jadi SP" : "Hanya nomor PO dobel")
+    + ' — ' + poSumber.length + ' dari ' + ALUR.po.length + '</span> '
+    + '<button class="btn kecil" id="btn-po-saring-hapus" type="button">Tampilkan semua</button></td></tr>';
+  var poUrut = sortBaris(poSumber, ALUR.poSort);   /* #24 */
   poUrut.forEach(function(p){
     /* Penanda dobel per baris ikut dibaca dari po_nomor_dobel, bukan
        dari PO yang kebetulan sedang tampil. Bedanya nyata: nomor yang
@@ -4659,6 +4687,7 @@ function panelPo(){
   h += '</tbody></table></div>';
   el.innerHTML = h;
   pasangUrut(el, function(){ return ALUR.poSort; }, function(v){ ALUR.poSort = v; }, panelPo);   /* #24 */
+  if ($("btn-po-saring-hapus")) $("btn-po-saring-hapus").addEventListener("click", function(){ ALUR.poSaring = ""; panelPo(); });   /* #16 */
 
   $("po-periode").addEventListener("change", function(){
     ALUR.poPeriode = this.value; ALUR.dimuatPo = false; panelPo();
@@ -5966,15 +5995,15 @@ function panelSp(){
   var jendela = cariSp ? 'untuk "' + esc(cariSp) + '" · seluruh waktu' : labelPeriodeSp();
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile(cariSp ? "Hasil pencarian" : "SP", ALUR.sp.length,
-           jendela + (ALUR.spStatus ? " · status " + esc(ALUR.spStatus) : ""), "", "sp")
-    + tile("PO belum jadi SP", poSiap.length, "menunggu dibuatkan", poSiap.length ? "alert" : "", "po")
+           jendela + (ALUR.spStatus ? " · status " + esc(ALUR.spStatus) : ""), "", "sp:semua")
+    + tile("PO belum jadi SP", poSiap.length, "menunggu dibuatkan", poSiap.length ? "alert" : "", (bolehAlurJual() ? ["sp:buat","po:belum"] : "po:belum"))
     + tile("Menunggu konfirmasi GM", menungguGm + (ALUR.spMenungguLebih ? "+" : ""),
-           "seluruh waktu, bukan cuma yang tampil", menungguGm ? "alert" : "", "gm")
+           "seluruh waktu, bukan cuma yang tampil", menungguGm ? "alert" : "", "sp:menunggu-gm")
     + tile("SP menunggu PO", tanpaPo.length,
            tertahan.length ? tertahan.length + " sudah kirim, invoice tertahan"
                            : "PO pelanggan belum datang",
-           tertahan.length ? "alert" : "", "sp")
-    + (bolehLihatHpp() ? tile("Komisi terhitung", rpS(totKomisi), "hanya yang tampil di bawah", "", "komisi") : "")
+           tertahan.length ? "alert" : "", "sp:menunggu-po")
+    + (bolehLihatHpp() ? tile("Komisi terhitung", rpS(totKomisi), "hanya yang tampil di bawah", "", ["komisi","sp:komisi"]) : "")
     + '</div>';
   if (cariSp) {
     h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
@@ -5998,7 +6027,7 @@ function panelSp(){
      pekerjaan yang menahan uang, dan daftar semacam itu tidak boleh
      berada di tempat yang cuma terlihat kalau orang menggulir. */
   if (tanpaPo.length) {
-    h += '<h3 class="sec">SP menunggu PO <span class="muted">' + tanpaPo.length
+    h += '<h3 class="sec" id="sp-menunggu-po">SP menunggu PO <span class="muted">' + tanpaPo.length
       +  ' Surat Pesanan berjalan tanpa PO</span></h3>'
       +  '<div class="tw"><table><thead><tr><th>No SP</th><th>Kepada</th><th>Tgl</th>'
       +  '<th>Umur</th><th class="l">Keadaan</th><th class="l">Alasan</th>'
@@ -6033,7 +6062,7 @@ function panelSp(){
   }
 
   if (bolehAlurJual()) {
-    h += '<h3 class="sec">Buat Surat Pesanan</h3>';
+    h += '<h3 class="sec" id="sp-buat">Buat Surat Pesanan</h3>';
     h += '<div class="kotak"><div class="kotak-isi">'
       + medanAlur("Sumber", '<select id="sp-mode">'
           + '<option value="po"' + (spManual(f) ? '' : ' selected') + '>Dari PO customer</option>'
@@ -6292,7 +6321,7 @@ function panelSp(){
     }
   }
 
-  h += '<h3 class="sec">' + (cariSp ? 'Hasil pencarian' : 'Surat Pesanan terbaru') + '</h3>'
+  h += '<h3 class="sec" id="daftar-sp">' + (cariSp ? 'Hasil pencarian' : 'Surat Pesanan terbaru') + '</h3>'
      + alatSp();
   var bolehUsul = bolehAlurJual();
   h += '<div class="tw"><table><thead><tr>'
@@ -7645,10 +7674,10 @@ function panelPelangganTab(){
 
   var R = P.ringkas || {};
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Pelanggan", R.semua === null || R.semua === undefined ? "—" : R.semua, "seluruh master", "", "pelanggan")
-    + tile("Dari pipeline", R.pipeline === null || R.pipeline === undefined ? "—" : R.pipeline, "pernah masuk CRM", "", "crm")
-    + tile("Dari sheet master", R.master === null || R.master === undefined ? "—" : R.master, "daftar customer & prospek", "", "pelanggan")
-    + tile("Daftar hitam", R.hitam === null || R.hitam === undefined ? "—" : R.hitam, "PO ditolak database", R.hitam ? "alert" : "", "pelanggan")
+    + tile("Pelanggan", R.semua === null || R.semua === undefined ? "—" : R.semua, "seluruh master", "", "pelanggan:semua")
+    + tile("Dari pipeline", R.pipeline === null || R.pipeline === undefined ? "—" : R.pipeline, "pernah masuk CRM", "", "pelanggan:pipeline")
+    + tile("Dari sheet master", R.master === null || R.master === undefined ? "—" : R.master, "daftar customer & prospek", "", "pelanggan:master")
+    + tile("Daftar hitam", R.hitam === null || R.hitam === undefined ? "—" : R.hitam, "PO ditolak database", R.hitam ? "alert" : "", "pelanggan:hitam")
     + '</div>';
 
   h += '<div class="baris-alat" style="margin-top:16px">'
@@ -7687,7 +7716,7 @@ function panelPelangganTab(){
     /* #24: urut klik-kepala di SERVER (daftar berhalaman) — berlaku lintas halaman. Kolom Sales
        berisi id, bukan abjad, jadi tidak ikut. */
     var su = P.urutKol || null;
-    h += '<div class="tw"><table><thead><tr>'
+    h += '<div class="tw" id="daftar-pelanggan"><table><thead><tr>'
       +  thUrut("Nama","nama",su,"l") + '<th class="l">Sales</th>' + thUrut("Nomor HP","hp",su,"l")
       +  thUrut("PIC","pic",su,"l") + thUrut("Cabang","cabang",su,"l") + thUrut("Industri","industri",su,"l")
       +  thUrut("Sumber","sumber",su,"l") + thUrut("Status","status",su,"l")
@@ -8319,9 +8348,9 @@ function panelPenawaran(){
 
   var h = (peranSales() ? kotakAkunSales() : '')   /* #11: akun sales belum ditautkan = penawaran tak bisa disimpan */
     + '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Penawaran", P.baris.length, "300 terbaru", "", "penawaran")
-    + tile("Nilai penawaran", rpS(nilai), "sebelum PPN", "", "penawaran")
-    + tile("Lewat masa berlaku", kadaluarsa, "perlu ditindaklanjuti", kadaluarsa ? "alert" : "", "penawaran")
+    + tile("Penawaran", P.baris.length, "300 terbaru", "", "penawaran:semua")
+    + tile("Nilai penawaran", rpS(nilai), "sebelum PPN", "", "penawaran:nilai")
+    + tile("Lewat masa berlaku", kadaluarsa, "perlu ditindaklanjuti", kadaluarsa ? "alert" : "", "penawaran:lewat")
     + '</div>';
 
   if (P.pesan) h += '<div class="flag"><span class="f-ico">✓</span><div>' + esc(P.pesan) + '</div></div>';
@@ -8361,7 +8390,7 @@ function panelPenawaran(){
       : "Belum ada penawaran. Yang dibuat di sini akan muncul di daftar ini.");
   } else {
     var kolSales = !peranSales();   /* #11: sales hanya melihat miliknya — kolomnya tak perlu */
-    h += '<div class="tw"><table><thead><tr><th class="l">Nomor</th><th>Tanggal</th>'
+    h += '<div class="tw" id="daftar-penawaran"><table><thead><tr><th class="l">Nomor</th><th>Tanggal</th>'
       +  '<th class="l">Kepada</th>' + (kolSales ? '<th class="l">Sales</th>' : '')
       +  '<th>Baris</th><th>Nilai</th><th class="l">Masa berlaku</th>'
       +  '</tr></thead><tbody>'
@@ -8829,16 +8858,16 @@ function panelPerforma(){
   var totKomisi = d.reduce(function(a, x){ return a + x.komisi; }, 0);
 
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Lead", totLead, labelPeriodePf(P), "", "performa")
-    + tile("Deal", totDeal, totLead ? Math.round(totDeal / totLead * 1000) / 10 + "% win rate" : "", "", "performa")
-    + tile("Nilai Surat Pesanan", rpS(totNilai), "barang + EHC, tanpa PPN", "", "sp")
-    + tile("Komisi terhitung", rpS(totKomisi), "dari so_ringkas", "", "komisi")
+    + tile("Lead", totLead, labelPeriodePf(P), "", "performa:lead")
+    + tile("Deal", totDeal, totLead ? Math.round(totDeal / totLead * 1000) / 10 + "% win rate" : "", "", "performa:deal")
+    + tile("Nilai Surat Pesanan", rpS(totNilai), "barang + EHC, tanpa PPN", "", ["performa:nilai"])
+    + tile("Komisi terhitung", rpS(totKomisi), "dari so_ringkas", "", ["komisi","performa:komisi"])
     + '</div>';
 
   if (!totLead && !d.length) {
     h += kosong("Belum ada lead maupun Surat Pesanan dalam jendela waktu ini.");
   } else {
-    h += '<h3 class="sec">Per sales</h3><div class="tw"><table><thead><tr>'
+    h += '<h3 class="sec">Per sales</h3><div class="tw" id="daftar-performa"><table><thead><tr>'
       +  '<th class="l">Sales</th><th>Lead</th><th>Penawaran</th><th>Deal</th><th>Batal</th>'
       +  '<th>Win rate</th><th>SP</th><th>Nilai SP</th><th>Komisi</th></tr></thead><tbody>'
       +  d.map(function(x){
@@ -9332,6 +9361,13 @@ var KIRIM_HAL = [
     syarat:"no_surat_jalan=not.is.null", tglKol:"tgl_surat_jalan" }
 ];
 
+/* #16: cacah untuk tile Pengiriman (syarat sama dengan KIRIM_HAL: tidak batal, sudah lolos Vonny). */
+var KIRIM_TILE = [
+  { id:"inv", q:"/sales_orders?select=id&batal=is.false&no_surat_jalan=not.is.null&no_invoice=is.null"
+      + "&status=neq." + encodeURIComponent("menunggu vonny") },
+  { id:"fak", q:"/sales_orders?select=id&batal=is.false&no_invoice=not.is.null&no_faktur=is.null"
+      + "&status=neq." + encodeURIComponent("menunggu vonny") }
+];
 function kirimHal(id){
   var K = LANJUT.kirim;
   var d = KIRIM_HAL.filter(function(x){ return x.id === id; })[0] || KIRIM_HAL[0];
@@ -9363,7 +9399,7 @@ function panelVonnyCek(){
   $("head-aksi").innerHTML = "";
   var d = V.baris, boleh = bolehKonfirmasiKirim();
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Menunggu cek Vonny", d.length, "SP perlu diloloskan", d.length ? "alert" : "")
+    + tile("Menunggu cek Vonny", d.length, "SP perlu diloloskan", d.length ? "alert" : "", "vonnycek:daftar")
     + '</div>'
     + '<div class="flag"><span class="f-ico">i</span><div>SP yang baru dibuat sales masuk sini dulu untuk '
     + '<b>dicek kelayakannya oleh Vonny</b>. Selama di sini, SP <b>belum</b> tampil di Pengiriman & Invoice '
@@ -9371,7 +9407,7 @@ function panelVonnyCek(){
   if (!d.length) {
     h += kosong("Tidak ada SP yang menunggu cek Vonny.");
   } else {
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th>Tgl</th><th class="l">Kepada</th>'
+    h += '<div class="tw" id="daftar-vonnycek"><table><thead><tr><th class="l">No SP</th><th>Tgl</th><th class="l">Kepada</th>'
       +  '<th class="l">Sales</th><th class="r">Grand Total</th>' + (boleh ? '<th></th>' : '')
       +  '</tr></thead><tbody>'
       +  d.map(function(s){ var r = ringkasSo(s);
@@ -9507,19 +9543,28 @@ function panelKirim(){
      tetap memegang data lama dan menampilkannya sebagai kebenaran. */
   if (!K.dimuat) {
     KIRIM_HAL.forEach(function(d){ if (K.hlm[d.id]) K.hlm[d.id].dimuat = false; });
-    K.cacah = null; K.dimuat = true;
+    K.cacah = null; K.cacahTile = null; K.dimuat = true;
   }
   var H = kirimHal(K.hal);
   if (!H.dimuat && !H.memuat) {
     el.innerHTML = kotakMuat("Memuat Surat Pesanan…");
-    Promise.all([muatKirim(), K.cacah ? null : cacahHalaman(KIRIM_HAL).then(function(c){ K.cacah = c; })])
+    Promise.all([muatKirim(), K.cacah ? null : cacahHalaman(KIRIM_HAL).then(function(c){ K.cacah = c; }),
+                 K.cacahTile ? null : cacahHalaman(KIRIM_TILE).then(function(c){ K.cacahTile = c; })])   /* #16 */
       .then(function(){ panelKirim(); })
       .catch(function(e){ el.innerHTML = kotakGalat(e); });
     return;
   }
   $("head-aksi").innerHTML = "";
 
-  var h = tabHalaman("kr", K.hal, KIRIM_HAL, K.cacah);
+  /* #16: tile ringkas — angka dari server (seluruh SP, bukan cuma yang tampil) */
+  var ct = K.cacahTile || {}, cc = K.cacah || {};
+  var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
+    + tile("Belum terkirim", cacahTeks(cc.belum) || "—", "belum ada surat jalan", (cc.belum && cc.belum.n) ? "alert" : "", "kirim:belum")
+    + tile("Sudah terkirim", cacahTeks(cc.sudah) || "—", "surat jalan terbit", "", "kirim:sudah")
+    + tile("Invoice belum ada", cacahTeks(ct.inv) || "—", "sudah kirim, belum ditagih", (ct.inv && ct.inv.n) ? "alert" : "", "kirim:inv")
+    + tile("Faktur belum ada", cacahTeks(ct.fak) || "—", "invoice ada, faktur pajak belum", "", "kirim:fak")
+    + '</div>';
+  h += '<div id="daftar-kirim">' + tabHalaman("kr", K.hal, KIRIM_HAL, K.cacah) + '</div>';
 
   h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
     + (K.hal === "belum"
@@ -9982,12 +10027,12 @@ function panelLunas(){
   var nilaiBelum = belum.reduce(function(a, s){ var r = ringkasSo(s); return a + (r ? Number(r.grand_total) || 0 : 0); }, 0);
 
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Invoice belum lunas", belum.length, "sudah ditagih", "", "lunas")
-    + tile("Nilai belum tertagih", rpS(nilaiBelum), "termasuk PPN", "", "kirim")
-    + tile("Lewat 120 hari", lewat.length, "komisi turun, perlu putusan GM", lewat.length ? "alert" : "", "gm")
+    + tile("Invoice belum lunas", belum.length, "sudah ditagih", "", "lunas:belum")
+    + tile("Nilai belum lunas", rpS(nilaiBelum), "termasuk PPN", "", "lunas:nilai")
+    + tile("Lewat 120 hari", lewat.length, "komisi turun, perlu putusan GM", lewat.length ? "alert" : "", "lunas:telat")
     + tile("Cash belum dicocokkan", belumCocok.length,
            belumCocok.length ? "komisi masih tier biasa" : "tidak ada yang menunggu",
-           belumCocok.length ? "alert" : "", "lunas")
+           belumCocok.length ? "alert" : "", "lunas:cash")
     + '</div>';
 
   h += '<div class="baris-alat" style="margin-top:16px">'
@@ -10025,7 +10070,7 @@ function panelLunas(){
   } else if (!d.length) {
     h += kosong("Tidak ada yang cocok dengan pencarian ini.");
   } else {
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th class="l">No Invoice</th>'
+    h += '<div class="tw" id="daftar-lunas"><table><thead><tr><th class="l">No SP</th><th class="l">No Invoice</th>'
       +  '<th>Tgl invoice</th><th class="l">Customer</th><th class="l">Sales</th>'
       +  '<th>Nilai invoice</th><th>Umur</th><th class="l">Cash</th>'
       +  '<th class="l">Status</th></tr></thead><tbody>'
@@ -10595,7 +10640,7 @@ function panelEhc(){
   if (kos) {
     h += kos;
   } else if (d0.jenis === "sp") {
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
+    h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
       +  '<th>Tgl lunas</th><th class="l">Customer</th><th class="l">Sales</th>'
       +  '<th>EHC di SP</th><th class="l">Bisa diklaim?</th></tr></thead><tbody>'
       +  d.map(barisSpEhc).join("") + '</tbody></table></div>';
@@ -10607,12 +10652,12 @@ function panelEhc(){
     var tunai = d.filter(function(k){ return k.cara_bayar === "tunai"; }).length;
     h += '<div class="tiles" style="margin-top:12px">'
       + tile("Klaim di halaman ini", d.length,
-             tunai ? "sesudah saringan · " + tunai + " diserahkan tunai" : "sesudah saringan", "", "ehc")
+             tunai ? "sesudah saringan · " + tunai + " diserahkan tunai" : "sesudah saringan", "", "ehc:daftar")
       + tile("Nominal ke PIC", adaNilai ? rpS(tot) : "—",
-             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "ehc")
-      + tile("Jadi kas sales", adaNilai ? rpS(totKas) : "—", adaNilai ? "jumlah yang tampil" : "", "", "ehc")
+             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "ehc:nominal")
+      + tile("Jadi kas sales", adaNilai ? rpS(totKas) : "—", adaNilai ? "jumlah yang tampil" : "", "", ["kas","ehc:daftar"])
       + '</div>';
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
+    h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
       +  '<th class="l">Customer</th><th class="l">PIC</th><th class="l">Cara bayar</th>'
       +  '<th>Nominal</th><th>Kas sales</th><th class="l">Bukti</th>'
       +  '<th class="l">Transfer</th></tr></thead><tbody>'
@@ -11176,7 +11221,7 @@ function panelKomisi(){
   if (kos) {
     h += kos;
   } else if (d0.jenis === "sp") {
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
+    h += '<div class="tw" id="daftar-komisi"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
       +  '<th>Tgl lunas</th><th class="l">Customer</th><th class="l">Sales</th>'
       +  '<th>Nilai barang</th><th>Komisi</th><th class="l">Bisa diklaim?</th>'
       +  '</tr></thead><tbody>'
@@ -11205,13 +11250,13 @@ function panelKomisi(){
       var n = nilaiKlaimKomisi(k); return a + (n ? Number(n.nominal) || 0 : 0); }, 0);
     var telat = d.filter(function(k){ return k.telat; }).length;
     h += '<div class="tiles" style="margin-top:12px">'
-      + tile("Klaim di halaman ini", d.length, "sesudah saringan", "", "komisi")
+      + tile("Klaim di halaman ini", d.length, "sesudah saringan", "", "komisi:daftar")
       + tile("Komisi diklaim", adaNilai ? rpS(total) : "—",
-             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "komisi")
+             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "komisi:nominal")
       + tile("Dipotong aturan 120 hari", telat, telat ? "persentase ditetapkan GM" : "tidak ada",
-             telat ? "alert" : "", "gm")
+             telat ? "alert" : "", "komisi:telat")
       + '</div>';
-    h += '<div class="tw"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
+    h += '<div class="tw" id="daftar-komisi"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
       +  '<th class="l">Customer</th><th class="l">Sales</th><th class="l">Rekening</th>'
       +  '<th>Nominal</th><th class="l">Lampiran</th><th class="l">Transfer</th></tr></thead><tbody>'
       +  d.map(function(k){
@@ -11495,16 +11540,16 @@ function panelKas(){
           + 'database untuk peran Anda — bukan disembunyikan layar.</div></div>'
         : '')
     + '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile(peranSales() ? "Kas saya" : "Total kas sales", rpS(total), "sisa EHC yang tidak ditransfer", "", "kas")
-    + tile("Sales dengan saldo", K.baris.length, "", "", "kas")
-    + tile("Klaim menyumbang", klaim, "baris klaim", "", "kas")
+    + tile(peranSales() ? "Kas saya" : "Total kas sales", rpS(total), "sisa EHC yang tidak ditransfer", "", "kas:saldo")
+    + tile("Sales dengan saldo", K.baris.length, "", "", "kas:sales")
+    + tile("Klaim menyumbang", klaim, "baris klaim", "", "kas:klaim")
     + '</div>';
 
   if (!K.baris.length) {
     h += kosong("Belum ada kas sales. Saldo muncul sendiri begitu ada klaim EHC yang nominal "
       + "transfernya lebih kecil dari EHC di Surat Pesanan — sisanya jadi kas.");
   } else {
-    h += '<div class="tw"><table><thead><tr><th class="l">Sales</th><th>Jumlah klaim</th>'
+    h += '<div class="tw" id="daftar-kas"><table><thead><tr><th class="l">Sales</th><th>Jumlah klaim</th>'
       +  '<th>Saldo kas</th></tr></thead><tbody>'
       +  K.baris.map(function(x){
            return '<tr><td class="l">' + esc(x.sales || "Tanpa nama") + '</td>'
@@ -12176,23 +12221,38 @@ function panelGmAntre(){
   var nUsulan = USULAN.baris.length;
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile("Menunggu keputusan", G.baris.length + nUsulan, "termasuk usulan item",
-           (G.baris.length + nUsulan) ? "alert" : "", "gm")
-    + tile("Harga di bawah list", per.harga || 0, "SP tertahan", "", "gm")
-    + tile("Invoice lewat 120 hari", per.telat || 0, "komisi perlu diputuskan", "", "gm")
+           (G.baris.length + nUsulan) ? "alert" : "", "gm:semua")
+    + tile("Harga di bawah list", per.harga || 0, "SP tertahan", "", "gm:harga")
+    + tile("Invoice lewat 120 hari", per.telat || 0, "komisi perlu diputuskan", "", "gm:telat")
     + tile("Harga khusus", per.harga_khusus || 0, "menunggu persentase komisi",
-           per.harga_khusus ? "alert" : "", "gm")
+           per.harga_khusus ? "alert" : "", "gm:harga_khusus")
     + tile("Minta ubah PO / SP", per.ubah || 0, "angka dokumen mau digeser",
-           per.ubah ? "alert" : "", "gm")
+           per.ubah ? "alert" : "", "gm:ubah")
     + tile("Konfirmasi kirim", per.kirim || 0, "pelanggan perlu dikonfirmasi",
-           per.kirim ? "alert" : "", "gm")
+           per.kirim ? "alert" : "", "gm:kirim")
     + tile("PO belum datang", per.tanpa_po || 0, "barang sudah kirim, invoice tertahan",
-           per.tanpa_po ? "alert" : "", "gm")
+           per.tanpa_po ? "alert" : "", "gm:tanpa_po")
     + tile("EHC minta cair cepat", per.ehc_cepat || 0, "di luar rekap bulanan",
-           per.ehc_cepat ? "alert" : "", "gm")
-    + tile("Usulan item dari PO", nUsulan, "belum ada di master", nUsulan ? "alert" : "", "gm")
+           per.ehc_cepat ? "alert" : "", "gm:ehc_cepat")
+    + tile("Usulan item dari PO", nUsulan, "belum ada di master", nUsulan ? "alert" : "", "gm:usulan")
+    /* #16: jenis yang ikut dihitung "Menunggu keputusan" tapi dulu tanpa tile */
+    + (per.ehc_dini ? tile("Klaim EHC dini", per.ehc_dini, "sebelum SP lunas", "alert", "gm:ehc_dini") : "")
+    + (per.rekening ? tile("Ubah rekening PIC", per.rekening, "rekening terkunci mau diganti", "alert", "gm:rekening") : "")
+    + (per.transfer ? tile("Pembayaran klaim", per.transfer, "menunggu persetujuan transfer", "alert", "gm:transfer") : "")
     + '</div>';
 
   h += blokUsulanProduk();
+
+  /* #16: saringan jenis (dari tile) — dropdown selalu terlihat */
+  var gj = G.jenis || "";
+  var gBaris = gj ? G.baris.filter(function(x){ return x.jenis === gj; }) : G.baris;
+  if (G.baris.length) {
+    h += '<div class="baris-alat" id="daftar-gm" style="margin-top:14px"><label>Jenis <select id="gm-jenis">'
+      + '<option value="">Semua jenis (' + G.baris.length + ')</option>'
+      + Object.keys(GM_LABEL).filter(function(k){ return per[k]; }).map(function(k){
+          return '<option value="' + k + '"' + (gj === k ? ' selected' : '') + '>' + esc(GM_LABEL[k].l) + ' (' + per[k] + ')</option>'; }).join("")
+      + '</select></label></div>';
+  }
 
   if (!G.baris.length) {
     h += nUsulan
@@ -12202,7 +12262,8 @@ function panelGmAntre(){
     h += '<div class="tw"><table><thead><tr><th class="l">Jenis</th><th class="l">Nomor</th>'
       +  '<th class="l">Pihak</th><th class="l">Sales</th><th>Tanggal</th>'
       +  '<th class="l">Keterangan</th><th></th></tr></thead><tbody>'
-      +  G.baris.map(function(x){
+      +  (gBaris.length ? '' : '<tr><td colspan="7" class="kosong">Tidak ada antrean jenis ini.</td></tr>')
+      +  gBaris.map(function(x){
            var j = GM_LABEL[x.jenis] || { l:x.jenis, k:"p-none" };
            return '<tr><td class="l"><span class="pill ' + j.k + '">' + esc(j.l) + '</span></td>'
              + '<td class="l">' + esc(x.nomor || "—") + '</td>'
@@ -12232,6 +12293,7 @@ function panelGmAntre(){
 
   el.innerHTML = h;
   pasangUsulanProduk();
+  if ($("gm-jenis")) $("gm-jenis").addEventListener("change", function(){ G.jenis = this.value; panelGmAntre(); });   /* #16 */
 
   Array.prototype.forEach.call(el.querySelectorAll(".gm-putus"), function(b){
     b.addEventListener("click", function(){ formGmPutus(b.dataset.j, Number(b.dataset.r)); });
@@ -12659,7 +12721,13 @@ function muatKhusus(){
   var q = "/harga_khusus_lengkap?select=*";
   if (K.status) q += "&status=eq." + encodeURIComponent(K.status);
   q += "&order=status.asc,customer.asc,kode_produk.asc";
-  return apiHalaman(q, 0, BATAS_TARIK - 1).then(function(r){
+  /* #16: angka tile per status dihitung TANPA saringan status — kalau tidak, memilih
+     "Berlaku" membuat tile lain jadi 0. */
+  var cacah = cacahHalaman(["aktif","menunggu","nonaktif","ditolak"].map(function(st){
+    return { id: st, q: "/harga_khusus_lengkap?select=id&status=eq." + st }; }))
+    .then(function(c){ K.cacahStatus = c; }).catch(function(){ K.cacahStatus = null; });
+  return Promise.all([apiHalaman(q, 0, BATAS_TARIK - 1), cacah]).then(function(rr){
+    var r = rr[0];
     K.total = r.total;
     K.dipotong = (K.total !== null && K.total > r.baris.length);
     K.baris = r.baris || []; K.dimuat = true; K.memuat = false;
@@ -12683,13 +12751,16 @@ function panelKhusus(){
 
   var n = { aktif:0, menunggu:0, ditolak:0, nonaktif:0 };
   K.baris.forEach(function(x){ n[x.status] = (n[x.status] || 0) + 1; });
+  if (K.cacahStatus) Object.keys(n).forEach(function(st){   /* #16: angka seluruh status, lepas dari saringan */
+    var c = K.cacahStatus[st]; if (c) n[st] = c.lebih ? cacahTeks(c) : c.n;
+  });
 
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Berlaku", n.aktif, "dipakai otomatis di SP baru", "", "khusus")
+    + tile("Berlaku", n.aktif, "dipakai otomatis di SP baru", "", "khusus:aktif")
     + tile("Menunggu GM", n.menunggu, "belum ada persentase komisinya",
-           n.menunggu ? "alert" : "", "gm")
-    + tile("Nonaktif", n.nonaktif, "pernah berlaku, sekarang tidak", "", "khusus")
-    + tile("Ditolak", n.ditolak, "tidak pernah berlaku", "", "khusus")
+           n.menunggu ? "alert" : "", ["gm:harga_khusus","khusus:menunggu"])
+    + tile("Nonaktif", n.nonaktif, "pernah berlaku, sekarang tidak", "", "khusus:nonaktif")
+    + tile("Ditolak", n.ditolak, "tidak pernah berlaku", "", "khusus:ditolak")
     + '</div>';
 
   h += '<div class="baris-alat" style="margin-top:16px">'
@@ -12712,7 +12783,7 @@ function panelKhusus(){
   } else if (!d.length) {
     h += kosong("Tidak ada yang cocok dengan pencarian ini.");
   } else {
-    h += '<div class="tw"><table><thead><tr><th class="l">Customer</th><th class="l">Item</th>'
+    h += '<div class="tw" id="daftar-khusus"><table><thead><tr><th class="l">Customer</th><th class="l">Item</th>'
       +  '<th>Price list</th><th>Batas harga</th><th>EHC / item</th><th>Komisi</th>'
       +  '<th class="l">Status</th><th>Dipakai<br><span class="muted">baris SP</span></th>'
       +  '<th class="unduh-kol"></th>'
@@ -13440,12 +13511,12 @@ function gambar(){
     gambar._navPasang = true;
     document.addEventListener("click", function(e){
       var t = (e.target && e.target.closest) ? e.target.closest(".tile.klik[data-nav]") : null;
-      if (t) pindahTab(t.getAttribute("data-nav"));
+      if (t) navTile(t.getAttribute("data-nav"));
     });
     document.addEventListener("keydown", function(e){
       if (e.key !== "Enter" && e.key !== " ") return;
       var t = (e.target && e.target.closest) ? e.target.closest(".tile.klik[data-nav]") : null;
-      if (t) { e.preventDefault(); pindahTab(t.getAttribute("data-nav")); }
+      if (t) { e.preventDefault(); navTile(t.getAttribute("data-nav")); }
     });
   }
   var T = total();
@@ -13470,28 +13541,174 @@ function gambar(){
     panelBelum(tabAktif);
 }
 
-function tile(l,v,k,c,nav){   /* #16: nav = id tab tujuan → tile jadi bisa diklik */
+/* #16: SEMUA kartu angka bisa diklik dan bermakna.
+   nav = "tab" | "tab:aksi" | [alternatif…] (yang pertama yang boleh dibuka peran ini dipakai).
+   - tab lain  → pindah tab (aksi menyetel saringan/urutan lebih dulu), lalu gulir ke daftarnya;
+   - tab sama  → aksi diterapkan & panel digambar ulang, lalu gulir ke daftar yang relevan.
+   AKSI_TILE["tab:aksi"]() menyetel keadaan panel, dan boleh mengembalikan
+   { id: "id-elemen-tujuan", urut: ["Label kolom", "asc"|"desc"] } atau cukup id-nya. */
+var AKSI_TILE = {};
+function tabDariNav(n){ return String(n).split(":")[0]; }
+function bolehBukaTab(id){
+  var t = TAB.filter(function(x){ return x.id === id; })[0];
+  return !t || t.peran.indexOf(saya.peran) > -1;
+}
+function pilihNav(nav){
+  if (!nav) return null;
+  var d = Array.isArray(nav) ? nav : [nav];
+  for (var i = 0; i < d.length; i++) if (d[i] && bolehBukaTab(tabDariNav(d[i]))) return d[i];
+  return null;
+}
+function navTile(n){
+  var tab = tabDariNav(n), aksi = String(n).slice(tab.length + 1);
+  var f = aksi ? AKSI_TILE[tab + ":" + aksi] : null;
+  if (!bolehBukaTab(tab)) return;
+  var hasil = f ? f() : null;
+  if (typeof hasil === "string") hasil = { id: hasil };
+  hasil = hasil || {};
+  if (tab !== tabAktif) pindahTab(tab);
+  else if (f) gambar();
+  gulirKeNanti(hasil.id || ("daftar-" + tab), tab, hasil.urut);
+}
+/* Panel memuat datanya asinkron — tunggu elemennya muncul (maks ±5 detik). */
+var GULIR_TILE = null;
+function gulirKeNanti(id, tab, urut){
+  if (GULIR_TILE) clearInterval(GULIR_TILE);
+  var coba = 0;
+  GULIR_TILE = setInterval(function(){
+    coba++;
+    var panel = $("p-" + tab);
+    var el = $(id);
+    /* cadangan: tabel pertama di panel itu (daftar utamanya) */
+    if (!el && panel && coba > 8) el = panel.querySelector(".tw");
+    if (el || coba >= 40) {
+      clearInterval(GULIR_TILE); GULIR_TILE = null;
+      if (!el) return;
+      if (urut && panel) urutDomLabel(panel, urut[0], urut[1]);
+      if (el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.add("sorot");
+      setTimeout(function(){ el.classList.remove("sorot"); }, 1600);
+    }
+  }, 120);
+}
+/* Terapkan urut generik (#24) ke tabel di panel yang punya kolom berlabel itu. */
+function urutDomLabel(panel, label, arah){
+  var t = Array.prototype.filter.call(panel.querySelectorAll("table"), function(x){
+    var kr = tabelUrutDom(x) ? kepalaTabel(x) : null;
+    return kr && Array.prototype.some.call(kr.cells, function(c){ return labelTh(c) === label; });
+  })[0];
+  if (!t) return;
+  var kol = Array.prototype.map.call(kepalaTabel(t).cells, function(c){ return labelTh(c); }).indexOf(label);
+  URUT_DOM[kunciTabel(t)] = { kol: kol, arah: arah || "asc" };
+  siapkanUrutDom();
+}
+
+/* #16: aksi per tile. Masing-masing hanya menyetel keadaan panel yang SUDAH ada (saringan
+   yang terlihat di layar, atau urutan kolom #24) lalu menyebut ke mana digulir. */
+(function(){
+  var A = AKSI_TILE;
+  function urut(id, label, arah){ return { id: id, urut: [label, arah] }; }
+  function resetOrder(){ saring.order = { q:"", qKetik:"", sup:"SEMUA", prod:"SEMUA", tiba:"SEMUA", dok:"SEMUA", bayar:"SEMUA" }; }
+  /* CRM */
+  A["crm:tabel"]  = function(){ CRM.tampil = "tabel"; CRM.lambat = false; CRM.layar = "pipeline"; return "daftar-crm"; };
+  A["crm:lambat"] = function(){ CRM.lambat = true; CRM.layar = "pipeline"; return urut("daftar-crm", "Umur", "desc"); };
+  /* PO */
+  A["po:belum"] = function(){ ALUR.poSaring = "belum"; ALUR.cari = ""; ALUR.poPeriode = "0"; ALUR.dimuatPo = false; return "daftar-po"; };
+  A["po:dobel"] = function(){ ALUR.poSaring = "dobel"; ALUR.cari = ""; ALUR.poPeriode = "0"; ALUR.dimuatPo = false; return "daftar-po"; };
+  A["po:nilai"] = function(){ ALUR.poSaring = ""; ALUR.poSort = { key:"grand", arah:"desc" }; return "daftar-po"; };
+  /* SP */
+  A["sp:semua"] = function(){ ALUR.spStatus = ""; ALUR.spCari = ""; ALUR.dimuatSp = false; return "daftar-sp"; };
+  A["sp:buat"]  = function(){ return "sp-buat"; };
+  A["sp:menunggu-gm"] = function(){ ALUR.spStatus = "menunggu gm"; ALUR.spCari = ""; ALUR.dimuatSp = false; return "daftar-sp"; };
+  A["sp:menunggu-po"] = function(){ return "sp-menunggu-po"; };
+  A["sp:komisi"] = function(){ ALUR.spSort = { key:"komisi", arah:"desc" }; return "daftar-sp"; };
+  /* Pelanggan (server, berhalaman) */
+  function pl(sumber, hitam){ return function(){
+    var P = LANJUT.pelanggan; P.sumber = sumber; P.hitam = hitam; P.hal = 0; P.dimuat = false; return "daftar-pelanggan"; }; }
+  A["pelanggan:semua"] = pl("", ""); A["pelanggan:pipeline"] = pl("pipeline", "");
+  A["pelanggan:master"] = pl("master", ""); A["pelanggan:hitam"] = pl("", "ya");
+  /* Penawaran */
+  A["penawaran:semua"] = function(){ return "daftar-penawaran"; };
+  A["penawaran:nilai"] = function(){ return urut("daftar-penawaran", "Nilai", "desc"); };
+  A["penawaran:lewat"] = function(){ return urut("daftar-penawaran", "Masa berlaku", "asc"); };
+  /* Performa */
+  A["performa:lead"]   = function(){ return urut("daftar-performa", "Lead", "desc"); };
+  A["performa:deal"]   = function(){ return urut("daftar-performa", "Deal", "desc"); };
+  A["performa:nilai"]  = function(){ return urut("daftar-performa", "Nilai SP", "desc"); };
+  A["performa:komisi"] = function(){ return urut("daftar-performa", "Komisi", "desc"); };
+  /* Cek Vonny */
+  A["vonnycek:daftar"] = function(){ return "daftar-vonnycek"; };
+  /* Pengiriman */
+  function kr(hal, dok){ return function(){
+    var K = LANJUT.kirim; K.hal = hal; var H = kirimHal(hal); H.dok = dok || ""; return "daftar-kirim"; }; }
+  A["kirim:belum"] = kr("belum"); A["kirim:sudah"] = kr("sudah");
+  A["kirim:inv"] = kr("sudah", "inv"); A["kirim:fak"] = kr("sudah", "fak");
+  /* Pelunasan */
+  function ln(sar, kol){ return function(){
+    var L = LANJUT.lunas; if (L.saring !== sar) { L.saring = sar; L.dimuat = false; L.baris = []; }
+    return kol ? urut("daftar-lunas", kol, "desc") : "daftar-lunas"; }; }
+  A["lunas:belum"] = ln("belum"); A["lunas:nilai"] = ln("belum", "Nilai invoice");
+  A["lunas:telat"] = ln("telat", "Umur"); A["lunas:cash"] = ln("cash");
+  /* EHC & komisi */
+  A["ehc:daftar"]  = function(){ return "daftar-ehc"; };
+  A["ehc:nominal"] = function(){ return urut("daftar-ehc", "Nominal", "desc"); };
+  A["komisi:daftar"]  = function(){ return "daftar-komisi"; };
+  A["komisi:nominal"] = function(){ return urut("daftar-komisi", "Nominal", "desc"); };
+  A["komisi:telat"]   = function(){ var K = LANJUT.komisi; komisiHal(K.hal).telat = "telat"; return "daftar-komisi"; };
+  /* Kas */
+  A["kas:saldo"] = function(){ return urut("daftar-kas", "Saldo kas", "desc"); };
+  A["kas:sales"] = function(){ return urut("daftar-kas", "Sales", "asc"); };
+  A["kas:klaim"] = function(){ return urut("daftar-kas", "Jumlah klaim", "desc"); };
+  /* GM */
+  A["gm:semua"]  = function(){ LANJUT.gm.jenis = ""; return "daftar-gm"; };
+  A["gm:usulan"] = function(){ return "gm-usulan"; };
+  Object.keys(GM_LABEL).forEach(function(j){
+    A["gm:" + j] = function(){ LANJUT.gm.jenis = j; return "daftar-gm"; };
+  });
+  /* Harga khusus */
+  ["aktif","menunggu","nonaktif","ditolak"].forEach(function(st){
+    A["khusus:" + st] = function(){ var K = LANJUT.khusus;
+      if (K.status !== st) { K.status = st; K.dimuat = false; K.baris = []; } return "daftar-khusus"; };
+  });
+  /* Order impor */
+  A["order:semua"] = function(){ resetOrder(); return "daftar-order"; };
+  A["order:proses"] = function(){ resetOrder(); saring.order.tiba = "BELUM"; return "daftar-order"; };
+  A["order:tiba"] = function(){ resetOrder(); saring.order.tiba = "SUDAH"; return "daftar-order"; };
+  A["order:belum-lunas"] = function(){ resetOrder(); saring.order.bayar = "BELUM"; return "daftar-order"; };
+  A["order:jadwal"] = function(){ return "daftar-order"; };
+  /* Tindak */
+  A["tindak:gudang"]  = function(){ return "tindak-gudang"; };
+  A["tindak:harga"]   = function(){ saring.tindakHarga = ""; return "tindak-harga"; };
+  A["tindak:naik"]    = function(){ saring.tindakHarga = "naik"; return "tindak-harga"; };
+  A["tindak:turun"]   = function(){ saring.tindakHarga = "turun"; return "tindak-harga"; };
+  A["tindak:genting"] = function(){ saring.tindakHarga = "genting"; return "tindak-harga"; };
+  /* Harga & produk */
+  function hg(st){ return function(){ saring.harga.st = st; return "daftar-harga"; }; }
+  A["harga:semua"] = hg("SEMUA"); A["harga:ada"] = hg("ADA"); A["harga:hpp"] = hg("HPP"); A["harga:periksa"] = hg("PERIKSA");
+  function pr(sb){ return function(){ saring.produk.sb = sb; return "daftar-produk"; }; }
+  A["produk:semua"] = pr("SEMUA"); A["produk:kosong"] = pr("KOSONG"); A["produk:tanpaharga"] = pr("TANPAHARGA");
+  A["produk:yatim"] = function(){ return "produk-yatim"; };
+  /* Sinkron */
+  A["sinkron:ubah"] = function(){ return "sinkron-ubah"; };
+})();
+
+function tile(l,v,k,c,nav){   /* #16: nav = tujuan (lihat navTile) → tile jadi bisa diklik */
   /* Hanya clickable kalau tab tujuan MEMANG boleh diakses peran ini — supaya
-     tile tak pernah membawa ke halaman kosong/buntu. Target sub-panel yang
-     bukan entri TAB (mis. ringkas/bayar) dibiarkan lolos. */
-  var bolehNav = false;
-  if (nav) {
-    var tNav = TAB.filter(function(x){ return x.id === nav; })[0];
-    bolehNav = !tNav || tNav.peran.indexOf(saya.peran) > -1;
-  }
-  return '<div class="tile '+(c||"")+(bolehNav?' klik':'')+'"'
-    + (bolehNav ? ' data-nav="'+esc(nav)+'" role="button" tabindex="0" style="cursor:pointer"' : '')
+     tile tak pernah membawa ke halaman kosong/buntu. */
+  var n = pilihNav(nav);
+  return '<div class="tile '+(c||"")+(n?' klik':'')+'"'
+    + (n ? ' data-nav="'+esc(n)+'" role="button" tabindex="0"' : '')
     + '><em>'+esc(l)+'</em><b>'+esc(v)+'</b>'+(k?'<i>'+esc(k)+'</i>':'')+'</div>';
 }
 
 function panelRingkas(T){
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Total order", T.n, "", "", "order")
-    + tile("Dalam proses", T.proses, "belum sampai gudang", "", "order")
-    + tile("Selesai diterima", T.selesai, "", "", "order")
-    + tile("Nilai order (est.)", rpS(T.nilai), T.tanpaNilai ? T.tanpaNilai+" order belum ada nilainya" : "", "", "order")
+    + tile("Total order", T.n, "", "", "order:semua")
+    + tile("Dalam proses", T.proses, "belum sampai gudang", "", "order:proses")
+    + tile("Selesai diterima", T.selesai, "", "", "order:tiba")
+    + tile("Nilai order (est.)", rpS(T.nilai), T.tanpaNilai ? T.tanpaNilai+" order belum ada nilainya" : "", "", "order:semua")
     + tile("Sudah dibayar", rpS(T.dibayar), T.nilai ? Math.round(T.dibayar/T.nilai*100)+"% dari nilai order" : "", "", "bayar")
-    + tile("Sisa pembayaran", rpS(T.sisa), "", "alert", "bayar")
+    + tile("Sisa pembayaran", rpS(T.sisa), "", "alert", ["order:belum-lunas","bayar"])
     + '</div>';
   var bagi = T.dibayar + T.sisa, pct = bagi ? T.dibayar/bagi*100 : 0;
   h += '<div class="bar" role="img" aria-label="Sudah dibayar '+rp(T.dibayar)+' dari '+rp(bagi)+'">'
@@ -13652,16 +13869,16 @@ function panelOrderSales(T){
     return String(b.eta||"").localeCompare(String(a.eta||"")); });
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile("Order berjalan", d.filter(function(o){
-        return o.status_produksi !== "Sudah Diterima"; }).length, "belum diterima", "", "order")
+        return o.status_produksi !== "Sudah Diterima"; }).length, "belum diterima", "", "order:jadwal")
     + tile("Tiba bulan ini", d.filter(function(o){
         return String(o.eta||"").slice(0,7) === new Date().toISOString().slice(0,7); }).length,
-        "menurut ETA", "", "order")
+        "menurut ETA", "", "order:jadwal")
     + '</div>';
   h += '<div class="flag" style="margin-top:16px"><span class="f-ico">i</span><div>'
     + '<b>Jadwal saja.</b> Nama supplier, nilai order, dan kurs tidak ditampilkan di sini — '
     + 'dan memang tidak dikirim dari database, bukan sekadar disembunyikan. Dari dokumen '
     + 'order, yang terbuka untuk sales cuma <b>Packing List</b>.</div></div>';
-  h += '<div class="tw beku"><table><thead><tr>'
+  h += '<div class="tw beku" id="daftar-order"><table><thead><tr>'
     + '<th class="l">No Invoice</th><th class="l">Status produksi</th>'
     + '<th>ETD</th><th>ETA</th><th>Tiba</th><th class="l">Dok</th><th class="l">Packing List</th>'
     + '</tr></thead><tbody>';
@@ -13878,7 +14095,7 @@ function panelOrder(T){
   /* Tujuh kolom saja. Sisanya — nilai, kurs, tanggal order, pembayaran,
      baris invoice, customs — ada di laci yang terbuka saat barisnya diklik.
      Tabel ini untuk memindai, bukan untuk membaca seluruh isinya. */
-  h += '<div class="tw beku"><table><thead><tr>'
+  h += '<div class="tw beku" id="daftar-order"><table><thead><tr>'
     + '<th class="l">Supplier</th><th class="l">No Invoice</th>'
     + '<th class="l">Status produksi</th><th>ETD</th><th>ETA</th>'
     + '<th class="l">Dok</th><th class="l">Catatan</th>'
@@ -13978,13 +14195,13 @@ function panelBayar(T){
 
 function panelTindak(T){
   var h = '<h3 class="sec">Barang sudah di gudang, belum dibayar</h3><div class="tiles">'
-    + tile("Nilai terutang", rpS(T.gudangTot), T.gudang.length+" order sudah diterima", "alert", "tindak")
-    + tile("Bagian dari sisa bayar", T.sisa ? Math.round(T.gudangTot/T.sisa*100)+"%" : "—", "sisanya belum sampai gudang", "", "tindak")
+    + tile("Nilai terutang", rpS(T.gudangTot), T.gudang.length+" order sudah diterima", "alert", "tindak:gudang")
+    + tile("Bagian dari sisa bayar", T.sisa ? Math.round(T.gudangTot/T.sisa*100)+"%" : "—", "sisanya belum sampai gudang", "", "tindak:gudang")
     + '</div>';
   if (!T.gudang.length) {
     h += '<div class="flag"><span class="f-ico">✓</span><div>Tidak ada barang yang sudah diterima tapi belum dibayar.</div></div>';
   } else {
-    h += '<div class="tw"><table><thead><tr><th class="l">No Invoice</th><th class="l">Supplier</th>'
+    h += '<div class="tw" id="tindak-gudang"><table><thead><tr><th class="l">No Invoice</th><th class="l">Supplier</th>'
       + '<th>Tanggal tiba</th><th>Umur</th><th>Sisa (IDR)</th><th class="l">Catatan</th></tr></thead><tbody>';
     var gud = T.gudang.slice().sort(function(a,b){ return b._sisaIdr - a._sisaIdr; });
     gud.slice(0, 20).forEach(function(o){
@@ -14017,15 +14234,21 @@ function panelTindak(T){
     var turun = terbaru.filter(function(x){ return x.selisih < 0; });
     var dampak = terbaru.reduce(function(a,x){ return a + x.dampak; }, 0);
     h += '<div class="tiles">'
-      + tile("Harga bergerak", terbaru.length, "di atas " + (AMBANG.penting*100) + "% pada pembelian terakhir")
-      + tile("Naik", naik.length, "", naik.length ? "alert" : "")
-      + tile("Turun", turun.length, "")
-      + tile("Genting", genting.length, "di atas " + (AMBANG.genting*100) + "%", genting.length ? "alert" : "")
+      + tile("Harga bergerak", terbaru.length, "di atas " + (AMBANG.penting*100) + "% pada pembelian terakhir", "", "tindak:harga")
+      + tile("Naik", naik.length, "", naik.length ? "alert" : "", "tindak:naik")
+      + tile("Turun", turun.length, "", "", "tindak:turun")
+      + tile("Genting", genting.length, "di atas " + (AMBANG.genting*100) + "%", genting.length ? "alert" : "", "tindak:genting")
       + '</div>';
-    h += '<div class="tw"><table><thead><tr><th class="l">Kode pabrik</th><th class="l">Produk</th>'
+    /* #16: saringan arah dari tile Naik/Turun/Genting — selalu terlihat & bisa dihapus */
+    var arahTh = saring.tindakHarga || "";
+    var tampilTh = arahTh === "naik" ? naik : arahTh === "turun" ? turun : arahTh === "genting" ? genting : terbaru;
+    if (arahTh) h += '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div>Hanya harga yang <b>'
+      + esc(arahTh) + '</b> (' + tampilTh.length + ' dari ' + terbaru.length + '). '
+      + '<button class="btn kecil" id="btn-tindak-semua" type="button">Tampilkan semua</button></div></div>';
+    h += '<div class="tw" id="tindak-harga"><table><thead><tr><th class="l">Kode pabrik</th><th class="l">Produk</th>'
       + '<th class="l">Invoice</th><th class="l">Supplier</th><th>Harga sebelumnya</th><th>Harga sekarang</th>'
       + '<th>Selisih</th><th>Qty</th><th>Dampak</th></tr></thead><tbody>';
-    terbaru.slice(0, 80).forEach(function(x){
+    tampilTh.slice(0, 80).forEach(function(x){
       h += '<tr class="klik" tabindex="0" data-order="'+x.order.id+'">'
         + '<td class="l">'+esc(x.kode)+'</td>'
         + '<td class="l">'+(x.produk ? esc(x.produk) : '<span class="neg">belum terdaftar</span>')+'</td>'
@@ -14039,7 +14262,7 @@ function panelTindak(T){
         +   fx(x.dampak, x.order.mata_uang)+'</td></tr>';
     });
     h += '</tbody></table></div>';
-    if (terbaru.length > 80) h += '<p class="muted" style="font-size:12.5px;margin-top:8px">80 terbesar dari '+terbaru.length+'.</p>';
+    if (tampilTh.length > 80) h += '<p class="muted" style="font-size:12.5px;margin-top:8px">80 terbesar dari '+tampilTh.length+'.</p>';
     h += '<div class="flag"><span class="f-ico">i</span><div>Yang ditampilkan adalah <b>pembelian terakhir</b> tiap kode '
       +  'pabrik dibandingkan dengan pembelian sebelumnya. Ambang '+(AMBANG.penting*100)+'% dianggap penting, '
       +  (AMBANG.genting*100)+'% genting — sama seperti PARAMETER di workbook v28. '
@@ -14101,6 +14324,7 @@ function panelTindak(T){
     h += '<div class="flag '+t[0]+'"><span class="f-ico">'+(i+1)+'</span><div><b>'+t[1]+'</b> '+t[2]+'</div></div>';
   });
   $("p-tindak").innerHTML = h;
+  if ($("btn-tindak-semua")) $("btn-tindak-semua").addEventListener("click", function(){ saring.tindakHarga = ""; gambar(); });   /* #16 */
   Array.prototype.forEach.call($("p-tindak").querySelectorAll("tr[data-order]"), function(tr){
     var buka = function(){ formOrder(ORDER.filter(function(o){ return o.id == tr.dataset.order; })[0]); };
     tr.addEventListener("click", buka);
@@ -14436,9 +14660,9 @@ function panelSinkron(){
     var r = PRATINJAU.ringkas || {}, tw = PRATINJAU.tripwire || [];
     h += '<h3 class="sec">Hasil tarikan — belum disimpan</h3><div class="tiles">'
       + tile("Baris dibaca", r.baris_dibaca || 0, "dari sheet")
-      + tile("Harga naik", r.naik || 0, "")
-      + tile("Harga turun", r.turun || 0, "")
-      + tile("Harga baru", r.baru || 0, "produk yang belum berharga")
+      + tile("Harga naik", r.naik || 0, "", "", "sinkron:ubah")
+      + tile("Harga turun", r.turun || 0, "", "", "sinkron:ubah")
+      + tile("Harga baru", r.baru || 0, "produk yang belum berharga", "", "sinkron:ubah")
       + tile("Tidak berubah", r.sama || 0, "")
       + tile("Kode asing", r.tak_dikenal || 0, "dilewati, tidak dibuat", (r.tak_dikenal ? "alert" : ""))
       + '</div>';
@@ -14456,7 +14680,7 @@ function panelSinkron(){
     }
 
     if (PRATINJAU.ubah && PRATINJAU.ubah.length) {
-      h += '<h3 class="sec">' + PRATINJAU.ubah.length + ' harga akan berubah</h3>'
+      h += '<h3 class="sec" id="sinkron-ubah">' + PRATINJAU.ubah.length + ' harga akan berubah</h3>'
         + '<div class="tw"><table><thead><tr><th class="l">Kode</th><th class="l">Produk</th>'
         + '<th>Harga sekarang</th><th>Harga di sheet</th><th>Selisih</th></tr></thead><tbody>';
       PRATINJAU.ubah.slice(0, 400).forEach(function(u){
@@ -15152,18 +15376,18 @@ function panelHarga(){
      dari hasil saringan tapi persennya dari katalog penuh. */
   var punyaHarga = PRODUK.filter(function(p){ return p._harga !== null; }).length;
   h += '<div class="tiles">'
-    + tile("Produk", PRODUK.length.toLocaleString("id-ID"), "seluruh katalog", "", "harga")
+    + tile("Produk", PRODUK.length.toLocaleString("id-ID"), "seluruh katalog", "", "harga:semua")
     + tile("Punya harga", punyaHarga.toLocaleString("id-ID"),
-           PRODUK.length ? Math.round(punyaHarga/PRODUK.length*100)+"% dari katalog" : "", "", "harga")
+           PRODUK.length ? Math.round(punyaHarga/PRODUK.length*100)+"% dari katalog" : "", "", "harga:ada")
     + (lihatHpp ? tile("Punya HPP", PRODUK.filter(function(p){ return p._hpp !== null; }).length.toLocaleString("id-ID"),
                        (function(){
                          var inv = PRODUK.filter(function(p){ return p._hppAsal === "invoice"; }).length;
                          var man = PRODUK.filter(function(p){ return p._hppAsal === "manual"; }).length;
                          return inv + " dari invoice" + (man ? " · " + man + " manual" : "");
-                       })(), "", "harga") : "")
+                       })(), "", "harga:hpp") : "")
     + (lihatHpp ? tile("Perlu ditinjau",
         PRODUK.filter(function(p){ var s=statusMargin(p); return s==="RUGI"||s==="TIPIS"||s==="DI BAWAH TARGET"; }).length,
-        "margin di bawah target", "alert", "harga") : "")
+        "margin di bawah target", "alert", "harga:periksa") : "")
     + '</div>';
 
   h += '<div class="saring">'
@@ -15183,7 +15407,7 @@ function panelHarga(){
   if (!hasil.length) {
     h += '<div class="flag"><span class="f-ico">—</span><div>Tidak ada produk yang cocok dengan saringan ini.</div></div>';
   } else {
-    h += '<div class="tw beku"><table><thead><tr>'
+    h += '<div class="tw beku" id="daftar-harga"><table><thead><tr>'
       + '<th class="l">Kode internal</th><th class="l">Merek</th><th class="l">Kelompok / seri</th>'
       + '<th class="l">Spesifikasi</th><th>Satuan</th><th>Harga jual</th>'
       + (lihatHpp ? '<th>HPP</th><th>Margin</th><th>GM %</th><th class="l">Status</th>' : '')
@@ -15916,7 +16140,7 @@ function blokUsulanProduk(){
   }
   if (!USULAN.baris.length) return '';
   var boleh = bolehUbahProduk();
-  var h = '<h3 class="sec">Usulan item dari PO — ' + USULAN.baris.length + ' menunggu</h3>'
+  var h = '<h3 class="sec" id="gm-usulan">Usulan item dari PO — ' + USULAN.baris.length + ' menunggu</h3>'
     + '<div class="flag"><span class="f-ico">!</span><div>'
     + '<b>Item ini dipakai di PO tapi belum ada di master.</b> Selama belum disahkan ia tidak '
     + 'boleh punya price list, jadi komisinya tidak bisa dihitung dan Surat Pesanan yang '
@@ -16069,11 +16293,11 @@ function panelProduk(){
                          + '<button class="btn" id="btn-set-roda" type="button" title="Kelola set roda (1 set = beberapa pcs)">🧩 Set roda</button>' : '')   /* #1 */
     + (bolehSuntingProduk() ? '<button class="btn utama" id="btn-produk-baru" type="button">+ Produk baru</button>' : '');   /* #27: Vonny ikut */
   var h = '<div class="tiles">'
-    + tile("Produk", sah.length.toLocaleString("id-ID"), "", "", "produk")
+    + tile("Produk", sah.length.toLocaleString("id-ID"), "", "", "produk:semua")
     + tile("Belum ditentukan asalnya", belumSumber.toLocaleString("id-ID"),
-           "impor / lokal / campuran", belumSumber ? "alert" : "", "produk")
-    + tile("Belum ada harga", sah.filter(function(p){ return p._harga === null; }).length, "", "", "produk")
-    + tile("Kode pabrik belum tersambung", yatim.length, yatim.length ? "sudah dibeli, belum dinamai" : "", yatim.length ? "alert" : "", "produk")
+           "impor / lokal / campuran", belumSumber ? "alert" : "", "produk:kosong")
+    + tile("Belum ada harga", sah.filter(function(p){ return p._harga === null; }).length, "", "", "produk:tanpaharga")
+    + tile("Kode pabrik belum tersambung", yatim.length, yatim.length ? "sudah dibeli, belum dinamai" : "", yatim.length ? "alert" : "", "produk:yatim")
     + '</div>';
 
   if (belumSumber) {
@@ -16101,7 +16325,7 @@ function panelProduk(){
     + '<span class="hitungan">'+hasil.length.toLocaleString("id-ID")+' dari '+PRODUK.length.toLocaleString("id-ID")+'</span>'
     + '</div>';
 
-  h += '<div class="tw beku"><table><thead><tr>'
+  h += '<div class="tw beku" id="daftar-produk"><table><thead><tr>'
     + '<th class="l">Kode internal</th><th class="l">Merek</th><th class="l">Kelompok / seri</th>'
     + '<th class="l">Kategori</th>'   /* #26 */
     + '<th class="l">Spesifikasi</th>'
@@ -16130,7 +16354,7 @@ function panelProduk(){
      muncul "Tersambung" palsu padahal database menolak (0 baris, tanpa galat). */
   var bolehSambung = bolehUbahImpor();
   if (yatim.length) {
-    h += '<h3 class="sec">Kode pabrik yang belum punya kode internal — '+yatim.length+'</h3>'
+    h += '<h3 class="sec" id="produk-yatim">Kode pabrik yang belum punya kode internal — '+yatim.length+'</h3>'
       + '<div class="flag"><span class="f-ico">i</span><div>Barang ini sudah pernah dibeli, tapi belum pernah '
       + 'dinamai dengan kode internal RHJ. Selama begini, pembeliannya tidak masuk hitungan HPP produk mana pun. '
       + (bolehSambung ? 'Klik satu baris untuk menyambungkannya ke produk yang sudah ada, atau buat produk baru.'
