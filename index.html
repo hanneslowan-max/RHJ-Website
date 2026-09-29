@@ -405,6 +405,11 @@
   @media (max-width:760px){ .tw.beku{max-height:calc(100vh - 190px)} }
   .muted{color:var(--ink-3)}
   .neg{color:var(--bad-tx);font-weight:550}
+  /* #24: kepala kolom yang bisa diurutkan */
+  th[data-urut],th.urut-dom{cursor:pointer;user-select:none;white-space:nowrap}
+  th[data-urut]:hover,th.urut-dom:hover{text-decoration:underline}
+  th[data-urut]:focus-visible,th.urut-dom:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:-2px}
+  .urut-panah{font-size:10px;margin-left:3px;opacity:.8}
   .num0{color:#A6B0B9}
 
   /* ── badge ────────────────────────────────────────────────────── */
@@ -4267,41 +4272,227 @@ function poHitungLokal(f){
            ppn: ppnSen / 100, grand: (subSen + ppnSen) / 100 };
 }
 
-/* #24: sorting daftar dengan klik header. Mengurutkan data yang sedang termuat. */
-function nilaiUrut(row, key){
-  switch (key) {
-    case "grand":   return row.ringkas ? Number(row.ringkas.grand_total) : -1;
-    case "tanggal": return row.tanggal || "";
-    case "no":      return row.no_po || row.no_sp || "";
-    case "pihak":   return row.nama_customer || row.kepada || "";
-    case "sales":   return namaRepAlur(row.sales_rep_id) || "";
-    case "status":  return row.status || "";
-    default:        return "";
-  }
+/* #24: sorting daftar dengan klik header.
+   Dua jalur:
+   (a) Daftar yang datanya dipegang JS (PO, SP, pelanggan-server): thUrut()/pasangUrut() + sortBaris()
+       — diurutkan SEBELUM digambar, dari nilai mentah (bukan teks rp()).
+   (b) Semua tabel daftar lain di <main>: urut generik di DOM (urutDom*), jenis kolom dikenali dari
+       isinya (angka/rupiah → numerik, tanggal → kronologis, selain itu abjad dengan angka alami).
+       Nilai mentah boleh diberikan lewat atribut data-v di <td>. Nilai kosong selalu di bawah.
+       Urutan diingat per tabel dan diterapkan lagi setiap tabel digambar ulang. */
+function nilaiKosong(v){
+  return v === null || v === undefined || (typeof v === "number" && !isFinite(v))
+    || (typeof v === "string" && /^\s*(|—|-|–|…)\s*$/.test(v));
 }
-function sortBaris(arr, s){
-  if (!s || !s.key) return arr;
-  var arah = s.arah === "desc" ? -1 : 1;
-  return arr.slice().sort(function(a, b){
-    var x = nilaiUrut(a, s.key), y = nilaiUrut(b, s.key);
-    if (typeof x === "number" && typeof y === "number") return (x - y) * arah;
-    return String(x).localeCompare(String(y), "id") * arah;
-  });
+function bandingUrut(x, y, jenis){
+  if (jenis === "angka") return Number(x) - Number(y);
+  if (jenis === "tgl")   return Date.parse(x) - Date.parse(y);
+  return String(x).localeCompare(String(y), "id", { numeric: true, sensitivity: "base" });
 }
-function thUrut(label, key, s, kelas){
+/* kolom = { key: { ambil: fn(row), jenis: "teks"|"angka"|"tgl" } }. Stabil; kosong di bawah. */
+function urutkan(arr, s, kolom){
+  if (!s || !s.key || !kolom[s.key]) return arr;
+  var k = kolom[s.key], arah = s.arah === "desc" ? -1 : 1;
+  return arr.map(function(r, i){ return { r: r, i: i, v: k.ambil(r) }; })
+    .sort(function(a, b){
+      var ka = nilaiKosong(a.v), kb = nilaiKosong(b.v);
+      if (ka || kb) return ka === kb ? a.i - b.i : (ka ? 1 : -1);
+      return (bandingUrut(a.v, b.v, k.jenis) * arah) || (a.i - b.i);
+    })
+    .map(function(x){ return x.r; });
+}
+var KOLOM_URUT_ALUR = {
+  grand:   { jenis:"angka", ambil:function(r){ return r.ringkas ? Number(r.ringkas.grand_total) : null; } },
+  komisi:  { jenis:"angka", ambil:function(r){ return r.ringkas ? Number(r.ringkas.komisi) : null; } },
+  tanggal: { jenis:"tgl",   ambil:function(r){ return r.tanggal || null; } },
+  dibuat:  { jenis:"tgl",   ambil:function(r){ return r.dibuat_pada || null; } },
+  no:      { jenis:"teks",  ambil:function(r){ return r.no_po || r.no_sp || null; } },
+  pihak:   { jenis:"teks",  ambil:function(r){ return r.nama_customer || r.kepada || null; } },
+  sales:   { jenis:"teks",  ambil:function(r){ return r.sales_rep_id ? namaRepAlur(r.sales_rep_id) : null; } },
+  status:  { jenis:"teks",  ambil:function(r){ return r.status || null; } }
+};
+function nilaiUrut(row, key){ var k = KOLOM_URUT_ALUR[key]; return k ? k.ambil(row) : null; }
+function sortBaris(arr, s){ return urutkan(arr, s, KOLOM_URUT_ALUR); }
+function thUrut(label, key, s, kelas, grup){
   var aktif = s && s.key === key;
-  return '<th' + (kelas ? ' class="' + kelas + '"' : '') + ' data-urut="' + key + '" role="button" tabindex="0" style="cursor:pointer">'
-    + esc(label) + (aktif ? (s.arah === "desc" ? " ▼" : " ▲") : "") + '</th>';
+  return '<th' + (kelas ? ' class="' + kelas + '"' : '') + ' data-urut="' + key + '"'
+    + (grup ? ' data-urut-grup="' + grup + '"' : '')
+    + ' role="button" tabindex="0" aria-sort="' + (aktif ? (s.arah === "desc" ? "descending" : "ascending") : "none") + '">'
+    + esc(label) + (aktif ? '<span class="urut-panah">' + (s.arah === "desc" ? "▼" : "▲") + '</span>' : "") + '</th>';
 }
-function pasangUrut(el, get, set, ulang){
+function pasangUrut(el, get, set, ulang, grup){
   Array.prototype.forEach.call(el.querySelectorAll("[data-urut]"), function(th){
-    th.addEventListener("click", function(){
+    if ((th.dataset.urutGrup || "") !== (grup || "")) return;
+    function tekan(){
       var k = th.dataset.urut, cur = get() || {};
       set({ key: k, arah: (cur.key === k && cur.arah === "asc") ? "desc" : "asc" });
       ulang();
+    }
+    th.addEventListener("click", tekan);
+    th.addEventListener("keydown", function(e){
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); tekan(); }
     });
   });
 }
+
+/* ── (b) urut generik DOM ─────────────────────────────────────────── */
+var URUT_DOM = {};          /* kunci tabel → { kol, arah } */
+var URUT_DOM_SIBUK = false;
+var BULAN_ID = { jan:0, feb:1, mar:2, apr:3, mei:4, may:4, jun:5, jul:6, agu:7, agt:7, aug:7, sep:8,
+                 okt:9, oct:9, nov:10, des:11, dec:11 };
+/* "12 Sep 2026", "12 September 2026", "12/09/2026", "2026-09-12", "2026-09-12 13:29" → ms */
+function tglDariTeks(t){
+  var m;
+  t = String(t).trim();
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(t)))
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0));
+  if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(t)))
+    return Date.UTC(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0));
+  if ((m = /^(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\.?\s+(\d{4})(?:,?\s+(\d{2})[:.](\d{2}))?/.exec(t))) {
+    var b = BULAN_ID[m[2].toLowerCase()];
+    if (b !== undefined) return Date.UTC(+m[3], b, +m[1], +(m[4] || 0), +(m[5] || 0));
+  }
+  return null;
+}
+/* "Rp1.234.567", "-Rp 1.234,56", "12,5%", "5 hari", "1.200 pcs", "3" → angka; lainnya null.
+   Kode seperti "017/MCE/IX/2026" sengaja BUKAN angka (karakter sesudah digit bukan spasi/akhir). */
+function angkaDariTeks(t){
+  var m = /^([-−–]?)\s*(?:Rp\s?|USD\s?|US\$\s?|\$\s?|¥\s?|RMB\s?|€\s?)?([-−]?)(\d{1,3}(?:\.\d{3})+|\d+)(,\d+)?(?:\s?(?:%|[A-Za-z]{1,6}))?(?:\s|$|\*)/
+            .exec(String(t).trim());
+  if (!m) return null;
+  var n = Number(m[3].replace(/\./g, "") + (m[4] ? "." + m[4].slice(1) : ""));
+  return (m[1] || m[2]) ? -n : n;
+}
+function teksSel(td){
+  if (!td) return "";
+  if (td.hasAttribute("data-v")) return td.getAttribute("data-v");
+  return (td.textContent || "").replace(/\s+/g, " ").trim();
+}
+function kepalaTabel(t){
+  var th = t.tHead; if (!th || th.rows.length !== 1) return null;
+  return th.rows[0];
+}
+function kunciTabel(t){
+  if (t.dataset.urutKunci) return t.dataset.urutKunci;
+  var panel = t.closest("section.panel"), kr = kepalaTabel(t);
+  var label = kr ? Array.prototype.map.call(kr.cells, function(c){ return labelTh(c); }).join("|") : "";
+  return (panel ? panel.id : "?") + "::" + label;
+}
+function labelTh(c){
+  var x = c.cloneNode(true), p = x.querySelector(".urut-panah"); if (p) p.remove();
+  return (x.textContent || "").replace(/\s+/g, " ").trim();
+}
+function tabelUrutDom(t){
+  return !t.hasAttribute("data-tanpa-urut") && !t.querySelector("th[data-urut]")
+    && !t.closest("#laci, .laci, [data-tanpa-urut]") && !!kepalaTabel(t) && t.tBodies.length === 1;
+}
+/* Baris "utama" = jumlah selnya sama dengan jumlah kolom kepala; baris lain (rincian/penjelasan)
+   ikut baris utama di atasnya. Baris pembuka tanpa baris utama tetap di atas. */
+function kelompokBaris(t, nKol){
+  var awal = [], grup = [];
+  Array.prototype.forEach.call(t.tBodies[0].rows, function(r){
+    var lebar = 0; Array.prototype.forEach.call(r.cells, function(c){ lebar += c.colSpan || 1; });
+    var utama = r.cells.length === nKol && lebar === nKol && !r.querySelector("td.kosong");
+    if (utama) grup.push({ r: r, ikut: [] });
+    else if (grup.length) grup[grup.length - 1].ikut.push(r);
+    else awal.push(r);
+  });
+  return { awal: awal, grup: grup };
+}
+function jenisKolom(vals){
+  var isi = vals.filter(function(v){ return !nilaiKosong(v); });
+  if (!isi.length) return "teks";
+  var tg = isi.filter(function(v){ return tglDariTeks(v) !== null; }).length;
+  if (tg / isi.length >= 0.8) return "tgl";
+  var an = isi.filter(function(v){ return angkaDariTeks(v) !== null; }).length;
+  if (an / isi.length >= 0.8) return "angka";
+  return "teks";
+}
+function terapUrutDom(t, st){
+  var kr = kepalaTabel(t), nKol = kr.cells.length;
+  var g = kelompokBaris(t, nKol);
+  if (g.grup.length < 2) return;
+  var vals = g.grup.map(function(x){ return teksSel(x.r.cells[st.kol]); });
+  var jenis = jenisKolom(vals);
+  var arah = st.arah === "desc" ? -1 : 1;
+  var urut = g.grup.map(function(x, i){
+      var v = vals[i], k = nilaiKosong(v);
+      var n = k ? null : jenis === "tgl" ? tglDariTeks(v) : jenis === "angka" ? angkaDariTeks(v) : v;
+      return { x: x, i: i, v: n, k: k || n === null };
+    })
+    .sort(function(a, b){
+      if (a.k || b.k) return a.k === b.k ? a.i - b.i : (a.k ? 1 : -1);
+      var d = jenis === "teks"
+        ? String(a.v).localeCompare(String(b.v), "id", { numeric: true, sensitivity: "base" })
+        : a.v - b.v;
+      return (d * arah) || (a.i - b.i);
+    });
+  var tb = t.tBodies[0], frag = document.createDocumentFragment();
+  g.awal.forEach(function(r){ frag.appendChild(r); });
+  urut.forEach(function(u){ frag.appendChild(u.x.r); u.x.ikut.forEach(function(r){ frag.appendChild(r); }); });
+  tb.appendChild(frag);
+}
+function tandaiKepalaDom(t, st){
+  var kr = kepalaTabel(t);
+  Array.prototype.forEach.call(kr.cells, function(c, i){
+    var lbl = labelTh(c);
+    if (!lbl || (c.colSpan || 1) > 1) return;
+    if (!c.classList.contains("urut-dom")) {
+      c.classList.add("urut-dom"); c.setAttribute("role", "button"); c.tabIndex = 0;
+      c.dataset.urutKol = String(i);
+    }
+    var aktif = st && st.kol === i;
+    c.setAttribute("aria-sort", aktif ? (st.arah === "desc" ? "descending" : "ascending") : "none");
+    var p = c.querySelector(".urut-panah");
+    if (aktif) {
+      if (!p) { p = document.createElement("span"); p.className = "urut-panah"; c.appendChild(p); }
+      p.textContent = st.arah === "desc" ? "▼" : "▲";
+    } else if (p) p.remove();
+  });
+}
+function siapkanUrutDom(){
+  var akar = document.querySelector("main"); if (!akar) return;
+  URUT_DOM_SIBUK = true;
+  try {
+    Array.prototype.forEach.call(akar.querySelectorAll("table"), function(t){
+      if (!tabelUrutDom(t)) return;
+      var key = kunciTabel(t), st = URUT_DOM[key] || null;
+      tandaiKepalaDom(t, st);
+      var tb = t.tBodies[0], cap = st ? st.kol + ":" + st.arah : "";
+      if (st && tb.dataset.urutTerap !== cap) { terapUrutDom(t, st); tb.dataset.urutTerap = cap; }
+    });
+  } finally {
+    if (URUT_DOM_PENGAMAT) URUT_DOM_PENGAMAT.takeRecords();
+    URUT_DOM_SIBUK = false;
+  }
+}
+var URUT_DOM_PENGAMAT = null, URUT_DOM_JADWAL = 0;
+function pasangUrutDom(){
+  var akar = document.querySelector("main"); if (!akar || URUT_DOM_PENGAMAT) return;
+  if (window.MutationObserver) {
+    URUT_DOM_PENGAMAT = new MutationObserver(function(){
+      if (URUT_DOM_SIBUK || URUT_DOM_JADWAL) return;
+      URUT_DOM_JADWAL = setTimeout(function(){ URUT_DOM_JADWAL = 0; siapkanUrutDom(); }, 30);
+    });
+    URUT_DOM_PENGAMAT.observe(akar, { childList: true, subtree: true });
+  }
+  function tekan(th){
+    var t = th.closest("table"); if (!t || !tabelUrutDom(t)) return;
+    var key = kunciTabel(t), kol = Number(th.dataset.urutKol), cur = URUT_DOM[key];
+    URUT_DOM[key] = { kol: kol, arah: (cur && cur.kol === kol && cur.arah === "asc") ? "desc" : "asc" };
+    siapkanUrutDom();
+  }
+  akar.addEventListener("click", function(e){
+    var th = e.target.closest && e.target.closest("th.urut-dom");
+    if (th && !e.target.closest("button, a, input, select")) tekan(th);
+  });
+  akar.addEventListener("keydown", function(e){
+    var th = e.target.closest && e.target.closest("th.urut-dom");
+    if (th && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); tekan(th); }
+  });
+  siapkanUrutDom();
+}
+
 function panelPo(){
   var el = $("p-po");
   if (!ALUR.dimuatPo || !ALUR.dimuatUsul) {
@@ -4414,15 +4605,15 @@ function panelPo(){
      + alatPo();
   var bolehUsulPo = bolehInputPo();
   h += '<div class="tw"><table><thead><tr>'
-    + thUrut("Tgl PO","tanggal",ALUR.poSort) + thUrut("No PO","no",ALUR.poSort) + thUrut("Perusahaan","pihak",ALUR.poSort)
+    + thUrut("Tgl PO","tanggal",ALUR.poSort) + thUrut("Dibuat","dibuat",ALUR.poSort) + thUrut("No PO","no",ALUR.poSort) + thUrut("Perusahaan","pihak",ALUR.poSort)
     + thUrut("Sales","sales",ALUR.poSort) + '<th>Item</th>' + thUrut("Grand Total","grand",ALUR.poSort,"r") + '<th>Berkas</th>'
     + (bolehUsulPo ? '<th></th>' : '') + '</tr></thead><tbody>';   /* #24 */
   var kunciDobel = {};
   ALUR.poDobel.forEach(function(x){ kunciDobel[String(x.no_po).trim().toLowerCase()] = x.jumlah; });
   if (!ALUR.po.length && cari)
-    h += '<tr><td colspan="8" class="kosong">Tidak ada PO yang nomornya atau perusahaannya '
+    h += '<tr><td colspan="9" class="kosong">Tidak ada PO yang nomornya atau perusahaannya '
       + 'mengandung "' + esc(cari) + '".</td></tr>';
-  else if (!ALUR.po.length) h += '<tr><td colspan="8" class="kosong">'
+  else if (!ALUR.po.length) h += '<tr><td colspan="9" class="kosong">'
     + (poKustomKosong()
         ? 'Pilih tanggal "dari" dan/atau "sampai" di atas dulu — "Pilih tanggal sendiri" '
           + 'tanpa tanggal tidak berarti seluruh riwayat.'
@@ -4442,6 +4633,7 @@ function panelPo(){
       return (pr ? pr.kode : (l.deskripsi || "?")) + " = " + Number(l.qty) + " pcs"; }).join(" / ");
     h += '<tr class="baris-klik'+(p.batal ? ' baris-batal' : (d?' baris-dobel':''))+'" data-po-detail="'+p.id+'" tabindex="0">'   /* #19 */
       + '<td>'+esc(tglPendekAlur(p.tanggal))+'</td>'
+      + '<td class="muted" style="white-space:nowrap">'+esc(p.dibuat_pada ? waktuJkt(p.dibuat_pada) : "—")+'</td>'   /* #24 */
       + '<td><code>'+esc(p.no_po)+'</code>'+(d?' <span class="pill p-belum">dobel</span>':'')+'</td>'
       + '<td><b>'+esc(p.nama_customer)+'</b></td>'
       + '<td>'+esc(namaRepAlur(p.sales_rep_id))+'</td>'
@@ -6104,12 +6296,12 @@ function panelSp(){
      + alatSp();
   var bolehUsul = bolehAlurJual();
   h += '<div class="tw"><table><thead><tr>'
-    + thUrut("No SP","no",ALUR.spSort) + thUrut("Kepada","pihak",ALUR.spSort) + thUrut("Tgl","tanggal",ALUR.spSort) + thUrut("Sales","sales",ALUR.spSort)
+    + thUrut("No SP","no",ALUR.spSort) + thUrut("Kepada","pihak",ALUR.spSort) + thUrut("Tgl","tanggal",ALUR.spSort) + thUrut("Dibuat","dibuat",ALUR.spSort) + thUrut("Sales","sales",ALUR.spSort)
     + thUrut("Status","status",ALUR.spSort) + thUrut("Grand Total","grand",ALUR.spSort,"r")
-    + (bolehLihatHpp() ? '<th class="r">Komisi</th>' : '')
+    + (bolehLihatHpp() ? thUrut("Komisi","komisi",ALUR.spSort,"r") : '')
     + (bolehUsul ? '<th></th>' : '') + '</tr></thead><tbody>';   /* #24 */
   if (!ALUR.sp.length) {
-    h += '<tr><td colspan="8" class="kosong">'
+    h += '<tr><td colspan="9" class="kosong">'
       + (cariSp ? 'Tidak ada SP yang cocok dengan pencarian itu.'
          : spKustomKosong()
            ? 'Pilih tanggal "dari" dan/atau "sampai" di atas dulu — "Pilih tanggal sendiri" '
@@ -6125,7 +6317,9 @@ function panelSp(){
                   terkirim:"p-jalan", tertagih:"p-jalan", lunas:"p-lunas", batal:"p-belum" };
     var adaUsul = usulMenunggu("sp", o.id);
     h += '<tr class="baris-klik" data-sp-detail="'+o.id+'" tabindex="0"><td><code>'+esc(o.no_sp)+'</code></td><td><b>'+esc(o.kepada)+'</b></td>'   /* #19 */
-      + '<td>'+esc(tglPendekAlur(o.tanggal))+'</td><td>'+esc(namaRepAlur(o.sales_rep_id))+'</td>'
+      + '<td>'+esc(tglPendekAlur(o.tanggal))+'</td>'
+      + '<td class="muted" style="white-space:nowrap">'+esc(o.dibuat_pada ? waktuJkt(o.dibuat_pada) : "—")+'</td>'   /* #24 */
+      + '<td>'+esc(namaRepAlur(o.sales_rep_id))+'</td>'
       + '<td><span class="pill '+(kelas[o.status]||"p-none")+'">'+esc(o.status)+'</span></td>'
       + '<td class="r">'+(o.ringkas?rp(o.ringkas.grand_total):'—')
       +   (o.status !== "batal" && (o.sales_order_lines || []).some(function(l){ return qtyBatal(l) > 0; })
@@ -7310,6 +7504,8 @@ var URUT_PELANGGAN = {
   baru:   { l:"Terakhir ditambahkan",            q:"id.desc" }
 };
 
+var KOLOM_URUT_PELANGGAN = { nama:["nama_urut"], hp:["hp"], pic:["pic"], cabang:["cabang"],
+  industri:["industri"], sumber:["urut_sumber"], status:["blacklist","perlu_konfirmasi"] };   /* #24 */
 function muatPelanggan(){
   var P = LANJUT.pelanggan;
   if (P.memuat) return Promise.resolve();
@@ -7319,7 +7515,12 @@ function muatPelanggan(){
           + "industri_lama,nama_lama";   /* #25 / #20 */
   var syarat = plKunci();
   var u = URUT_PELANGGAN[P.urut] || URUT_PELANGGAN.master;
-  var path = "/customers?select=" + kol + (syarat ? "&" + syarat : "") + "&order=" + u.q;
+  var q = u.q;
+  if (P.urutKol && KOLOM_URUT_PELANGGAN[P.urutKol.key]) {   /* #24: urut klik-kepala */
+    var arah = P.urutKol.arah === "desc" ? "desc" : "asc";
+    q = KOLOM_URUT_PELANGGAN[P.urutKol.key].map(function(k){ return k + "." + arah + ".nullslast"; }).join(",") + ",id.asc";
+  }
+  var path = "/customers?select=" + kol + (syarat ? "&" + syarat : "") + "&order=" + q;
   var dari = P.hal * P.per;
   var janji = [ apiHalaman(path, dari, dari + P.per - 1) ];
   if (!P.ringkas) {
@@ -7483,9 +7684,13 @@ function panelPelangganTab(){
       ? "Tidak ada pelanggan yang cocok dengan saringan ini."
       : "Belum ada pelanggan. Jalankan seed CRM, atau tambah lewat tombol Pelanggan baru.");
   } else {
+    /* #24: urut klik-kepala di SERVER (daftar berhalaman) — berlaku lintas halaman. Kolom Sales
+       berisi id, bukan abjad, jadi tidak ikut. */
+    var su = P.urutKol || null;
     h += '<div class="tw"><table><thead><tr>'
-      +  '<th class="l">Nama</th><th class="l">Sales</th><th class="l">Nomor HP</th><th class="l">PIC</th>'
-      +  '<th class="l">Cabang</th><th class="l">Industri</th><th class="l">Sumber</th><th class="l">Status</th>'
+      +  thUrut("Nama","nama",su,"l") + '<th class="l">Sales</th>' + thUrut("Nomor HP","hp",su,"l")
+      +  thUrut("PIC","pic",su,"l") + thUrut("Cabang","cabang",su,"l") + thUrut("Industri","industri",su,"l")
+      +  thUrut("Sumber","sumber",su,"l") + thUrut("Status","status",su,"l")
       +  '</tr></thead><tbody>'
       +  P.baris.map(function(c){
            return '<tr data-plc="' + c.id + '" tabindex="0" style="cursor:pointer">'
@@ -7556,8 +7761,10 @@ function panelPelangganTab(){
     P.industri = this.value; P.hal = 0; P.dimuat = false;
     muatPelanggan().then(panelPelangganTab).catch(function(e){ el.innerHTML = kotakGalat(e); });
   });
+  pasangUrut(el, function(){ return P.urutKol; }, function(v){ P.urutKol = v; P.hal = 0; P.dimuat = false; },
+    function(){ muatPelanggan().then(panelPelangganTab).catch(function(e){ el.innerHTML = kotakGalat(e); }); });   /* #24 */
   $("pl-urut").addEventListener("change", function(){
-    P.urut = this.value; P.hal = 0; P.dimuat = false;
+    P.urut = this.value; P.urutKol = null; P.hal = 0; P.dimuat = false;
     muatPelanggan().then(panelPelangganTab).catch(function(e){ el.innerHTML = kotakGalat(e); });
   });
   if ($("btn-pl-pindah")) $("btn-pl-pindah").addEventListener("click", formPindahSalesMassal);
@@ -13228,6 +13435,7 @@ var PANEL_LANJUT = {
 
 /* ── gambar semua panel ─────────────────────────────────────────────── */
 function gambar(){
+  pasangUrutDom();   /* #24: urut generik semua tabel daftar di <main> (sekali pasang) */
   if (!gambar._navPasang) {   /* #16: satu listener delegasi untuk semua tile clickable */
     gambar._navPasang = true;
     document.addEventListener("click", function(e){
@@ -13300,7 +13508,7 @@ function panelRingkas(T){
       +  '</div></div>';
   }
 
-  h += '<div class="split"><div><h3 class="sec">Status produksi / pengiriman</h3><div class="tw"><table>'
+  h += '<div class="split"><div><h3 class="sec">Status produksi / pengiriman</h3><div class="tw"><table data-tanpa-urut>'
     +  '<thead><tr><th class="l">Status</th><th>Order</th><th>Nilai (est.)</th></tr></thead><tbody>';
   STATUS_PROD.forEach(function(s){
     var b = ORDER.filter(function(o){ return o.status_produksi === s; });
@@ -13317,7 +13525,7 @@ function panelRingkas(T){
   });
   h += '</tbody><tfoot><tr><td class="l">Total</td><td>'+T.n+'</td><td>'+rp(T.nilai)+'</td></tr></tfoot></table></div></div>';
 
-  h += '<div><h3 class="sec">Status pembayaran per order</h3><div class="tw"><table>'
+  h += '<div><h3 class="sec">Status pembayaran per order</h3><div class="tw"><table data-tanpa-urut>'
     +  '<thead><tr><th class="l">Status bayar</th><th>Order</th><th>Sisa (est.)</th></tr></thead><tbody>';
   ["Lunas","Sebagian","Belum Bayar","Belum ada nilai"].forEach(function(s){
     var b = ORDER.filter(function(o){ return o._status === s; });
@@ -14089,7 +14297,7 @@ function panelPengguna(){
 
   /* ── keterangan tiap peran ─────────────────────────────────────── */
   h += '<h3 class="sec">Apa saja yang bisa dilakukan tiap peran</h3>'
-    + '<div class="tw"><table><thead><tr><th class="l">Peran</th>'
+    + '<div class="tw"><table data-tanpa-urut><thead><tr><th class="l">Peran</th>'
     + '<th class="l">Boleh</th><th class="l">Tidak boleh</th></tr></thead><tbody>';
   KETERANGAN_PERAN.forEach(function(k){
     h += '<tr><td class="l" style="vertical-align:top">'
