@@ -25,11 +25,12 @@
 --     lewat batalkan_sp (hanya peran alur jual; Vonny diarahkan ke sales/GM).
 --   * Sesudah batal/pulih → finalisasi_kirim_sp (berkas 97): semua sisa 0 & ada ≥1 surat jalan →
 --     no_surat_jalan terisi (batch terakhir), sisa > 0 lagi → dilepas.
--- Data: backfill qty_batal = qty untuk baris batal lama (turunan; DEV 0 baris). Tidak ada yang dihapus.
+-- Data: backfill qty_batal dari baris batal lama (turunan; DEV 0 baris) — lihat (2b): qty_batal = qty − terkirim,
+--   keadaan lama dicatat di batal_alasan. Tidak ada yang dihapus.
 
 -- (1) Kolom ────────────────────────────────────────────────────────────────────
 alter table public.sales_order_lines add column if not exists qty_batal numeric(14,2) not null default 0;
-update public.sales_order_lines set qty_batal = qty where batal and qty_batal = 0;   -- turunan; pulih = set 0
+-- (backfill qty_batal dipindah ke sesudah trigger sol_qty_batal — lihat (2b))
 alter table public.sales_order_lines drop constraint if exists sol_qty_batal_sah;
 alter table public.sales_order_lines add constraint sol_qty_batal_sah check (qty_batal >= 0 and qty_batal <= qty);
 
@@ -66,6 +67,39 @@ end $function$;
 drop trigger if exists sol_qty_batal on public.sales_order_lines;
 create trigger sol_qty_batal before insert or update on public.sales_order_lines
   for each row execute function public.jaga_qty_batal_baris();
+
+-- (2b) Backfill (review G5: versi awal gagal di DB yang punya baris batal lama — ditolak sol_jaga_usul) ─
+-- Backfill qty_batal dari penanda lama `batal` (turunan; bisa dipulihkan lewat catatan di batal_alasan).
+--   * Sesudah trigger sol_qty_batal ada → penanda `batal` diturunkan ulang secara konsisten.
+--   * rhj.usul = 'on'  : lewati sol_jaga_usul (saat migrasi auth.uid() null → bukan owner/GM).
+--   * rhj.batal_baris  : jalur sah perubahan qty_batal/batal (sol_qty_batal).
+--   * sol_vonny_gugur dimatikan sementara: backfill tidak mengubah isi SP, jadi cek Vonny yang sudah
+--     disetujui tidak boleh gugur karenanya.
+--   * Baris batal lama yang ternyata SUDAH terkirim sebagian (bug lama (d)): hanya sisa yang belum
+--     terkirim yang dibatalkan (qty_batal = qty − terkirim) → qty terkirim kembali tertagih. Keadaan
+--     lama dicatat di batal_alasan ("[migrasi] batal lama penuh …") agar bisa dipulihkan.
+select set_config('rhj.usul', 'on', true);
+select set_config('rhj.batal_baris', '1', true);
+alter table public.sales_order_lines disable trigger sol_vonny_gugur;
+with k as (
+  select l.id, l.qty, coalesce((select sum(kb.qty) from public.so_kirim_baris kb where kb.so_line_id = l.id), 0) as kirim
+    from public.sales_order_lines l
+   where (l.batal and l.qty_batal = 0)                                                         -- belum di-backfill
+      or (l.qty_batal > 0 and l.qty - l.qty_batal
+          < coalesce((select sum(kb.qty) from public.so_kirim_baris kb where kb.so_line_id = l.id), 0)) -- backfill lama keliru
+)
+update public.sales_order_lines l
+   set qty_batal    = greatest(k.qty - k.kirim, 0),
+       batal_alasan = case when k.kirim > 0
+                           then coalesce(l.batal_alasan || E'\n', '')
+                                || '[migrasi] batal lama penuh ' || k.qty::text || '; terkirim ' || k.kirim::text
+                                || ' → yang dibatalkan hanya sisa ' || greatest(k.qty - k.kirim, 0)::text
+                           else l.batal_alasan end
+  from k
+ where l.id = k.id;
+alter table public.sales_order_lines enable trigger sol_vonny_gugur;
+select set_config('rhj.batal_baris', '', true);
+select set_config('rhj.usul', '', true);
 
 create or replace function public.jaga_hapus_baris_sp()
  returns trigger

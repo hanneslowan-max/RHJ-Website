@@ -663,6 +663,7 @@ CREATE TABLE public.sales_order_lines (
   jenis text NOT NULL DEFAULT 'barang'::text CHECK (jenis = ANY (ARRAY['barang'::text, 'biaya'::text])),
   batal boolean NOT NULL DEFAULT false, batal_alasan text, batal_oleh uuid, batal_pada timestamptz,
   qty_batal numeric(14,2) NOT NULL DEFAULT 0,   -- #18 berkas 98: qty dibatalkan (kumulatif); qty efektif = qty - qty_batal
+                                                 --   backfill dari batal lama (98 (2b) / 102): qty_batal = qty - terkirim, catatan '[migrasi] …' di batal_alasan
   CONSTRAINT sol_qty_batal_sah CHECK (qty_batal >= 0 AND qty_batal <= qty),
   CONSTRAINT sales_order_lines_pkey PRIMARY KEY (id),
   CONSTRAINT sales_order_lines_so_id_fkey FOREIGN KEY (so_id) REFERENCES public.sales_orders(id),
