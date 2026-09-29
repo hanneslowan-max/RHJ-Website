@@ -12199,6 +12199,7 @@ function formGmUsulUbah(ref){
        ? '<div class="tw"><table><thead><tr><th class="l">Kolom</th><th class="l">Sebelum</th>'
          + '<th class="l">Sesudah</th></tr></thead><tbody>' + brs + '</tbody></table></div>'
        : kosong("Tidak ada angka atau kolom yang berbeda dari yang sekarang.");
+    if (bolehApprove()) h += '<div id="gm-hpp" style="margin:8px 0 4px"></div>';   /* #21 */
 
     h += field({ nama:"uu_catatan", label:"Catatan GM", jenis:"textarea",
                  bantu:"Tersimpan permanen bersama usulannya, ikut terbaca saat ditelusuri nanti." });
@@ -12207,6 +12208,7 @@ function formGmUsulUbah(ref){
     $("laci-kaki").innerHTML =
         '<button class="btn" id="btn-uu-tolak" type="button">Tolak</button> '
       + '<button class="btn utama" id="btn-uu-setuju" type="button">Setujui &amp; terapkan</button>';
+    if (bolehApprove()) muatKonteksHpp("ubah", ref, isPoUsul ? "po" : "sp");   /* #21 */
 
     function kirim(setuju){
       sibuk(true);
@@ -12233,6 +12235,95 @@ function formGmUsulUbah(ref){
   .catch(function(e){ $("laci-form").innerHTML = kotakGalat(e); });
 }
 
+/* #21: konteks HPP keputusan GM. Baris batal tidak dihitung (DB), qty = qty efektif.
+   EHC dikembalikan ke PIC → yang tinggal di RHJ = nett; margin sesudah EHC = nett − HPP,
+   margin sebelum EHC = (nett + EHC) − HPP. Uang lewat rp(), tanpa pembulatan sendiri. */
+var GM_JENIS_HPP = ["harga","telat","harga_khusus","ehc_dini"];
+function persenTampil(n){
+  return n === null || n === undefined || !isFinite(n) ? "—"
+    : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+}
+function muatKonteksHpp(jenis, ref, jenisDok){
+  api("POST", "/rpc/gm_konteks_keputusan", { p_jenis: jenis, p_ref: Number(ref) })
+    .then(function(rows){ var box = $("gm-hpp"); if (box) gambarKonteksHpp(box, rows || [], jenisDok || "sp"); })
+    .catch(function(e){ var box = $("gm-hpp"); if (box) box.innerHTML = '<span class="muted">HPP tak bisa dimuat: ' + esc(e.message) + '</span>'; });
+}
+function gambarKonteksHpp(box, rows, jenisDok){
+  if (!rows.length) { box.innerHTML = ""; return; }
+  var ada = function(v){ return v !== null && v !== undefined && v !== ""; };
+  var num = function(v){ return ada(v) ? Number(v) : null; };
+  /* DB lama (sebelum berkas 101) belum mengirim kolom turunan → hitung di sini. */
+  rows = rows.map(function(b){
+    var o = {}; Object.keys(b).forEach(function(k){ o[k] = b[k]; });
+    var nett = num(b.harga_nett), ehc = num(b.ehc) || 0, hpp = num(b.hpp), qty = num(b.qty);
+    if (b.harga_jual === undefined) {
+      o.harga_jual = nett === null ? null : nett + ehc;
+      o.margin_kotor = (o.harga_jual === null || hpp === null) ? null : o.harga_jual - hpp;
+      o.margin_pct = (nett && hpp !== null) ? (nett - hpp) / nett * 100 : null;
+      o.margin_total = (nett !== null && hpp !== null && qty !== null) ? (nett - hpp) * qty : null;
+    }
+    if (hpp === null) o.margin = null;
+    else if (nett !== null) o.margin = nett - hpp;
+    return o;
+  });
+  var mn = function(v){ return v === null || v === undefined ? "—"
+    : (Number(v) < 0 ? '<span class="neg">' + rp(v) + '</span>' : rp(v)); };
+  var isPo = jenisDok === "po";
+  var head = isPo
+    ? '<th class="l">Barang</th><th class="r">Qty</th><th class="r">Harga efektif</th><th class="r">HPP</th>'
+      + '<th class="r">Margin kotor/unit</th>'
+    : '<th class="l">Barang</th><th class="r">Qty</th><th class="r">Harga jual (nett+EHC)</th><th class="r">EHC</th>'
+      + '<th class="r">Nett</th><th class="r">HPP</th><th class="r">Margin sebelum EHC/unit</th>'
+      + '<th class="r">Margin sesudah EHC/unit</th><th class="r">Margin %</th><th class="r">Margin total</th>';
+  var kol = isPo ? 5 : 10;
+  function baris(b, gaya){
+    var q = b.qty == null ? "—" : esc(fmtQty(b.qty));
+    return '<tr' + (gaya || "") + '><td class="l">' + esc(b.kode || "-") + (b.versi ? ' <span class="muted">(' + esc(b.versi) + ')</span>' : '') + '</td><td class="r">' + q + '</td>'
+      + (isPo
+          ? '<td class="r">' + rp(num(b.harga_jual)) + '</td><td class="r">' + (b.hpp == null ? "—" : rp(b.hpp)) + '</td>'
+            + '<td class="r">' + mn(b.margin_kotor) + '</td>'
+          : '<td class="r">' + rp(num(b.harga_jual)) + '</td><td class="r">' + rp(num(b.ehc)) + '</td>'
+            + '<td class="r">' + rp(num(b.harga_nett)) + '</td><td class="r">' + (b.hpp == null ? "—" : rp(b.hpp)) + '</td>'
+            + '<td class="r">' + mn(b.margin_kotor) + '</td><td class="r">' + mn(b.margin) + '</td>'
+            + '<td class="r">' + persenTampil(num(b.margin_pct)) + '</td><td class="r">' + mn(b.margin_total) + '</td>')
+      + '</tr>';
+  }
+  function ringkas(arr){
+    var t = 0, tanpa = 0;
+    arr.forEach(function(b){ if (b.margin_total === null || b.margin_total === undefined) tanpa++; else t += Number(b.margin_total); });
+    return { t: t, tanpa: tanpa };
+  }
+  function kaki(label, arr){
+    if (isPo) return '';
+    var r = ringkas(arr);
+    return '<tr><td class="l" colspan="' + (kol - 1) + '"><b>' + esc(label) + '</b>'
+      + (r.tanpa ? ' <span class="muted">· ' + r.tanpa + ' baris tanpa HPP tidak dihitung</span>' : '')
+      + '</td><td class="r"><b>' + mn(r.t) + '</b></td></tr>';
+  }
+  var body = "", foot = "";
+  var berversi = rows.some(function(b){ return !!b.versi; });
+  if (berversi) {
+    var seb = rows.filter(function(b){ return b.versi === "sebelum"; });
+    var ses = rows.filter(function(b){ return b.versi === "sesudah"; });
+    body = rows.map(function(b){ return baris(b, b.versi === "sebelum" ? ' style="opacity:.6"' : ' style="font-weight:600"'); }).join("");
+    if (!isPo) {
+      var a = ringkas(seb).t, c = ringkas(ses).t;
+      foot = kaki("Σ margin total — sebelum", seb) + kaki("Σ margin total — sesudah", ses)
+        + '<tr><td class="l" colspan="' + (kol - 1) + '"><b>Selisih (sesudah − sebelum)</b></td><td class="r"><b>' + mn(c - a) + '</b></td></tr>';
+    }
+  } else {
+    body = rows.map(function(b){ return baris(b); }).join("");
+    foot = rows.some(function(b){ return b.qty !== null && b.qty !== undefined; }) ? kaki("Σ margin total", rows) : "";
+  }
+  box.innerHTML = '<h4 class="sec" style="margin:6px 0">Harga · EHC · HPP · margin — dasar keputusan</h4>'
+    + '<div class="tw"><table><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody>'
+    + (foot ? '<tfoot>' + foot + '</tfoot>' : '') + '</table></div>'
+    + '<p class="bantu" style="margin-top:6px">' + (isPo
+        ? 'EHC tidak ada di PO — harga efektif = harga sesudah diskon per unit. HPP = HPP berlaku pada tanggal dokumen.'
+        : 'EHC dikembalikan ke PIC → yang tinggal di RHJ = nett. HPP = HPP berlaku pada tanggal SP. '
+          + 'Baris batal tidak dihitung; qty = qty efektif (sesudah batal).') + '</p>';
+}
+
 function formGmPutus(jenis, ref){
   if (jenis === "ubah") { formGmUsulUbah(ref); return; }
   /* Yang ini bukan "setuju / tolak". Keputusannya adalah MENEMPELKAN
@@ -12247,7 +12338,7 @@ function formGmPutus(jenis, ref){
   var h = '<div class="flag"><span class="f-ico">i</span><div><b>' + esc(j.l) + '</b><br>'
     + esc(x.keterangan || "") + (x.nomor ? '<br>Nomor: <b>' + esc(x.nomor) + '</b>' : '')
     + (x.pihak ? '<br>Pihak: ' + esc(x.pihak) : '') + '</div></div>';
-  if (["harga","telat","harga_khusus"].indexOf(jenis) > -1)
+  if (GM_JENIS_HPP.indexOf(jenis) > -1)
     h += '<div id="gm-hpp" style="margin:8px 0 4px"></div>';   /* #21 */
 
   if (jenis === "kirim") {
@@ -12316,24 +12407,7 @@ function formGmPutus(jenis, ref){
       + '<button class="btn utama" id="btn-gm-setuju" type="button">Setujui</button>';
   bukaLaci((jenis === "kirim" ? "Konfirmasi kirim — " : "Keputusan GM — ") + j.l);
 
-  if (["harga","telat","harga_khusus"].indexOf(jenis) > -1) {   /* #21: tampilkan nett/EHC/HPP dasar penetapan % */
-    api("POST", "/rpc/gm_konteks_keputusan", { p_jenis: jenis, p_ref: Number(ref) })
-      .then(function(rows){
-        var box = $("gm-hpp"); if (!box) return;
-        if (!rows || !rows.length) { box.innerHTML = ""; return; }
-        box.innerHTML = '<h4 class="sec" style="margin:6px 0">Nett · EHC · HPP — dasar penetapan %</h4>'
-          + '<div class="tw"><table><thead><tr><th class="l">Barang</th><th>Qty</th><th>Nett</th>'
-          + '<th>EHC</th><th>HPP</th><th>Margin/unit</th></tr></thead><tbody>'
-          + rows.map(function(b){
-              return '<tr><td class="l">' + esc(b.kode || "-") + '</td><td>' + (b.qty == null ? "—" : esc(b.qty))
-                + '</td><td>' + rp(b.harga_nett) + '</td><td>' + rp(b.ehc) + '</td><td>'
-                + (b.hpp == null ? "—" : rp(b.hpp)) + '</td><td>'
-                + (b.hpp == null ? "—" : rp(b.margin)) + '</td></tr>';
-            }).join("")
-          + '</tbody></table></div>';
-      })
-      .catch(function(e){ var box = $("gm-hpp"); if (box) box.innerHTML = '<span class="muted">HPP tak bisa dimuat: ' + esc(e.message) + '</span>'; });
-  }
+  if (GM_JENIS_HPP.indexOf(jenis) > -1) muatKonteksHpp(jenis, ref);   /* #21 */
 
   function kirim(setuju){
     sibuk(true);
