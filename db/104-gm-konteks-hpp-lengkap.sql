@@ -1,4 +1,4 @@
--- Berkas 101 (#21): konteks HPP untuk keputusan GM lengkap.
+-- Berkas 104 (#21): konteks HPP untuk keputusan GM lengkap.
 --   - harga/telat/ehc_dini: baris SP batal disaring, qty = qty efektif (qty − qty_batal, #18).
 --   - ehc_dini (klaim EHC dini) dan ubah (usulan ubah PO/SP: versi sebelum & sesudah) kini ikut punya konteks HPP.
 --   - Kolom baru (aditif di ujung): harga_jual = nett + EHC (dibayar pelanggan sebelum PPN),
@@ -140,7 +140,7 @@ revoke all on function public.gm_konteks_keputusan(text, bigint) from public, an
 grant execute on function public.gm_konteks_keputusan(text, bigint) to authenticated;
 
 
--- ROLLBACK (definisi sebelum berkas ini, dari berkas 98):
+-- ROLLBACK (definisi sebelum berkas ini, versi #18):
 -- drop function public.gm_konteks_keputusan(text, bigint);
 -- create or replace function public.gm_konteks_keputusan(p_jenis text, p_ref bigint)
 --  returns table(kode text, qty numeric, harga_nett numeric, ehc numeric, hpp numeric, margin numeric)

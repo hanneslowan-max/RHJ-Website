@@ -1,4 +1,4 @@
--- Berkas 100 (#10): antrean "SP menunggu PO" tahu MODE PO tiap SP, supaya SP yang modenya belum
+-- Berkas 103 (#10): antrean "SP menunggu PO" tahu MODE PO tiap SP, supaya SP yang modenya belum
 --   dinyatakan (gagal ditandai "tanpa PO" saat disimpan) kelihatan dan bisa dicoba lagi.
 --
 -- Keadaan DB saat dikerjakan: pintu resmi sudah ada (berkas 86/88) — jaga_kolom_sales bagian f
