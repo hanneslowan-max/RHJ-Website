@@ -193,6 +193,8 @@
     .bi-angka.bi-po{grid-template-columns:repeat(2,1fr)}
     .bi-angka.bi-sp{grid-template-columns:repeat(2,1fr)}
     .bi-angka.bi-mini{grid-template-columns:1fr 1fr auto} }
+  .bi-hasil input.po-total{width:100%;max-width:190px;padding:6px 8px;border:1px solid var(--garis-kuat,#c9d2d6);
+    border-radius:8px;font:inherit;font-weight:700;text-align:right;background:var(--kartu2,#f7fafa)}   /* #34 */
   .jumlahan-alur{margin-top:14px;border-top:1px solid var(--garis-kuat,#c9d2d6);padding-top:11px}
   .jumlahan-alur > div{display:flex;justify-content:space-between;align-items:baseline;
     gap:12px;padding:4px 0;font-size:13px}
@@ -3917,7 +3919,7 @@ function spRepEfektif(f){
 }
 
 /* ── memuat ──────────────────────────────────────────────────────────── */
-var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,jenis,qty,harga,keterangan,diskon,diskon_tipe,set_id,set_komponen,product_sets(id,nama,product_set_components(product_id,qty,harga_nett,urut)))";   /* #1: baris set + snapshot komponen (berkas 94); definisi set = cadangan data lama */
+var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,jenis,qty,harga,keterangan,diskon,diskon_tipe,penyesuaian,set_id,set_komponen,product_sets(id,nama,product_set_components(product_id,qty,harga_nett,urut)))";   /* #1: baris set + snapshot komponen (berkas 94); definisi set = cadangan data lama */
 /* #18: ringkasan pembatalan SP untuk satu PO (null bila tidak ada batal sebagian). */
 function poBatalInfo(poId){ return (ALUR.poBatal && ALUR.poBatal[poId]) || null; }
 function muatPo(paksa){
@@ -4226,7 +4228,7 @@ function barisPoBaru(){
      mengetik nama barang lalu langsung Submit tanpa memilih apa pun,
      barisnya dianggap belum disentuh dan DIBUANG diam-diam — PO tersimpan
      tanpa barang itu, dan barangnya tidak pernah masuk antrean usulan. */
-  return { kode:null, deskripsi:"", usulanTeks:"", ketikan:"", jenis:"barang", qty:1, harga:0, keterangan:"", diskon:0, diskon_tipe:"rp", set_id:null, setKomp:null };
+  return { kode:null, deskripsi:"", usulanTeks:"", ketikan:"", jenis:"barang", qty:1, harga:0, keterangan:"", diskon:0, diskon_tipe:"rp", penyesuaian:0, set_id:null, setKomp:null };   /* #34 */
 }
 /* #29: PO untuk pelanggan yang belum ada di data pelanggan (nama diketik, tidak dipilih dari daftar). */
 function poPelangganBaru(f){ return !f.customer_id && String(f.nama_customer || "").trim().length > 0; }
@@ -4258,8 +4260,10 @@ function poDiskonRp(b){
    Tepat selama nilai baris ≤ ± Rp 900 miliar (2^53 / 10.000). */
 function poNilaiBaris1e4(b){
   var qc = Math.round((Number(b.qty) || 0) * 100), hc = Math.round((Number(b.harga) || 0) * 100);
-  return qc * hc - senDari(poDiskonRp(b)) * 100;
+  return qc * hc - senDari(poDiskonRp(b)) * 100 + senDari(b.penyesuaian) * 100;   /* #34: + penyesuaian pembulatan */
 }
+/* #34: nilai baris TANPA penyesuaian (qty × harga − diskon) — acuan penyesuaian pembulatan. */
+function poNilaiDasar1e4(b){ return poNilaiBaris1e4(Object.assign({}, b, { penyesuaian: 0 })); }
 /* n/d (bulat, d > 0) dibulatkan setengah menjauhi nol — sama dengan round() numeric Postgres. */
 function bagiBulat(n, d){
   var a = Math.abs(n), r = a % d, q = (a - r) / d;
@@ -4295,6 +4299,13 @@ function cekDiskonPo(b, no){
   if (d > 0 && !habisSen(bruto))
     return no + "qty × harga = Rp " + bruto.toLocaleString("id-ID", { maximumFractionDigits: 6 })
       + " — tidak habis dalam sen, tidak bisa diberi diskon. Ubah qty/harga atau hapus diskonnya.";
+  /* #34: penyesuaian pembulatan — cermin CHECK po_lines_penyesuaian_* (berkas 113) */
+  var pj = Number(b.penyesuaian) || 0;
+  if (Math.abs(pj) > PENYESUAIAN_MAKS) return no + "penyesuaian pembulatan " + (pj < 0 ? "−" : "+") + rp(Math.abs(pj)) + " melebihi ±Rp 1.000.";
+  if (pj && !habisSen(pj)) return no + "penyesuaian pembulatan paling banyak 2 angka di belakang koma.";
+  if (pj && !habisSen(bruto))
+    return no + "qty × harga = Rp " + bruto.toLocaleString("id-ID", { maximumFractionDigits: 6 })
+      + " tidak habis dalam sen, jadi totalnya tidak bisa disesuaikan.";
   if (b.diskon_tipe === "persen") {
     if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
     if (!habisSen(bruto * d / 100))
@@ -4398,17 +4409,17 @@ function spBarisDariPo(l){
              list: jenis === "biaya" ? null : hargaListProduk(kode) };
   }
   var isSet = adaSet(l);
-  if (!isSet && !(Number(l.diskon) > 0))
+  if (!isSet && !(Number(l.diskon) > 0) && !Number(l.penyesuaian))   /* #34: berpenyesuaian → dipecah seperti baris berdiskon */
     return [ jadi(l.product_id, l.deskripsi, l.jenis || "barang", { qty: Number(l.qty), nett: Number(l.harga) }) ];
   /* #12: nilai baris berpecahan di bawah sen tak bisa ditiru harga_nett 2 desimal → SP ≠ PO. Tolak jelas
      (DB sudah mencegah lewat po_lines_diskon_bruto_sen, berkas 107; ini untuk data/jalur lama). */
   if (poNilaiBaris1e4(l) % 100 !== 0)
-    throw new Error('Baris "' + nama + '": nilai sesudah diskon Rp ' + angkaTeks(poTotalBaris(l), 6)
+    throw new Error('Baris "' + nama + '": nilai sesudah diskon/pembulatan Rp ' + angkaTeks(poTotalBaris(l), 6)
       + ' tidak habis dalam sen — tidak bisa dijadikan harga nett SP. Perbaiki qty/harga/diskon di PO.');
   var tSen = poNilaiBarisSen(l), pc;   /* bulat (sen) = nilai po_ringkas persis (sudah dipastikan habis dalam sen) */
   if (!isSet) {
     pc = pecahNettSen(tSen, l.qty);
-    if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon tidak bisa dibagi rata ke qty '
+    if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon/pembulatan tidak bisa dibagi rata ke qty '
       + angkaTeks(l.qty) + '. Pakai qty bilangan bulat di PO.');
     return pc.map(function(x){ return jadi(l.product_id, l.deskripsi, l.jenis || "barang", x); });
   }
@@ -5434,7 +5445,10 @@ function formDetailDoc(jenis, row){
         : '';
       h += '<tr><td class="l">'+esc(nama)+setInfo+(l.keterangan?' <span class="muted">· '+esc(l.keterangan)+'</span>':'')+'</td>'
         + '<td>'+esc(ribu(l.qty))+(isSetL?' set':'')+'</td><td class="r">'+rp(l.harga)+(isSetL?' <span class="muted">/set</span>':'')+'</td><td class="r">'+diskonTampil+'</td>'
-        + '<td class="r">'+rp(tot)+'</td></tr>';
+        + '<td class="r">'+rp(tot)
+        + (Number(l.penyesuaian) ? '<br><span class="muted" title="penyesuaian pembulatan dari PO customer">pembulatan '
+             + (Number(l.penyesuaian) > 0 ? '+' : '−') + rp(Math.abs(Number(l.penyesuaian))) + '</span>' : '')   /* #34 */
+        + '</td></tr>';
     });
     h += '</tbody></table></div>';
   } else {
@@ -5645,7 +5659,7 @@ function formMintaUbah(jenis, id){
   h += '<h4 class="sec">Baris</h4><div class="tw"><table><thead><tr><th>Item</th>'
     + '<th class="r">Qty</th><th class="r">'
     + (isPoU ? "Harga" : "Harga nett") + '</th>'
-    + (isPoU ? '<th class="r">Diskon</th><th>Keterangan</th>' : '<th class="r">EHC/item</th>')
+    + (isPoU ? '<th class="r">Diskon</th><th class="r">Penyesuaian <span class="muted">±Rp 1.000</span></th><th>Keterangan</th>' : '<th class="r">EHC/item</th>')   /* #34 */
     + '</tr></thead><tbody>';
   baris.forEach(function(l, i){
     var pr = produkById(l.product_id);
@@ -5671,6 +5685,7 @@ function formMintaUbah(jenis, id){
             + '<option value="rp"' + (l.diskon_tipe === "persen" ? "" : " selected") + '>Rp</option>'
             + '<option value="persen"' + (l.diskon_tipe === "persen" ? " selected" : "") + '>%</option></select> '
             + '<input type="text" inputmode="decimal" data-angka="4" class="uu-diskon" value="' + esc(angkaTeks(l.diskon || 0, 4)) + '" style="width:110px"></td>'
+            + '<td class="r"><input type="text" data-angka="2" data-minus class="uu-peny" value="' + esc(angkaTeks(l.penyesuaian || 0)) + '" style="width:100px;text-align:right" title="penyesuaian pembulatan total baris"></td>'   /* #34 */
             + '<td>' + (l.jenis === "biaya" ? '<span class="muted">—</span>'
                 : '<input type="text" class="uu-ket" value="' + esc(l.keterangan || "") + '" placeholder="opsional" style="width:160px">') + '</td>'
           : '<td class="r"><input type="text" inputmode="decimal" data-angka="2" class="uu-ehc" value="'
@@ -5749,6 +5764,7 @@ function formMintaUbah(jenis, id){
         b.harga = angkaId(tr.querySelector(".uu-harga").value) || 0;
         b.diskon = angkaAlur(tr.querySelector(".uu-diskon").value);
         b.diskon_tipe = tr.querySelector(".uu-dtipe").value === "persen" ? "persen" : "rp";
+        b.penyesuaian = angkaAlur(tr.querySelector(".uu-peny").value);   /* #34: ikut terkirim, tidak hilang saat diterapkan */
         b.keterangan = ketEl ? (ketEl.value.trim() || null) : null;
         if (!(b.qty > 0)) salahBaris.push("Baris " + b.urut + ": qty harus lebih dari 0.");
         var inlEl = tr.querySelector(".uu-inl");
@@ -5794,6 +5810,17 @@ function formMintaUbah(jenis, id){
   });
 }
 
+/* #34: Total baris bisa diubah (customer biasa membulatkan) — selisih terhadap qty × harga − diskon dicatat
+   sebagai penyesuaian pembulatan baris itu, maks ±Rp 1.000 (CHECK po_lines, berkas 113). */
+var PENYESUAIAN_MAKS = 1000;
+function poTotalBarisHtml(b, i){
+  var pj = Number(b.penyesuaian) || 0;
+  return '<div class="bi-hasil"><label>Total baris <span class="muted" style="font-weight:400">bisa diubah</span></label>'
+    + '<input type="text" inputmode="decimal" data-angka="2" class="po-total" data-i="' + i + '" value="' + ribu(poTotalBaris(b)) + '"'
+    +   ' title="Ubah bila total di PO customer dibulatkan — selisihnya maks ±Rp 1.000">'
+    + (pj ? '<span class="bi-tanda">penyesuaian pembulatan ' + (pj > 0 ? '+' : '−') + rp(Math.abs(pj)) + '</span>' : '')
+    + '</div>';
+}
 function poBarisHtml(f){
   return f.baris.map(function(b, i){
     var p = b.kode ? produkById(b.kode) : null;
@@ -5816,7 +5843,7 @@ function poBarisHtml(f){
         + '</div>'
         + '<div class="bi-ketpo" style="grid-column:1/-1"><label>Keterangan</label>'   /* #6: baris set juga boleh berketerangan */
         +   '<input type="text" class="po-ket" data-i="'+i+'" value="'+esc(b.keterangan||"")+'" placeholder="opsional — catatan untuk baris ini"></div>'
-        + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b></div>'
+        + poTotalBarisHtml(b, i)   /* #34 */
         + '<div class="bi-angka bi-po">'
         +   '<div><label>Qty (set)</label><input type="text" inputmode="numeric" data-angka="0" class="po-qty" data-i="'+i+'" value="'+angkaTeks(b.qty,0)+'"></div>'
         +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"'+(b.set_id?' disabled':'')+'></div>'   /* #28: set inline — harga per set dari PO customer, boleh diubah */
@@ -5867,7 +5894,7 @@ function poBarisHtml(f){
       + '</div>'
       + (biaya ? '' : '<div class="bi-ketpo" style="grid-column:1/-1"><label>Keterangan</label>'
       +   '<input type="text" class="po-ket" data-i="'+i+'" value="'+esc(b.keterangan||"")+'" placeholder="opsional — catatan untuk baris ini"></div>')   /* #6 */
-      + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b></div>'
+      + poTotalBarisHtml(b, i)   /* #34 */
       + '<div class="bi-angka bi-po">'
       +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="po-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
       +   '<div><label>Harga satuan</label><input type="text" inputmode="decimal" data-angka="2" class="po-harga" data-i="'+i+'" value="'+ribu(b.harga)+'"></div>'
@@ -6018,12 +6045,33 @@ function pasangBarisPoAsli(){
       if (inp.classList.contains("po-qty")) f.baris[i].qty = v;
       else if (inp.classList.contains("po-diskon")) f.baris[i].diskon = v;   /* #7 */
       else f.baris[i].harga = v;
+      if (Number(f.baris[i].penyesuaian)) {   /* #34: penyesuaian mengacu qty×harga−diskon lama — dilepas, total ikut rumus lagi */
+        f.baris[i].penyesuaian = 0;
+        toast("Baris " + (i + 1) + ": penyesuaian pembulatan dilepas karena qty/harga/diskon berubah — ubah Total baris lagi bila perlu.");
+      }
       gambarUlangAman(panelPo);   /* klik Submit sesudah mengetik tidak hilang */
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-total"), function(inp){   /* #34 */
+    inp.addEventListener("change", function(){
+      var i = +inp.dataset.i, b = f.baris[i], ketik = angkaId(inp.value);
+      if (ketik === null) { b.penyesuaian = 0; gambarUlangAman(panelPo); return; }
+      var dasar4 = poNilaiDasar1e4(b), selisih4 = Math.round(ketik * 10000) - dasar4;
+      if (selisih4 % 100 !== 0) {
+        toast("Baris " + (i + 1) + ": qty × harga − diskon = Rp " + angkaTeks(dasar4 / 10000, 6)
+          + " tidak habis dalam sen, jadi totalnya tidak bisa disesuaikan. Ubah qty/harga-nya.", true);
+      } else if (Math.abs(selisih4) > PENYESUAIAN_MAKS * 10000) {
+        toast("Baris " + (i + 1) + ": total yang diketik beda " + rp(selisih4 / 10000) + " dari qty × harga − diskon ("
+          + rp(dasar4 / 10000) + "). Penyesuaian pembulatan paling banyak ±Rp 1.000 — periksa lagi qty/harga-nya.", true);
+      } else {
+        b.penyesuaian = selisih4 / 10000;
+      }
+      gambarUlangAman(panelPo);
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-diskon-tipe"), function(sel){   /* #7: mode Rp / % */
     sel.addEventListener("change", function(){
-      f.baris[+sel.dataset.i].diskon_tipe = sel.value; panelPo();
+      f.baris[+sel.dataset.i].diskon_tipe = sel.value; f.baris[+sel.dataset.i].penyesuaian = 0; panelPo();   /* #34 */
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-hapus"), function(b){
@@ -6092,12 +6140,12 @@ function siapkanBarisPo(f){
                    set_komponen: b.set_id ? null : (b.setKomp || null),   /* #28: set inline */
                    deskripsi:(b.deskripsi||"").trim() || null, qty:qty, harga:Number(b.harga) || 0,
                    keterangan:(b.keterangan||"").trim() || null,   /* #6 */
-                   diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp" });
+                   diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp", penyesuaian:Number(b.penyesuaian) || 0 });   /* #34 */
       return;
     }
     if (b.jenis === "biaya") {
       if (!(b.deskripsi || "").trim()) { salah.push(no + "keterangan biaya belum diisi."); return; }
-      kirim.push({ jenis:"biaya", deskripsi:b.deskripsi.trim(), qty:qty, harga:Number(b.harga) || 0, diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp" });
+      kirim.push({ jenis:"biaya", deskripsi:b.deskripsi.trim(), qty:qty, harga:Number(b.harga) || 0, diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp", penyesuaian:Number(b.penyesuaian) || 0 });   /* #34 */
       return;
     }
     /* Ini yang dulu bocor. Nama barang yang diketik tapi tidak dipilih
@@ -6113,7 +6161,8 @@ function siapkanBarisPo(f){
       return;
     }
     kirim.push({ jenis:"barang", kode:b.kode || null, usulanTeks:b.usulanTeks || "",
-                 qty:qty, harga:Number(b.harga) || 0, keterangan:(b.keterangan||"").trim() || null, diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp" });
+                 qty:qty, harga:Number(b.harga) || 0, keterangan:(b.keterangan||"").trim() || null, diskon:Number(b.diskon) || 0, diskon_tipe:b.diskon_tipe || "rp",
+                 penyesuaian:Number(b.penyesuaian) || 0 });   /* #34 */
   });
   return { kirim: kirim, salah: salah };
 }
@@ -6176,6 +6225,7 @@ function simpanPo(){
                deskripsi: b.jenis === "biaya" ? b.deskripsi : (adaSet(b) ? b.deskripsi : null),
                keterangan: b.jenis === "biaya" ? null : (b.keterangan || null),   /* #6 */
                diskon: Number(b.diskon) || 0, diskon_tipe: b.diskon_tipe || "rp",   /* #7 */
+               penyesuaian: Number(b.penyesuaian) || 0,   /* #34 */
                qty: Number(b.qty), harga: Number(b.harga) };
     })).then(function(){ return po; });
   })
@@ -13318,6 +13368,8 @@ function formGmUsulUbah(ref){
         barisBeda(lbl + "diskon", teksDiskon(a), teksDiskon(b));
       if (isPoUsul && String(a.keterangan || "") !== String(b.keterangan || ""))
         barisBeda(lbl + "keterangan", a.keterangan || "—", b.keterangan || "—");
+      if (isPoUsul && b.penyesuaian !== undefined && Number(a.penyesuaian || 0) !== Number(b.penyesuaian || 0))   /* #34 */
+        barisBeda(lbl + "penyesuaian pembulatan", rp(Number(a.penyesuaian || 0)), rp(Number(b.penyesuaian || 0)));
       if (isPoUsul && pl[k] && !samaSen(poTotalBaris(a), poTotalBaris(b)))
         barisBeda(lbl + "nilai baris", rp(poTotalBaris(a)), rp(poTotalBaris(b)));
     });
@@ -18996,6 +19048,8 @@ window.__alur = {
   hitungPo: function(f){ return poHitungLokal(f); },
   hitungSp: function(f){ return spHitungLokal(f); },
   panelSp: function(){ panelSp(); },
+  spBarisDariPo: function(l){ return spBarisDariPo(l); },   /* #34 */
+  cekDiskonPo: function(b, no){ return cekDiskonPo(b, no); },
   panelBelum: function(id){ panelBelum(id); },
   panelLanjut: function(id){ if (PANEL_LANJUT[id]) PANEL_LANJUT[id](); },
   /* Dua penukar untuk uji layar. Unduhan sungguhan tidak bisa diperiksa

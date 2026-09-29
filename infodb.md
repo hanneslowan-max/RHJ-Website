@@ -582,6 +582,7 @@ CREATE TABLE public.po_lines (
   diskon_tipe text NOT NULL DEFAULT 'rp'::text CHECK (diskon_tipe = ANY (ARRAY['rp'::text, 'persen'::text])),
   set_id bigint,                                              -- #1 (berkas 85): baris SET
   set_komponen jsonb,                                         -- #1 (berkas 94): snapshot komponen set
+  penyesuaian numeric(14,2) NOT NULL DEFAULT 0,               -- #34 (berkas 113): penyesuaian pembulatan total baris (±)
   CONSTRAINT po_lines_pkey PRIMARY KEY (id),
   CONSTRAINT po_lines_po_id_fkey FOREIGN KEY (po_id) REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
   CONSTRAINT po_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
@@ -596,9 +597,17 @@ CREATE TABLE public.po_lines (
     OR (product_id IS NULL AND jenis = 'barang')),
   CONSTRAINT po_lines_set_komponen_larik CHECK (set_komponen IS NULL OR jsonb_typeof(set_komponen) = 'array'),
   -- berkas 107 (#12): baris berdiskon → qty*harga habis dalam sen (harga_nett SP 2 desimal harus bisa menyamai PO)
-  CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2))
+  CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2)),
+  -- berkas 113 (#34):
+  CONSTRAINT po_lines_penyesuaian_batas CHECK (abs(penyesuaian) <= 1000),
+  CONSTRAINT po_lines_penyesuaian_bruto_sen CHECK (penyesuaian = 0 OR qty * harga = trunc(qty * harga, 2)),
+  CONSTRAINT po_lines_nilai_tak_negatif CHECK (qty * harga − potongan + penyesuaian >= 0)
 );
--- Nilai baris = qty*harga − potongan (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus po_ringkas.
+-- Nilai baris = qty*harga − potongan + penyesuaian (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus
+--   po_ringkas (berkas 113, security_invoker tetap). Penyesuaian = total baris yang diketik penginput (PO customer
+--   dibulatkan) − (qty*harga − potongan); FE poNilaiBaris1e4. SP dari PO: baris berpenyesuaian dipecah seperti
+--   baris berdiskon (spBarisDariPo/pecahNettSen) → SP = PO sampai sen. periksa_baris_po_usul memeriksa
+--   penyesuaian (±1.000, 2 desimal, bruto habis sen); putuskan_ubah menulis ulang kolom ini dari usulan.
 -- Baris SET (#1): jenis 'barang', product_id NULL, set_id terisi, harga = harga per set, qty = jumlah set
 --   (bulat), deskripsi = nama set. set_komponen = [{product_id,qty,harga_nett,urut}] diisi trigger
 --   po_lines_set_snapshot (BEFORE INSERT/UPDATE -> jaga_set_baris_po, berkas 94): diambil dari definisi

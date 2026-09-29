@@ -39,7 +39,8 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - Harga per set dibagi ke tiap roda **sebanding price list** berlaku masing-masing, tepat sampai sen (grand total SP = PO tetap). Komponen tanpa price list → dibagi rata per pcs. Harga per roda di bawah price list tetap lewat approval GM.
 - Sales **tidak** menulis data master set (Produk → Set roda); set master tetap boleh dipilih sebagai jalan pintas. Harga set master dibagi menurut harga nett definisinya.
 - Diskon baris PO: mode Rp atau %; % ≤ 100, Rp ≤ qty × harga, potongan habis dalam sen; baris berdiskon wajib qty × harga habis dalam sen.
-- Baris PO punya keterangan. Ubah PO lewat approval tidak boleh menghilangkan set, diskon, keterangan.
+- **Total baris PO bisa diubah** (#34) mengikuti PO customer yang dibulatkan. Selisihnya terhadap qty × harga − diskon dicatat sebagai *penyesuaian pembulatan* baris itu (±, paling banyak **Rp 1.000 per baris**, dalam sen; qty × harga wajib habis dalam sen). Sistem tetap tidak membulatkan apa pun — angka customer dicatat apa adanya. Qty/harga/diskon diubah → penyesuaian dilepas. SP dari PO memecah nilai baris itu persis (maks. 2 baris pcs), jadi SP = PO tetap; harga per roda di bawah list tetap ke GM.
+- Baris PO punya keterangan. Ubah PO lewat approval tidak boleh menghilangkan set, diskon, keterangan, penyesuaian pembulatan.
 - Sales hanya bisa mengajukan ubah untuk PO miliknya.
 
 ### SP, cek Vonny, pengiriman, invoice
