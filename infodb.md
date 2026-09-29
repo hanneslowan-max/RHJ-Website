@@ -145,6 +145,12 @@ CREATE TABLE public.product_set_components (
 --   Ditegakkan: RPC simpan_set; constraint trigger DEFERRABLE INITIALLY DEFERRED psetc_jaga_komposisi
 --   (product_set_components) & pset_jaga_aktif (product_sets, saat diaktifkan) -> jaga_komposisi_set();
 --   dan saat set dipakai baris PO (po_lines_set_snapshot).
+-- #28 (berkas 108) SET INLINE: set juga boleh disusun langsung di baris po_lines / quote_lines
+--   (set_id NULL, set_komponen [{product_id,qty,urut}] qty per 1 set) tanpa baris product_sets —
+--   dipakai sales yang tidak berhak menulis data master. Diperiksa periksa_komposisi_set yang sama.
+--   Helper: set_inline_rapi(jsonb) [internal: normalkan, buang harga_nett], label_set_inline(jsonb)
+--   -> 'Set <tipe> (2 hidup + 2 mati)'. RPC pilihan_tipe_roda() (INVOKER, ikut RLS products): produk
+--   aktif non-usulan berfungsi Rem/Hidup/Mati + kunci tipe (kategori|brand|tipe_roda tanpa spasi).
 -- RPC (SECURITY INVOKER, hak = RLS): simpan_set(p_id, p_kepala, p_komponen) -> id, atomik;
 --   hapus_set(p_id) -> teks: hapus bila belum dipakai PO, bila sudah dipakai -> aktif=false.
 -- RLS: pset_baca/psetc_baca = boleh_lihat_produk(); tambah/ubah (dan hapus komponen) = boleh_ubah_impor()
@@ -470,15 +476,21 @@ CREATE TABLE public.quote_lines (
   urut integer NOT NULL DEFAULT 1,
   spesifikasi text,
   set_id bigint,
+  set_komponen jsonb,                                         -- #28 (berkas 108): isi set inline
   CONSTRAINT quote_lines_pkey PRIMARY KEY (id),
   CONSTRAINT quote_lines_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.quotes(id) ON DELETE CASCADE,
   CONSTRAINT quote_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
   CONSTRAINT quote_lines_set_id_fkey FOREIGN KEY (set_id) REFERENCES public.product_sets(id) ON DELETE SET NULL,
   CONSTRAINT quote_lines_qty_positif CHECK (qty > 0::numeric) NOT VALID,
   CONSTRAINT quote_lines_harga_wajar CHECK (harga >= 0::numeric) NOT VALID,
-  CONSTRAINT quote_lines_produk_atau_set CHECK (product_id IS NULL OR set_id IS NULL) NOT VALID
+  CONSTRAINT quote_lines_produk_atau_set CHECK (product_id IS NULL OR set_id IS NULL) NOT VALID,
+  CONSTRAINT quote_lines_set_inline CHECK (set_komponen IS NULL OR (set_id IS NULL AND product_id IS NULL
+    AND qty = trunc(qty) AND jsonb_typeof(set_komponen) = 'array'))   -- berkas 108
 );
 -- Baris set (#1, berkas 87): product_id NULL + set_id, satuan 'set', harga = harga per set.
+-- Set inline (#28, berkas 108): product_id & set_id NULL, set_komponen terisi, qty bulat; trigger
+--   quote_lines_set_inline (jaga_set_baris_quote) menormalkan + periksa_komposisi_set, satuan := 'set',
+--   deskripsi kosong/'—' := label_set_inline. simpan_penawaran menerima set_komponen per baris.
 -- RLS: ql_baca = boleh_lihat_quote(quote_id); ql_tulis = boleh_tulis_quote(quote_id).
 CREATE TABLE public.quote_counter (
   tahun integer NOT NULL,
@@ -540,8 +552,11 @@ CREATE TABLE public.po_lines (
   CONSTRAINT po_lines_diskon_maks CHECK (CASE WHEN diskon_tipe = 'persen' THEN diskon <= 100 ELSE diskon <= qty * harga END),
   CONSTRAINT po_lines_diskon_sen CHECK (CASE WHEN diskon_tipe = 'persen'
     THEN qty * harga * diskon / 100 = trunc(qty * harga * diskon / 100, 2) ELSE diskon = trunc(diskon, 2) END),
-  CONSTRAINT po_lines_set_qty_bulat CHECK (set_id IS NULL OR qty = trunc(qty)),
-  CONSTRAINT po_lines_set_bukan_produk CHECK (set_id IS NULL OR (product_id IS NULL AND jenis = 'barang')),
+  -- berkas 108 (#28): dua CHECK di bawah juga berlaku untuk set inline (set_komponen terisi)
+  CONSTRAINT po_lines_set_qty_bulat CHECK ((set_id IS NULL AND set_komponen IS NULL) OR qty = trunc(qty)),
+  CONSTRAINT po_lines_set_bukan_produk CHECK ((set_id IS NULL AND set_komponen IS NULL)
+    OR (product_id IS NULL AND jenis = 'barang')),
+  CONSTRAINT po_lines_set_komponen_larik CHECK (set_komponen IS NULL OR jsonb_typeof(set_komponen) = 'array'),
   -- berkas 107 (#12): baris berdiskon → qty*harga habis dalam sen (harga_nett SP 2 desimal harus bisa menyamai PO)
   CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2))
 );
@@ -553,7 +568,14 @@ CREATE TABLE public.po_lines (
 --   diabaikan, tidak bisa diubah langsung; putuskan_ubah (rhj.usul='on') membawa snapshot lama bila
 --   set_id sama. SP dari PO memecah set ke pcs menurut snapshot ini (FE spBarisDariPo): nilai bersih baris
 --   dibagi PERSIS (maks. 2 baris SP per item: n dan n+1 satuan Rp 1 / 1 sen) → grand total SP = PO.
--- Trigger lain: po_lines_jenis (jaga_jenis_baris), zz_audit_po_lines.
+-- Set INLINE (#28, berkas 108): set_id NULL + set_komponen [{product_id,qty,urut}] dari penginput
+--   (dinormalkan set_inline_rapi, wajib lolos periksa_komposisi_set, deskripsi kosong := label_set_inline),
+--   harga = harga PER SET dari PO customer. Tidak bisa diubah langsung; putuskan_ubah membawanya apa adanya
+--   (po_baris_usul_lengkap tak pernah mengambil set_komponen dari payload; dibuang bila baris diubah jadi
+--   produk/biaya). SP: nilai bersih dibagi ke komponen sebanding qty × price list berlaku (tanpa price list
+--   -> rata per pcs), dipecah persis sampai sen (FE bobotSetInline/alokasiSetSen).
+-- Trigger lain: po_lines_jenis (jaga_jenis_baris — barang tanpa product_id sah bila set_id ATAU
+--   set_komponen terisi, berkas 108), zz_audit_po_lines.
 -- RLS: pol_baca (PO terbaca), pol_tambah (PO terbaca + boleh_input_po), pol_ubah/pol_hapus
 --   (boleh_ubah_langsung = owner/gm). Perubahan oleh peran lain lewat ajukan_ubah → putuskan_ubah:
 --   cabang po melengkapi baris usulan dari baris tersimpan (po_baris_usul_lengkap: set_id, set_komponen,

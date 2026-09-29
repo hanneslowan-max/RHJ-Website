@@ -27,6 +27,9 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 
 ### PO & set
 - 1 set roda = 4 roda dari kategori & tipe sama; kombinasi sah: 4 rem, 4 hidup, 4 mati, 2 rem+2 hidup, 2 rem+2 mati, 2 hidup+2 mati. Di PO tampil "1 set @harga"; di SP dipecah ke pcs sesuai susunan set saat PO dibuat.
+- Set bisa dibuat **langsung di baris** PO / penawaran / SP tanpa PO oleh penginputnya (termasuk sales) tanpa data master: pilih tipe roda + kombinasi, jumlah set (bulat), harga **per set** sesuai PO customer; komponen ditentukan sistem dan disimpan hanya di baris itu (#28). DB menolak isi set yang tidak sah.
+- Harga per set dibagi ke tiap roda **sebanding price list** berlaku masing-masing, tepat sampai sen (grand total SP = PO tetap). Komponen tanpa price list → dibagi rata per pcs. Harga per roda di bawah price list tetap lewat approval GM.
+- Sales **tidak** menulis data master set (Produk → Set roda); set master tetap boleh dipilih sebagai jalan pintas. Harga set master dibagi menurut harga nett definisinya.
 - Diskon baris PO: mode Rp atau %; % ≤ 100, Rp ≤ qty × harga, potongan habis dalam sen; baris berdiskon wajib qty × harga habis dalam sen.
 - Baris PO punya keterangan. Ubah PO lewat approval tidak boleh menghilangkan set, diskon, keterangan.
 - Sales hanya bisa mengajukan ubah untuk PO miliknya.
