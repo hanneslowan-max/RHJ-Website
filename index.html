@@ -4039,9 +4039,9 @@ function cariPelanggan(q, opsi){
 function cekPemilikPelanggan(q, rep){
   var t = String(q || "").trim();
   if (t.length < 3 || CARI_PEL.tanpaCekPemilik) return Promise.resolve({ baris: [], galat: "" });
-  /* #20: nama tersimpan sudah rapi ("PT ABC Sentosa") — ketikan "abc sentosa, pt" dibersihkan dulu */
-  var bersih = polaCariNama(t).replace(/\*/g, " ").trim();
-  if (bersih.length >= 3) t = bersih;
+  /* #20: teks dikirim apa adanya — RPC (berkas 105) yang membuang tanda baca & PT/CV di KEDUA sisi
+     lalu mencocokkan per kata ke nama & nama_lama. Membersihkan di sini saja membuat
+     "PT Indah Kiat Pulp & Paper Tbk" tak lagi cocok dengan nama tersimpan (regresi #4). */
   return api("POST", "/rpc/cek_pemilik_pelanggan", { p_nama: t, p_rep: rep ? Number(rep) : null })
     .then(function(r){ return { baris: r || [], galat: "" }; })
     .catch(function(e){

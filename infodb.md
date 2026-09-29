@@ -374,6 +374,10 @@ END,
 -- customers.industri [berkas 101, #25]: diisi lewat form CRM (RLS cust_ubah) atau RPC
 --   set_industri_pelanggan(p_customer, p_industri) (owner/gm/vonny, atau owner/gm/staff/sales — sales hanya
 --   pelanggan miliknya/belum bertuan). Tebakan dari industri_lama: rhj_industri_tebak(text).
+--   [berkas 105] peta dibuat lebih konservatif: kata generik (supplier/trading/distributor/toko/store/shop/
+--   service/equipment/peralatan/perdagangan/grosir/…) tanpa kata industri yang jelas → NULL (diisi manual).
+-- cek_pemilik_pelanggan(p_nama, p_rep) [berkas 87, diubah 105]: cocok per kata setelah tanda baca & PT/CV/UD/PD/
+--   TB/Tbk/Toko dibuang di kedua sisi, ke nama DAN nama_lama; keluaran tetap nama + nama sales (maks 5).
 CREATE TABLE public.leads (
   id bigint NOT NULL DEFAULT nextval('leads_id_seq'::regclass),
   customer_id bigint NOT NULL,
@@ -1094,4 +1098,12 @@ CREATE TABLE public.customers_industri_sebelum_101 (   -- [berkas 101, #25] cada
   diubah_pada timestamp with time zone,
   dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT customers_industri_sebelum_101_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.customers_industri_koreksi_105 (   -- [berkas 105, #25] isian otomatis 101 yang dikoreksi (kata generik supplier/trading/toko/… → NULL); RLS aktif, tanpa akses klien
+  id bigint NOT NULL,
+  industri_lama text,
+  industri_sebelum text,
+  industri_sesudah text,
+  dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT customers_industri_koreksi_105_pkey PRIMARY KEY (id)
 );
