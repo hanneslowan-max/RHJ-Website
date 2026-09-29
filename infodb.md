@@ -107,6 +107,7 @@ CREATE TABLE public.products (
   usulan boolean NOT NULL DEFAULT false,
   usulan_teks text,
   kategori text NOT NULL CHECK (kategori = ANY (ARRAY['Roda'::text, 'Pallet Mesh'::text, 'Hospital'::text, 'Filing Cabinet'::text, 'Trolley'::text, 'Hand Pallet'::text, 'Lainnya'::text])),
+  spesifikasi text,                                           -- #40 (berkas 109): spesifikasi baku → isian awal penawaran
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
   CONSTRAINT products_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)
@@ -445,6 +446,8 @@ CREATE TABLE public.quotes (
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
   dibuat_oleh uuid,
   sales_rep_id bigint,
+  mode_ppn text NOT NULL DEFAULT 'exclude'::text,             -- #42 (berkas 109): exclude | include | non
+  CONSTRAINT quotes_mode_ppn_cek CHECK (mode_ppn = ANY (ARRAY['exclude'::text, 'include'::text, 'non'::text])),
   CONSTRAINT quotes_pkey PRIMARY KEY (id),
   CONSTRAINT quotes_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id) ON DELETE SET NULL,
   CONSTRAINT quotes_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
@@ -492,6 +495,28 @@ CREATE TABLE public.quote_lines (
 --   quote_lines_set_inline (jaga_set_baris_quote) menormalkan + periksa_komposisi_set, satuan := 'set',
 --   deskripsi kosong/'—' := label_set_inline. simpan_penawaran menerima set_komponen per baris.
 -- RLS: ql_baca = boleh_lihat_quote(quote_id); ql_tulis = boleh_tulis_quote(quote_id).
+-- Berkas 109 (penawaran #40 #41 #42 #47 #48):
+--   simpan_penawaran(p_kepala, p_baris) [INVOKER] — p_kepala.pelanggan_baru {nama,hp,lokasi} → pelanggan dibuat
+--     di transaksi yang sama; kepada := customers.nama (rapi); p_kepala.mode_ppn; memanggil catat_spesifikasi_sales.
+--     Kembali {id, nomor, customer_id, kepada}.
+--   buat_pelanggan_baru(p_nama, p_hp, p_lokasi, p_sales_rep) [DEFINER] -> customers.id — wajib nama, alamat, HP
+--     (dibakukan 62…), sales PIC (sales = dirinya; lainnya wajib pilih sales aktif). Tolak dobel nama
+--     (kunci_nama_pelanggan: kata alfanumerik tanpa PT/CV/UD/…, juga nama_lama) atau dobel HP. Dipakai #41 & #29.
+--   catat_spesifikasi_sales(p_quote) [DEFINER] — upsert spesifikasi per (produk, sales penawaran); kosong → dihapus.
+--   quotes_jaga_sales (trigger): pelanggan bertuan HANYA atas nama pemegangnya — semua peran (dulu owner/GM/staff bebas).
+CREATE TABLE public.spesifikasi_sales (   -- #40 (berkas 109): spesifikasi terakhir tiap sales per produk; RLS baca (sales: miliknya), tulis hanya lewat catat_spesifikasi_sales()
+  product_id bigint NOT NULL,
+  sales_rep_id bigint NOT NULL,
+  spesifikasi text NOT NULL CHECK (btrim(spesifikasi) <> ''::text),
+  quote_id bigint,
+  diubah_pada timestamp with time zone NOT NULL DEFAULT now(),
+  diubah_oleh uuid,
+  CONSTRAINT spesifikasi_sales_pkey PRIMARY KEY (product_id, sales_rep_id),
+  CONSTRAINT spesifikasi_sales_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE,
+  CONSTRAINT spesifikasi_sales_sales_rep_id_fkey FOREIGN KEY (sales_rep_id) REFERENCES public.sales_reps(id) ON DELETE CASCADE,
+  CONSTRAINT spesifikasi_sales_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.quotes(id) ON DELETE SET NULL,
+  CONSTRAINT spesifikasi_sales_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)
+);
 CREATE TABLE public.quote_counter (
   tahun integer NOT NULL,
   bulan integer NOT NULL,

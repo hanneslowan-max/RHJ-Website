@@ -18,12 +18,18 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 ### Akses & peran
 - Keamanan ditegakkan di DB (RLS/RPC/trigger); FE hanya menyembunyikan tombol.
 - Sales hanya melihat & mengolah data miliknya (customer, penawaran, PO, SP). Customer tanpa pemilik boleh dipakai; customer milik sales lain tidak — sistem memberi peringatan pemiliknya.
+- Penawaran untuk pelanggan yang sudah bertuan **selalu** atas nama sales pemegangnya — berlaku untuk semua peran, termasuk owner/GM/staff/Vonny (#48). Bila memang perlu, pelanggannya dipindah dulu di tab Pelanggan.
 - Vonny: membuat penawaran mewakili sales (wajib pilih sales), input PO & usul produk baru, membuat & mengubah **produk**, melihat order impor (tidak mengubah), cek SP. Hapus produk hanya owner. Pembayaran supplier tertutup bagi Vonny.
 - Lenni: melihat PO & SP (baca saja).
 
 ### Penawaran
 - Masa berlaku default kosong (tanpa batas).
 - Setiap penawaran tercatat atas nama satu sales. Baris boleh berisi produk atau set, dengan spesifikasi; penawaran punya catatan.
+- Penawaran boleh untuk pelanggan **baru** (#41): diisi langsung di form penawaran — wajib nama, alamat, HP; sales PIC = sales penawaran — dan ikut tersimpan ke data pelanggan saat penawaran disimpan. Nama/HP yang sudah ada di master ditolak (pilih dari daftar).
+- Sebelum disimpan, penawaran ditampilkan dulu sebagai pratinjau dokumen (#39). Barang/set yang sudah dipilih bisa diganti (#43). Penawaran lama bisa dicari lalu disalin jadi penawaran baru — nomor baru, tanggal hari ini, harga dibandingkan dengan price list yang berlaku sekarang (#44).
+- Nama perusahaan di penawaran diambil dari data pelanggan (sudah dirapikan: PT/CV di depan), bukan teks saat penawaran dibuat (#47).
+- Mode harga penawaran (#42): **Exclude PPN** (bawaan — PPN 11% ditambahkan), **Include PPN** (harga sudah termasuk PPN: total = Σ qty × harga persis; DPP = total ÷ 1,11; PPN = total − DPP, tampil sampai sen), atau **Non-PPN**.
+- Spesifikasi (#40): produk punya spesifikasi master (diubah owner/GM/staff/Vonny). Di penawaran kolom spesifikasi terisi otomatis dari spesifikasi **terakhir sales itu** untuk produk tersebut, atau dari master bila belum ada; tetap bisa diedit, dan setiap editan tersimpan lagi sebagai spesifikasi terakhir sales itu saat penawaran disimpan. Editan sales tidak mengubah master.
 
 ### PO & set
 - 1 set roda = 4 roda dari kategori & tipe sama; kombinasi sah: 4 rem, 4 hidup, 4 mati, 2 rem+2 hidup, 2 rem+2 mati, 2 hidup+2 mati. Di PO tampil "1 set @harga"; di SP dipecah ke pcs sesuai susunan set saat PO dibuat.
