@@ -3768,6 +3768,8 @@ function spRepEfektif(f){
 
 /* ── memuat ──────────────────────────────────────────────────────────── */
 var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,jenis,qty,harga,keterangan,diskon,diskon_tipe,set_id,set_komponen,product_sets(id,nama,product_set_components(product_id,qty,harga_nett,urut)))";   /* #1: baris set + snapshot komponen (berkas 94); definisi set = cadangan data lama */
+/* #18: ringkasan pembatalan SP untuk satu PO (null bila tidak ada batal sebagian). */
+function poBatalInfo(poId){ return (ALUR.poBatal && ALUR.poBatal[poId]) || null; }
 function muatPo(paksa){
   if (ALUR.dimuatPo && !paksa) return Promise.resolve();
   /* Mode cari SENGAJA mengabaikan jendela waktu. Gunanya pencarian ini
@@ -3798,9 +3800,13 @@ function muatPo(paksa){
       kosongkan ? Promise.resolve([])
                 : api("GET", "/po_ringkas?select=*" + syarat + (cari ? "&limit=1" : "")),
       api("GET", "/po_belum_sp?select=po_id&order=tanggal.desc&limit=" + (ALUR.batasBelum + 1)),
-      api("GET", "/po_nomor_dobel?select=no_po,jumlah,terakhir,perusahaan&order=terakhir.desc")
+      api("GET", "/po_nomor_dobel?select=no_po,jumlah,terakhir,perusahaan&order=terakhir.desc"),
+      /* #18: PO yang SP-nya batal sebagian — nilai batal & efektif (view po_batal_ringkas). */
+      api("GET", "/po_batal_ringkas?select=*&batal_sebagian=is.true").catch(function(){ return []; })
     ])
     .then(function(r){
+      ALUR.poBatal = {};
+      (r[5] || []).forEach(function(x){ ALUR.poBatal[x.po_id] = x; });
       var ring = {};
       (r[2] || []).forEach(function(x){ ring[x.po_id] = x; });
       var baris = r[0] || [];
@@ -3839,7 +3845,7 @@ function muatPo(paksa){
         });
     });
 }
-var SP_KOLOM = "/sales_orders?select=*,sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,harga_list,ehc_item,jenis,batal,batal_alasan)";   /* #18: batal baris */
+var SP_KOLOM = "/sales_orders?select=*,sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,harga_list,ehc_item,jenis,batal,batal_alasan,qty_batal,batal_oleh,batal_pada)";   /* #18: batal baris (+qty_batal: batal sebagian) */
 function muatSp(paksa){
   if (ALUR.dimuatSp && !paksa) return Promise.resolve();
   /* Sama seperti di PO: mencari SENGAJA melewati jendela waktu. Kotak cari
@@ -4394,7 +4400,12 @@ function panelPo(){
       + '<td><b>'+esc(p.nama_customer)+'</b></td>'
       + '<td>'+esc(namaRepAlur(p.sales_rep_id))+'</td>'
       + '<td class="potong" title="'+esc(brs)+'">'+esc(brs)+'</td>'
-      + '<td class="r">'+(p.ringkas?rp(p.ringkas.grand_total):'—')+'</td>'
+      + '<td class="r">'+(p.ringkas?rp(p.ringkas.grand_total):'—')
+      +   (function(pb){ return pb   /* #18: batal sebagian di SP-nya */
+            ? ' <span class="pill p-sebagian" title="dibatalkan di SP '+esc(rp(pb.nilai_batal))+' · efektif '+esc(rp(pb.grand_total_efektif))+'">batal sebagian</span>'
+              + '<br><span class="muted" style="font-size:11px">efektif '+rp(pb.grand_total_efektif)+'</span>'
+            : ''; })(poBatalInfo(p.id))
+      + '</td>'
       + '<td>'+(p.lampiran?'<span class="pill p-lunas">ada</span>':'<span class="muted">—</span>')+'</td>'
       + (bolehUsulPo ? '<td style="white-space:nowrap">' + (p.batal
             ? '<span class="pill p-belum" title="' + esc(p.alasan_batal || "") + '">batal</span>'
@@ -4866,20 +4877,32 @@ function formDetailDoc(jenis, row){
     + tile("Grand total", r ? rp(r.grand_total) : "—", "termasuk PPN")
     + (isPo ? "" : tile("Status", row.status || "—", "dihitung database"))
     + '</div>';
-  /* #18: batal/pulihkan baris SP — hanya sebelum surat jalan/invoice terbit,
-     untuk peran alur jual atau vonny, dan hanya SP (bukan PO). */
-  var bisaUbahBaris = !isPo && (bolehAlurJual() || saya.peran === "vonny")
+  /* #18: batal SISA qty per baris SP (bukan cuma satu baris utuh). Tombol hanya untuk alur jual/vonny;
+     batas sebenarnya (qty terkirim tak bisa dibatalkan, SP ber-invoice, klaim) dijaga database. */
+  var bisaBatal = !isPo && (bolehAlurJual() || saya.peran === "vonny")
       && !row.no_surat_jalan && !row.no_invoice && row.status !== "batal";
-  var aktifCount = lines.filter(function(l){ return !l.batal; }).length;
-  h += '<h3 class="sec">Baris</h3><div class="tw"><table><thead><tr>'
-    + '<th class="l">Barang</th><th>Qty</th>'
-    + (isPo ? '<th class="r">Harga</th><th class="r">Diskon</th>' : '<th class="r">Nett</th><th class="r">EHC</th>')
-    + '<th class="r">Total</th>'
-    + (bisaUbahBaris ? '<th></th>' : '') + '</tr></thead><tbody>';
-  lines.forEach(function(l){
-    var pr = produkById(l.product_id);
-    var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
-    if (isPo) {
+  var bisaPulih = !isPo && (bolehAlurJual() || saya.peran === "vonny")
+      && !row.no_invoice && row.status !== "batal";
+  if (isPo) {
+    /* #18: PO = dokumen pelanggan, tidak diubah; pembatalan baris di SP-nya ditampilkan di sini. */
+    var pb = poBatalInfo(row.id);
+    if (pb) h += '<div class="tiles" style="margin-bottom:4px">'
+      + tile("Dibatalkan di SP", rp(pb.nilai_batal), pb.jml_sp + " SP terkait", "alert")
+      + tile("Nilai efektif", rp(pb.grand_total_efektif), "PO " + rp(pb.grand_total_po) + " − batal")
+      + '</div><div class="flag"><span class="f-ico">i</span><div><b>Batal sebagian.</b> PO adalah dokumen '
+      + 'pelanggan dan tidak diubah — pembatalan item tercatat di SP-nya. Kecocokan SP = PO tetap '
+      + 'dibandingkan pada nilai awal.</div></div>';
+  } else {
+    h += '<div id="dd-nilai-batal"></div>';
+  }
+  h += '<h3 class="sec">Baris</h3>';
+  if (isPo) {
+    h += '<div class="tw"><table><thead><tr>'
+      + '<th class="l">Barang</th><th>Qty</th><th class="r">Harga</th><th class="r">Diskon</th>'
+      + '<th class="r">Total</th></tr></thead><tbody>';
+    lines.forEach(function(l){
+      var pr = produkById(l.product_id);
+      var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
       /* #7: satu sumber rumus — poDiskonRp/poTotalBaris (= po_ringkas), bukan tulisan ulang. */
       var potong = poDiskonRp(l);
       var tot = poTotalBaris(l);
@@ -4895,62 +4918,155 @@ function formDetailDoc(jenis, row){
       h += '<tr><td class="l">'+esc(nama)+setInfo+(l.keterangan?' <span class="muted">· '+esc(l.keterangan)+'</span>':'')+'</td>'
         + '<td>'+esc(ribu(l.qty))+(l.set_id?' set':'')+'</td><td class="r">'+rp(l.harga)+'</td><td class="r">'+diskonTampil+'</td>'
         + '<td class="r">'+rp(tot)+'</td></tr>';
-    } else {
-      var tt = Math.round((Number(l.qty)||0)*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0)));
-      var bt = !!l.batal;
-      h += '<tr'+(bt?' style="opacity:.55;text-decoration:line-through"':'')+'>'
-        + '<td class="l">'+esc(nama)
-        +   (bt?' <span class="pill p-belum" title="'+esc(l.batal_alasan||"")+'">dibatalkan</span>':'')+'</td>'
-        + '<td>'+esc(l.qty)+'</td>'
-        + '<td class="r">'+rp(l.harga_nett)+'</td><td class="r">'+rp(l.ehc_item)+'</td>'
-        + '<td class="r">'+rp(tt)+'</td>'
-        + (bisaUbahBaris
-            ? '<td style="text-decoration:none">'+(bt
-                ? '<button class="btn kecil pulih-baris" type="button" data-id="'+l.id+'">Pulihkan</button>'
-                : (aktifCount>1
-                    ? '<button class="btn kecil bahaya batal-baris" type="button" data-id="'+l.id+'">Batalkan</button>'
-                    : '<span class="muted" title="Sisakan minimal satu baris — batalkan seluruh SP kalau perlu">—</span>'))
-              + '</td>'
-            : '')
-        + '</tr>';
-    }
-  });
-  h += '</tbody></table></div>';
-  if (!isPo && lines.some(function(l){ return l.batal; }))
-    h += '<p class="bantu" style="margin-top:6px">Baris yang dibatalkan tidak ikut dihitung di grand '
-       + 'total, komisi, maupun EHC — nilainya sudah menyesuaikan ke sisa item.</p>';
+    });
+    h += '</tbody></table></div>';
+  } else {
+    h += '<div id="dd-baris">' + barisSpDetailHtml(lines, null, false, false) + '</div>'
+      +  '<div id="dd-aksi-baris"></div>'
+      +  '<p class="bantu" style="margin-top:6px">Qty yang dibatalkan tidak ikut grand total, komisi, EHC, '
+      +  'maupun invoice. Hanya <b>sisa yang belum terkirim</b> yang bisa dibatalkan — yang sudah terkirim '
+      +  'lewat retur. PO tetap mencatat nilai awalnya.</p>';
+  }
   if (!isPo && bolehLihatHpp() && r) h += '<p class="muted" style="margin-top:8px">Komisi terhitung: <b>'+rp(r.komisi)+'</b></p>';
   if (row.catatan) h += '<div class="flag" style="margin-top:10px"><span class="f-ico">✎</span><div>'+esc(row.catatan)+'</div></div>';
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = '<button class="btn" id="btn-detail-tutup" type="button">Tutup</button>';
   bukaLaci((isPo ? "Detail PO — " + row.no_po : "Detail SP — " + row.no_sp));
   $("btn-detail-tutup").addEventListener("click", tutupLaci);
-  Array.prototype.forEach.call($("laci-form").querySelectorAll(".batal-baris"), function(b){
-    b.addEventListener("click", function(){ ubahBatalBaris("batal", Number(b.dataset.id), row.id); });
-  });
-  Array.prototype.forEach.call($("laci-form").querySelectorAll(".pulih-baris"), function(b){
-    b.addEventListener("click", function(){ ubahBatalBaris("pulih", Number(b.dataset.id), row.id); });
+  if (isPo) return;
+
+  /* #15 #18: terkirim/sisa per baris dari so_kirim_sisa, nilai awal/batal dari sp_nilai_batal. */
+  muatInfoBarisSp(row.id).then(function(info){
+    if (!$("dd-baris")) return;
+    var pulihOk = bisaPulih && (!row.no_surat_jalan || info.bertahap);
+    $("dd-baris").innerHTML = barisSpDetailHtml(lines, info, bisaBatal, pulihOk);
+    var nb = info.nilai;
+    if (nb && nb.ada_batal && $("dd-nilai-batal"))
+      $("dd-nilai-batal").innerHTML = '<div class="flag"><span class="f-ico">i</span><div><b>Batal sebagian.</b> '
+        + 'Dibatalkan ' + rp(nb.nilai_batal) + ' dari nilai awal ' + rp(nb.grand_total_awal)
+        + ' (= nilai PO). Nilai efektif SP: <b>' + rp(nb.grand_total_efektif) + '</b>.</div></div>';
+    Array.prototype.forEach.call($("dd-baris").querySelectorAll(".batal-baris, .pulih-baris"), function(b){
+      b.addEventListener("click", function(){
+        var l = lines.filter(function(x){ return String(x.id) === b.dataset.id; })[0];
+        if (l) formBatalQty(b.classList.contains("pulih-baris") ? "pulih" : "batal", row, lines, l, info);
+      });
+    });
+  }).catch(function(e){ if ($("dd-baris")) $("dd-baris").insertAdjacentHTML("beforeend", '<p class="muted">' + esc(e.message) + '</p>'); });
+}
+
+/* #18: qty batal per baris. Baris batal lama (batal=true tanpa qty_batal) dibaca sebagai batal penuh. */
+function qtyBatal(l){
+  var q = Number(l.qty_batal) || 0;
+  return (!q && l.batal) ? (Number(l.qty) || 0) : q;
+}
+function qtyEfektif(l){ return (Number(l.qty) || 0) - qtyBatal(l); }
+function fmtQty(n){ return (Number(n) || 0).toLocaleString("id-ID", { maximumFractionDigits: 2 }); }   /* qty, bukan rupiah */
+function muatInfoBarisSp(soId){
+  return Promise.all([
+    api("GET", "/so_kirim_sisa?so_id=eq." + soId + "&select=so_line_id,qty_kirim,sisa"),
+    api("GET", "/sp_nilai_batal?so_id=eq." + soId + "&select=grand_total_awal,grand_total_efektif,nilai_batal,ada_batal"),
+    api("GET", "/so_kirim?so_id=eq." + soId + "&select=id&limit=1")
+  ]).then(function(r){
+    var kirim = {};
+    (r[0] || []).forEach(function(x){ kirim[x.so_line_id] = Number(x.qty_kirim) || 0; });
+    return { kirim: kirim, nilai: (r[1] || [])[0] || null, bertahap: (r[2] || []).length > 0 };
   });
 }
-/* #18: panggil RPC batal/pulihkan baris, lalu muat ulang SP & buka lagi detailnya. */
-function ubahBatalBaris(aksi, lineId, soId){
-  var alasan = "";
-  if (aksi === "batal") {
-    alasan = prompt("Alasan membatalkan baris ini? (mis. customer batal item ini)", "");
-    if (alasan === null) return;
-    if (!String(alasan).trim()) { toast("Alasan wajib diisi.", true); return; }
-  }
+/* Tabel baris SP di laci detail: Pesan | Terkirim | Batal | Sisa | Nett | EHC | Total (efektif). */
+function barisSpDetailHtml(lines, info, bisaBatal, bisaPulih){
+  var aksi = !!info && (bisaBatal || bisaPulih);
+  var h = '<div class="tw"><table><thead><tr><th class="l">Barang</th><th class="r">Pesan</th>'
+    + '<th class="r">Terkirim</th><th class="r">Batal</th><th class="r">Sisa</th>'
+    + '<th class="r">Nett</th><th class="r">EHC</th><th class="r">Total</th>' + (aksi ? '<th></th>' : '')
+    + '</tr></thead><tbody>';
+  lines.forEach(function(l){
+    var pr = produkById(l.product_id);
+    var nama = pr ? (pr.kode + (pr.brand ? " · " + pr.brand : "")) : (l.deskripsi || "—");
+    var pesan = Number(l.qty) || 0, bq = qtyBatal(l), ef = pesan - bq;
+    var biaya = l.jenis === "biaya";
+    var kq = (info && !biaya) ? (info.kirim[l.id] || 0) : null;
+    var sisa = info ? (biaya ? ef : ef - kq) : null;
+    var penuh = bq > 0 && bq >= pesan, sebagian = bq > 0 && !penuh;
+    var tt = Math.round(ef * ((Number(l.harga_nett) || 0) + (Number(l.ehc_item) || 0)));
+    h += '<tr' + (penuh ? ' style="opacity:.55"' : '') + '>'
+      + '<td class="l"><span' + (penuh ? ' style="text-decoration:line-through"' : '') + '>' + esc(nama) + '</span>'
+      +   (penuh ? ' <span class="pill p-belum" title="' + esc(l.batal_alasan || "") + '">dibatalkan</span>' : '')
+      +   (sebagian ? ' <span class="pill p-sebagian" title="' + esc(l.batal_alasan || "") + '">batal sebagian</span>' : '')
+      + '</td>'
+      + '<td class="r">' + fmtQty(pesan) + '</td>'
+      + '<td class="r">' + (biaya ? '<span class="muted">—</span>' : (info ? fmtQty(kq) : '…')) + '</td>'
+      + '<td class="r">' + (bq ? fmtQty(bq) : '<span class="muted">0</span>') + '</td>'
+      + '<td class="r">' + (info ? (biaya ? '<span class="muted">—</span>' : fmtQty(sisa)) : '…') + '</td>'
+      + '<td class="r">' + rp(l.harga_nett) + '</td><td class="r">' + rp(l.ehc_item) + '</td>'
+      + '<td class="r">' + rp(tt) + '</td>';
+    if (aksi) {
+      h += '<td style="white-space:nowrap">'
+        + (bisaBatal && sisa > 0 ? '<button class="btn kecil bahaya batal-baris" type="button" data-id="' + l.id + '">Batalkan…</button>' : '')
+        + (bisaPulih && bq > 0 ? ' <button class="btn kecil pulih-baris" type="button" data-id="' + l.id + '">Pulihkan…</button>' : '')
+        + '</td>';
+    }
+    h += '</tr>';
+  });
+  return h + '</tbody></table></div>';
+}
+/* #18: kotak batal/pulih qty di laci detail SP — qty (default = sisa / qty batal) + alasan wajib. */
+function formBatalQty(aksi, row, lines, l, info){
+  var box = $("dd-aksi-baris"); if (!box) return;
+  var pr = produkById(l.product_id);
+  var nama = pr ? (pr.kode + (pr.brand ? " · " + pr.brand : "")) : (l.deskripsi || "—");
+  var pesan = Number(l.qty) || 0, bq = qtyBatal(l), ef = pesan - bq;
+  var kq = l.jenis === "biaya" ? 0 : (info.kirim[l.id] || 0);
+  var sisa = ef - kq;
+  var maks = aksi === "batal" ? sisa : bq;
+  var h = '<div class="kotak" style="margin-top:10px"><div class="kotak-isi">'
+    + '<b>' + (aksi === "batal" ? "Batalkan qty — " : "Pulihkan qty — ") + esc(nama) + '</b>'
+    + '<p class="muted" style="margin:4px 0 8px">Pesan ' + fmtQty(pesan) + ' · terkirim ' + fmtQty(kq)
+    + ' · batal ' + fmtQty(bq) + ' · sisa ' + fmtQty(sisa) + '</p>'
+    + medanAlur(aksi === "batal" ? "Qty dibatalkan (maks " + fmtQty(maks) + ")" : "Qty dipulihkan (maks " + fmtQty(maks) + ")",
+        '<input type="text" inputmode="decimal" id="dd-bq-qty" value="' + esc(String(maks)) + '" style="width:120px;text-align:right">')
+    + (aksi === "batal"
+        ? '<div style="margin-top:8px">' + medanAlur("Alasan (wajib)", '<input type="text" id="dd-bq-alasan" placeholder="mis. customer batalkan sisa item ini">') + '</div>'
+        : '')
+    + '<div class="baris-alat" style="margin-top:10px">'
+    + '<button class="btn ' + (aksi === "batal" ? "bahaya" : "utama") + '" id="dd-bq-simpan" type="button">'
+    + (aksi === "batal" ? "Batalkan qty ini" : "Pulihkan qty ini") + '</button> '
+    + '<button class="btn" id="dd-bq-tutup" type="button">Tutup</button></div>'
+    + (aksi === "batal" ? '<p class="bantu">Qty yang sudah terkirim tidak bisa dibatalkan (lewat retur). '
+        + 'Kalau semua sisa sudah terkirim/dibatalkan, surat jalan terakhir otomatis jadi penyelesai dan invoice terbuka.</p>' : '')
+    + '</div></div>';
+  box.innerHTML = h;
+  $("dd-bq-tutup").addEventListener("click", function(){ box.innerHTML = ""; });
+  $("dd-bq-simpan").addEventListener("click", function(){
+    var q = angka($("dd-bq-qty").value);
+    if (!q || q <= 0) { toast("Qty harus lebih dari 0.", true); return; }
+    if (q > maks) { toast("Qty melebihi batas (" + fmtQty(maks) + ").", true); return; }
+    var alasan = "";
+    if (aksi === "batal") {
+      alasan = String($("dd-bq-alasan").value || "").trim();
+      if (!alasan) { toast("Alasan wajib diisi.", true); return; }
+      /* Kalau pembatalan ini menghabiskan seluruh barang, SP ikut batal (database: batalkan_sp). */
+      var habis = !lines.some(function(x){
+        return x.jenis === "barang" && (qtyEfektif(x) - (String(x.id) === String(l.id) ? q : 0)) > 0;
+      });
+      if (habis && !confirm("Pembatalan ini menghabiskan SELURUH barang SP " + row.no_sp
+                            + ". Surat Pesanan-nya ikut DIBATALKAN. Lanjutkan?")) return;
+    }
+    kirimBatalBaris(aksi, l.id, row.id, q, alasan);
+  });
+}
+/* #18: panggil RPC batal/pulihkan qty baris, lalu muat ulang SP & buka lagi detailnya. */
+function kirimBatalBaris(aksi, lineId, soId, qty, alasan){
   /* #8: baris SP yang sudah lolos cek Vonny diubah oleh selain owner/GM/Vonny → keputusan
      Vonny gugur di database (berkas 88) dan SP kembali ke antrean Double Check. */
   var sp0 = (ALUR.sp || []).filter(function(x){ return String(x.id) === String(soId); })[0];
   var lamaLolos = !!(sp0 && sp0.vonny_ok === true);
   var pesan = "";
-  sibuk(true, aksi === "batal" ? "Membatalkan baris…" : "Memulihkan baris…");
+  sibuk(true, aksi === "batal" ? "Membatalkan qty…" : "Memulihkan qty…");
   api("POST", aksi === "batal" ? "/rpc/batalkan_baris_sp" : "/rpc/pulihkan_baris_sp",
-      aksi === "batal" ? { p_line: lineId, p_alasan: String(alasan).trim() } : { p_line: lineId })
+      aksi === "batal" ? { p_line: lineId, p_alasan: alasan, p_qty: qty } : { p_line: lineId, p_qty: qty })
     .then(function(msg){
       pesan = String(Array.isArray(msg) ? msg[0] : msg) || "Beres.";
-      ALUR.dimuatSp = false;
+      ALUR.dimuatSp = false; ALUR.dimuatPo = false;
       if (LANJUT && LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;   /* #8 */
       if (LANJUT && LANJUT.kirim) LANJUT.kirim.dimuat = false;
       return muatSp();
@@ -5048,6 +5164,15 @@ function formMintaUbah(jenis, id){
     + (langsung ? "Ajukan &amp; setujui" : "Ajukan ke GM") + '</button>';
   bukaLaci((langsung ? "Ubah " : "Minta ubah ") + (jenis === "po" ? "PO " + d.no_po
                                                                  : "SP " + d.no_sp));
+  /* #18: baris SP diganti utuh saat usulan disetujui — catatan batal qty akan hilang, jadi database
+     (jaga_hapus_baris_sp) menolak. Katakan di depan, jangan biarkan GM menyetujui lalu gagal. */
+  if (jenis !== "po" && baris.some(function(l){ return qtyBatal(l) > 0; })) {
+    $("laci-form").insertAdjacentHTML("afterbegin", '<div class="flag merah"><span class="f-ico">!</span><div>'
+      + '<b>Pulihkan pembatalan dulu.</b> SP ini punya qty yang dibatalkan. Usulan ubah SP mengganti '
+      + 'baris-barisnya, sehingga catatan batal akan hilang — pulihkan dulu lewat Detail SP, ajukan '
+      + 'perubahan, lalu batalkan lagi bila perlu.</div></div>');
+    $("btn-usul-kirim").disabled = true;
+  }
 
   $("btn-usul-kirim").addEventListener("click", function(){
     var alasan = String(nilaiForm("u_alasan") || "").trim();
@@ -5894,7 +6019,10 @@ function panelSp(){
     h += '<tr class="baris-klik" data-sp-detail="'+o.id+'" tabindex="0"><td><code>'+esc(o.no_sp)+'</code></td><td><b>'+esc(o.kepada)+'</b></td>'   /* #19 */
       + '<td>'+esc(tglPendekAlur(o.tanggal))+'</td><td>'+esc(namaRepAlur(o.sales_rep_id))+'</td>'
       + '<td><span class="pill '+(kelas[o.status]||"p-none")+'">'+esc(o.status)+'</span></td>'
-      + '<td class="r">'+(o.ringkas?rp(o.ringkas.grand_total):'—')+'</td>'
+      + '<td class="r">'+(o.ringkas?rp(o.ringkas.grand_total):'—')
+      +   (o.status !== "batal" && (o.sales_order_lines || []).some(function(l){ return qtyBatal(l) > 0; })
+            ? ' <span class="pill p-sebagian" title="Ada qty yang dibatalkan">batal sebagian</span>' : '')   /* #18 */
+      + '</td>'
       + (bolehLihatHpp() ? '<td class="r">'+(o.ringkas?rp(o.ringkas.komisi):'—')+'</td>' : '')
       + (bolehUsul ? '<td style="white-space:nowrap">' + (o.status === "batal"
             ? '<span class="pill p-belum" title="' + esc(o.alasan_batal || "") + '">batal</span>'
@@ -8831,7 +8959,8 @@ var KELAS_SP = { draft:"p-none", "menunggu gm":"p-sebagian", "menunggu vonny":"p
 function kolomSp(){
   return "id,no_sp,tanggal,kepada,sales_rep_id,status,batal,lunas,tgl_lunas,telat,"
        + "no_surat_jalan,tgl_surat_jalan,no_invoice,tgl_invoice,no_faktur,tgl_faktur,"
-       + "cash_minta,cash_ok,kirim_ok,kirim_alasan,catatan,vonny_ok,vonny_alasan,customer_id,customers(industri)";
+       + "cash_minta,cash_ok,kirim_ok,kirim_alasan,catatan,vonny_ok,vonny_alasan,customer_id,"
+       + "po_id,po_menyusul,tanpa_po_ok,customers(industri,perlu_konfirmasi)";   /* #15: cermin gerbang kirim */
 }
 
 var KOL_TGL_KIRIM = [
@@ -8863,7 +8992,7 @@ function kirimHal(id){
 /* ═══ TAB · DOUBLE CHECK VONNY (#8) ══════════════════════════════════════
    SP berstatus 'menunggu vonny' dikumpulkan di sini untuk dicek Vonny sebelum
    masuk Pengiriman. Peran: owner/gm/vonny (RLS juga membatasi barisnya). */
-var VONNY_KOLOM = "/sales_orders?select=*,customers(industri),sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal)";
+var VONNY_KOLOM = "/sales_orders?select=*,customers(industri),sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal,qty_batal)";   /* #18: qty_batal */
 function muatVonnyCek(){
   var V = LANJUT.vonnycek;
   if (V.memuat) return Promise.resolve();
@@ -8930,7 +9059,7 @@ function formCekVonny(s){
   if (!bolehKonfirmasiKirim()) { toast("Hanya owner, GM, atau Vonny yang boleh mengecek.", true); return; }
   var r = ringkasSo(s);
   var perluKat = !(s.customers && s.customers.industri && String(s.customers.industri).trim());
-  var lines = (s.sales_order_lines || []).filter(function(l){ return !l.batal; })
+  var lines = (s.sales_order_lines || []).filter(function(l){ return !l.batal && qtyEfektif(l) > 0; })   /* #18 */
                 .slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); });
   var h = '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, tglTampil(s.tanggal))
@@ -8952,8 +9081,11 @@ function formCekVonny(s){
     + '<th class="r">Nett</th><th class="r">EHC</th><th class="r">Total</th></tr></thead><tbody>'
     + lines.map(function(l){ var pr = produkById(l.product_id);
         var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
-        var tt = Math.round((Number(l.qty)||0)*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0)));
-        return '<tr><td class="l">'+esc(nama)+'</td><td>'+esc(l.qty)+'</td><td class="r">'+rp(l.harga_nett)+'</td><td class="r">'+rp(l.ehc_item)+'</td><td class="r">'+rp(tt)+'</td></tr>';
+        var ef = qtyEfektif(l), bq = qtyBatal(l);   /* #18: qty efektif = pesan − batal */
+        var tt = Math.round(ef*((Number(l.harga_nett)||0)+(Number(l.ehc_item)||0)));
+        return '<tr><td class="l">'+esc(nama)+'</td><td>'+fmtQty(ef)
+          +(bq ? ' <span class="muted">(pesan '+fmtQty(l.qty)+', batal '+fmtQty(bq)+')</span>' : '')
+          +'</td><td class="r">'+rp(l.harga_nett)+'</td><td class="r">'+rp(l.ehc_item)+'</td><td class="r">'+rp(tt)+'</td></tr>';
       }).join("")
     + (lines.length ? '' : '<tr><td colspan="5" class="kosong">Belum ada baris.</td></tr>')
     + '</tbody></table></div>'
@@ -9279,8 +9411,8 @@ function renderKirimPartial(s){
   var box = $("kr-partial"); if (!box) return;
   box.innerHTML = '<p class="muted">Memuat pengiriman…</p>';
   Promise.all([
-    api("GET", "/sales_order_lines?so_id=eq." + s.id + "&batal=is.false&jenis=neq.biaya"
-        + "&select=id,product_id,deskripsi,qty,urut,so_kirim_baris(qty)&order=urut"),
+    api("GET", "/sales_order_lines?so_id=eq." + s.id + "&jenis=neq.biaya"
+        + "&select=id,product_id,deskripsi,qty,qty_batal,batal,batal_alasan,urut,so_kirim_baris(qty)&order=urut"),   /* #18: qty_batal */
     api("GET", "/so_kirim?so_id=eq." + s.id + "&select=id,no_surat_jalan,tgl,catatan&order=id")
   ]).then(function(res){ gambarKirimPartial(s, res[0] || [], res[1] || []); })
     .catch(function(e){ box.innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; });
@@ -9290,13 +9422,21 @@ function gambarKirimPartial(s, lines, kirimList){
   var rows = lines.map(function(l){
     var terkirim = (l.so_kirim_baris || []).reduce(function(a,x){ return a + (Number(x.qty)||0); }, 0);
     var p = produkById(l.product_id);
+    var bq = qtyBatal(l);   /* #18: sisa = pesan − batal − terkirim */
     return { id:l.id, nama: p ? (p.kode + (p.brand ? " · " + p.brand : "")) : (l.deskripsi || "—"),
-             qty: Number(l.qty)||0, terkirim: terkirim, sisa: (Number(l.qty)||0) - terkirim };
+             qty: Number(l.qty)||0, batal: bq, alasan: l.batal_alasan || "", terkirim: terkirim,
+             sisa: (Number(l.qty)||0) - bq - terkirim };
   });
   var pakaiBertahap = kirimList.length > 0;
   var semuaTerkirim = rows.length > 0 && rows.every(function(r){ return r.sisa <= 0; });
-  var bolehTerbit = bolehTerbitkan() && s.vonny_ok === true && s.status !== "menunggu gm"
-                    && s.kirim_ok !== false && !s.no_invoice;
+  /* #15: cermin gerbang database (gerbang_kirim_sp) — berlaku di SETIAP surat jalan, bukan hanya
+     yang terakhir. Tombol hanya disembunyikan; penolakan sebenarnya di database. */
+  var perluKonf = !!(s.customers && s.customers.perlu_konfirmasi) && s.kirim_ok !== true;
+  var tanpaPo = !s.po_id && !s.po_menyusul && !s.tanpa_po_ok;
+  var bolehTerbitDasar = bolehTerbitkan() && s.vonny_ok === true && s.status !== "menunggu gm"
+                    && s.kirim_ok !== false && !s.no_invoice && !s.no_surat_jalan;
+  var bolehTerbit = bolehTerbitDasar && !perluKonf && !tanpaPo;
+  var bolehBatalSj = bolehTerbitkan() && !s.no_invoice;   /* batch tetap bisa dibatalkan sesudah final */
 
   /* Kalau SP sudah pakai pengiriman bertahap, kotak "kirim semua sekaligus"
      di bawah dikunci — nomornya diatur RPC, bukan diketik langsung. */
@@ -9305,7 +9445,7 @@ function gambarKirimPartial(s, lines, kirimList){
   }
 
   var h = '';
-  if (!pakaiBertahap && !bolehTerbit) { box.innerHTML = ""; return; }   /* tak ada yang perlu digambar */
+  if (!pakaiBertahap && !bolehTerbitDasar) { box.innerHTML = ""; return; }   /* tak ada yang perlu digambar */
   /* #8 (berkas 89): SP yang sudah dikirim sekaligus (nomor surat jalan di kepala SP, tanpa
      surat jalan bertahap) tidak boleh "dikirim" lagi — database menolak tambah_surat_jalan. */
   if (!pakaiBertahap && s.no_surat_jalan) { box.innerHTML = ""; return; }
@@ -9314,30 +9454,42 @@ function gambarKirimPartial(s, lines, kirimList){
 
   if (kirimList.length) {
     h += '<div class="tw"><table><thead><tr><th class="l">Surat jalan</th><th>Tgl</th><th class="l">Catatan</th>'
-      + (bolehTerbit ? '<th></th>' : '') + '</tr></thead><tbody>'
+      + (bolehBatalSj ? '<th></th>' : '') + '</tr></thead><tbody>'
       + kirimList.map(function(k){
           return '<tr><td class="l"><code>'+esc(k.no_surat_jalan)+'</code></td><td>'+esc(tglTampil(k.tgl))+'</td>'
             + '<td class="l">'+(k.catatan?esc(k.catatan):'<span class="muted">—</span>')+'</td>'
-            + (bolehTerbit ? '<td><button class="btn kecil bahaya kr-sj-batal" data-id="'+k.id+'" type="button">Batalkan</button></td>' : '')
+            + (bolehBatalSj ? '<td><button class="btn kecil bahaya kr-sj-batal" data-id="'+k.id+'" type="button">Batalkan</button></td>' : '')
             + '</tr>';
         }).join("") + '</tbody></table></div>';
   }
 
+  var formKirimQty = !semuaTerkirim && bolehTerbit;
+  /* #15 #18: Pesan | Terkirim | Batal | Sisa selalu terlihat (juga saat semua terkirim). */
+  var tabel = '<div class="tw"><table><thead><tr><th class="l">Barang</th><th class="r">Pesan</th>'
+    + '<th class="r">Terkirim</th><th class="r">Batal</th><th class="r">Sisa</th>'
+    + (formKirimQty ? '<th class="r">Kirim sekarang</th>' : '') + '</tr></thead><tbody>'
+    + rows.map(function(r){
+        return '<tr><td class="l">'+esc(r.nama)
+          + (r.batal ? ' <span class="pill '+(r.batal >= r.qty ? 'p-belum' : 'p-sebagian')+'" title="'+esc(r.alasan)+'">'
+              + (r.batal >= r.qty ? 'dibatalkan' : 'batal sebagian') + '</span>' : '')
+          + '</td><td class="r">'+fmtQty(r.qty)+'</td>'
+          + '<td class="r">'+fmtQty(r.terkirim)+'</td><td class="r">'+(r.batal ? fmtQty(r.batal) : '<span class="muted">0</span>')+'</td>'
+          + '<td class="r">'+fmtQty(r.sisa)+'</td>'
+          + (formKirimQty ? '<td class="r">'+(r.sisa > 0
+              ? '<input type="text" inputmode="decimal" class="kr-kirim-qty" data-id="'+r.id+'" data-sisa="'+r.sisa+'" value="'+r.sisa+'" style="width:84px;text-align:right">'
+              : '<span class="muted">selesai</span>')+'</td>' : '')
+          + '</tr>';
+      }).join("") + '</tbody></table></div>';
+
   if (semuaTerkirim) {
-    h += '<div class="flag"><span class="f-ico">✓</span><div><b>Semua barang sudah terkirim.</b> '
-      + 'Nomor surat jalan penyelesai sudah terisi otomatis — <b>invoice (satu, final)</b> boleh '
-      + 'diterbitkan di bawah.</div></div>';
+    h += tabel;
+    h += '<div class="flag"><span class="f-ico">✓</span><div><b>Semua barang sudah terkirim atau dibatalkan.</b> '
+      + (s.no_surat_jalan
+          ? 'Nomor surat jalan penyelesai sudah terisi otomatis — <b>invoice (satu, final)</b> boleh diterbitkan di bawah.'
+          : 'Nomor surat jalan penyelesai terisi otomatis oleh sistem.')
+      + '</div></div>';
   } else if (bolehTerbit) {
-    h += '<div class="kotak"><div class="kotak-isi">'
-      + '<div class="tw"><table><thead><tr><th class="l">Barang</th><th class="r">Pesan</th>'
-      +   '<th class="r">Terkirim</th><th class="r">Sisa</th><th class="r">Kirim sekarang</th></tr></thead><tbody>'
-      + rows.map(function(r){
-          return '<tr><td class="l">'+esc(r.nama)+'</td><td class="r">'+r.qty+'</td>'
-            + '<td class="r">'+r.terkirim+'</td><td class="r">'+r.sisa+'</td>'
-            + '<td class="r">'+(r.sisa > 0
-                ? '<input type="text" inputmode="decimal" class="kr-kirim-qty" data-id="'+r.id+'" data-sisa="'+r.sisa+'" value="'+r.sisa+'" style="width:84px;text-align:right">'
-                : '<span class="muted">selesai</span>')+'</td></tr>';
-        }).join("") + '</tbody></table></div>'
+    h += '<div class="kotak"><div class="kotak-isi">' + tabel
       + '<div class="baris2" style="margin-top:10px">'
       +   medanAlur("No surat jalan", '<input type="text" id="kr-sj-no2" placeholder="mis. SJ/2026/09/001">')
       +   medanAlur("Tanggal", '<input type="date" id="kr-sj-tgl2" value="'+new Date().toISOString().slice(0,10)+'">')
@@ -9345,11 +9497,20 @@ function gambarKirimPartial(s, lines, kirimList){
       + '<div style="margin-top:8px">'+medanAlur("Catatan surat jalan (opsional)", '<input type="text" id="kr-sj-cat2" placeholder="opsional">')+'</div>'
       + '<div class="baris-alat" style="margin-top:10px"><button class="btn utama" id="kr-sj-terbit" type="button">Terbitkan surat jalan ini</button></div>'
       + '<p class="bantu">Isi qty yang benar-benar berangkat kali ini (default = sisa). Boleh sebagian — '
-      + 'sisanya menyusul di surat jalan berikutnya. <b>Invoice baru terbuka setelah semua barang terkirim.</b></p>'
+      + 'sisanya menyusul di surat jalan berikutnya. <b>Invoice baru terbuka setelah semua barang terkirim '
+      + 'atau sisanya dibatalkan</b> (batal sisa lewat Detail SP).</p>'
       + '</div></div>';
-  } else if (rows.length && !semuaTerkirim) {
-    h += '<p class="muted">Masih ada sisa barang yang belum dikirim. Surat jalan diterbitkan oleh '
-      + 'owner, GM, atau Lie Sian setelah cek Vonny.</p>';
+  } else {
+    h += tabel;
+    if (bolehTerbitDasar && perluKonf)
+      h += '<div class="flag merah"><span class="f-ico">!</span><div><b>Pelanggan perlu konfirmasi.</b> '
+        + 'Vonny atau GM harus mengizinkan pengiriman dulu — berlaku juga untuk pengiriman sebagian.</div></div>';
+    else if (bolehTerbitDasar && tanpaPo)
+      h += '<div class="flag merah"><span class="f-ico">!</span><div><b>SP belum punya PO.</b> '
+        + 'Tandai "PO menyusul" beserta alasannya sebelum surat jalan pertama (termasuk pengiriman sebagian).</div></div>';
+    else if (rows.length)
+      h += '<p class="muted">Masih ada sisa barang yang belum dikirim. Surat jalan diterbitkan oleh '
+        + 'owner, GM, atau Lie Sian setelah cek Vonny.</p>';
   }
   box.innerHTML = h;
 
@@ -9370,11 +9531,15 @@ function terbitkanSjPartial(s){
   var cat = $("kr-sj-cat2") ? String($("kr-sj-cat2").value).trim() : "";
   if (!no)  { toast("No surat jalan wajib diisi.", true); return; }
   if (!tgl) { toast("Tanggal surat jalan wajib diisi.", true); return; }
-  var baris = [];
+  var baris = [], lebih = "";
   Array.prototype.forEach.call(document.querySelectorAll("#kr-partial .kr-kirim-qty"), function(inp){
     var q = angka(inp.value), sisa = Number(inp.dataset.sisa);
-    if (q && q > 0) { if (q > sisa) q = sisa; baris.push({ so_line_id: Number(inp.dataset.id), qty: q }); }
+    if (q && q > 0) {
+      if (q > sisa) lebih = lebih || ("Qty kirim " + fmtQty(q) + " melebihi sisa " + fmtQty(sisa) + ".");   /* #15: tidak dipotong diam-diam */
+      baris.push({ so_line_id: Number(inp.dataset.id), qty: q });
+    }
   });
+  if (lebih) { toast(lebih, true); return; }
   if (!baris.length) { toast("Isi qty > 0 untuk minimal satu baris.", true); return; }
   sibuk(true, "Menerbitkan surat jalan…");
   api("POST", "/rpc/tambah_surat_jalan", { p_so: s.id, p_no: no, p_tgl: tgl, p_baris: baris, p_catatan: cat || null })

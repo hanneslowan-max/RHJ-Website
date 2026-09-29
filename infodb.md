@@ -649,6 +649,9 @@ CREATE TABLE public.sales_order_lines (
   harga_list numeric,
   ehc_item numeric NOT NULL DEFAULT 0,
   jenis text NOT NULL DEFAULT 'barang'::text CHECK (jenis = ANY (ARRAY['barang'::text, 'biaya'::text])),
+  batal boolean NOT NULL DEFAULT false, batal_alasan text, batal_oleh uuid, batal_pada timestamptz,
+  qty_batal numeric(14,2) NOT NULL DEFAULT 0,   -- #18 berkas 98: qty dibatalkan (kumulatif); qty efektif = qty - qty_batal
+  CONSTRAINT sol_qty_batal_sah CHECK (qty_batal >= 0 AND qty_batal <= qty),
   CONSTRAINT sales_order_lines_pkey PRIMARY KEY (id),
   CONSTRAINT sales_order_lines_so_id_fkey FOREIGN KEY (so_id) REFERENCES public.sales_orders(id),
   CONSTRAINT sales_order_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id)
@@ -657,7 +660,26 @@ CREATE TABLE public.sales_order_lines (
 -- Trigger sol_jaga_tambah (BEFORE INSERT) [berkas 88]: selain owner/gm (atau rhj.usul), baris baru hanya
 --   selama SP segar (tidak batal, vonny_ok & harga_ok null, belum surat jalan/so_kirim/invoice).
 -- Trigger sol_vonny_gugur (AFTER INSERT/UPDATE/DELETE) [berkas 88]: perubahan produk/qty/harga_nett/
---   ehc_item/jenis/deskripsi/batal oleh selain owner/gm/vonny -> gugurkan_cek_vonny(so_id).
+--   ehc_item/jenis/deskripsi/batal/qty_batal oleh selain owner/gm/vonny -> gugurkan_cek_vonny(so_id).
+-- #18 [berkas 98]: batal SISA qty per baris. batalkan_baris_sp(p_line, p_alasan, p_qty default null = seluruh
+--   sisa) / pulihkan_baris_sp(p_line, p_qty default null = semua) — owner/gm/staff/vonny/sales pemilik; tolak
+--   bila SP batal/ber-invoice/sudah terkirim semua (batal) atau ada klaim EHC/komisi. Qty terkirim TIDAK bisa
+--   dibatalkan (maks = qty - qty_batal - terkirim). Menghabiskan seluruh barang (belum ada kiriman) -> SP ikut
+--   batal lewat batalkan_sp (vonny ditolak). Sesudahnya finalisasi_kirim_sp. batal_alasan = log bertumpuk
+--   "DD/MM/YYYY batal N: alasan" / "... pulih N".
+-- Trigger sol_qty_batal (BEFORE INSERT/UPDATE) -> jaga_qty_batal_baris(): qty_batal/batal hanya lewat RPC
+--   (flag rhj.batal_baris); qty tak bisa diubah selama ada qty_batal; qty efektif >= terkirim; batal := batal
+--   penuh (qty_batal >= qty, kompatibel dengan penanda lama).
+-- Trigger sol_jaga_hapus (BEFORE DELETE) -> jaga_hapus_baris_sp(): baris yang ada di surat jalan atau punya
+--   qty_batal tidak bisa dihapus/diganti (putuskan_ubah) — kecuali cascade hapus SP.
+-- View so_baris_hitung [berkas 98]: qty = qty EFEKTIF, nilai_* dari qty efektif, baris batal penuh dibuang;
+--   kolom tambahan qty_pesan, qty_batal. so_ringkas/komisi/EHC/invoice/laporan_penjualan ikut efektif.
+-- View sp_nilai_batal [berkas 98]: per SP grand_total_awal (semua qty, = periksa_total_sp), grand_total_efektif
+--   (= so_ringkas.grand_total), nilai_batal, qty_batal_total, ada_batal.
+-- View po_batal_ringkas [berkas 98]: per PO jml_sp, nilai_batal, grand_total_po, grand_total_efektif,
+--   batal_sebagian. Invarian SP = PO dibandingkan pada NILAI AWAL (periksa_total_sp, sp_beda_po.total_sp,
+--   sp_selisih_po); sp_beda_po punya kolom tambahan total_sp_efektif. PO sendiri tidak diubah.
+-- laporan_margin_produk / laporan_margin_sp / gm_konteks_keputusan memakai qty efektif [berkas 98].
 CREATE TABLE public.so_kirim (   -- surat jalan bertahap (#15, berkas 76)
   id bigint NOT NULL DEFAULT nextval('so_kirim_id_seq'::regclass),
   so_id bigint NOT NULL,
@@ -678,8 +700,18 @@ CREATE TABLE public.so_kirim_baris (
   CONSTRAINT so_kirim_baris_kirim_id_fkey FOREIGN KEY (kirim_id) REFERENCES public.so_kirim(id) ON DELETE CASCADE,
   CONSTRAINT so_kirim_baris_so_line_id_fkey FOREIGN KEY (so_line_id) REFERENCES public.sales_order_lines(id)
 );
--- View so_kirim_sisa (per baris barang aktif: qty_pesan, qty_kirim, sisa). Tulis HANYA lewat RPC
---   tambah_surat_jalan / batal_surat_jalan (owner/gm/liesian) yang menyalakan flag rhj.kirim.
+-- View so_kirim_sisa (per baris barang aktif: qty_pesan, qty_kirim, sisa = qty - qty_batal - terkirim,
+--   qty_batal, qty_efektif [berkas 98]). Tulis HANYA lewat RPC tambah_surat_jalan / batal_surat_jalan
+--   (owner/gm/liesian) yang menyalakan flag rhj.kirim.
+-- RLS/grant [berkas 97]: policy sokirim_tulis/sokirimb_tulis dihapus; anon tanpa akses; authenticated hanya
+--   SELECT pada so_kirim, so_kirim_baris, so_kirim_sisa, so_kirim_ringkas.
+-- gerbang_kirim_sp(p_so) [berkas 97, internal]: gerbang SETIAP surat jalan (batal, draft, vonny_ok, kirim_ok,
+--   gerbang 1/2/3a cermin jaga_urutan_dokumen_sp — ubah keduanya bersama). Dipanggil tambah_surat_jalan &
+--   trigger jaga_so_kirim.
+-- finalisasi_kirim_sp(p_so) [berkas 97/99, internal]: bila ada so_kirim & semua sisa 0 -> no_surat_jalan/tgl =
+--   batch terakhir; bila sisa > 0 lagi -> dilepas (ditolak bila ber-invoice). Menyalakan rhj.kirim + rhj.sj_final
+--   (jaga_kolom_sales blok a melewatkan kolom surat jalan selama flag ini). Dipakai tambah_surat_jalan,
+--   batalkan_baris_sp, pulihkan_baris_sp.
 -- Trigger so_kirim_jaga & so_kirim_baris_jaga (BEFORE INSERT/UPDATE/DELETE) [berkas 89]: tanpa rhj.kirim
 --   ditolak (termasuk owner); so_kirim baru wajib SP tidak batal, vonny_ok = true, kirim_ok bukan false,
 --   status_sp_hitung bukan menunggu gm/menunggu vonny/draft; baris wajib barang aktif SP itu & qty <= sisa.
