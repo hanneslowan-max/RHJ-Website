@@ -18,6 +18,7 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 ### Akses & peran
 - Keamanan ditegakkan di DB (RLS/RPC/trigger); FE hanya menyembunyikan tombol.
 - Sales hanya melihat & mengolah data miliknya (customer, penawaran, PO, SP). Customer tanpa pemilik boleh dipakai; customer milik sales lain tidak — sistem memberi peringatan pemiliknya.
+- Sales boleh **melihat** pelanggan sales lain di tab Pelanggan (#49) — baca saja: nama perusahaan, cabang (tidak ada kolom kota), industri, dan nama sales pemegang; tanpa HP, alamat, PIC, maupun transaksi. Pelanggan itu tetap tidak bisa dipakai di PO/penawaran/SP.
 - Penawaran untuk pelanggan yang sudah bertuan **selalu** atas nama sales pemegangnya — berlaku untuk semua peran, termasuk owner/GM/staff/Vonny (#48). Bila memang perlu, pelanggannya dipindah dulu di tab Pelanggan.
 - Vonny: membuat penawaran mewakili sales (wajib pilih sales), input PO & usul produk baru, membuat & mengubah **produk**, melihat order impor (tidak mengubah), cek SP. Hapus produk hanya owner. Pembayaran supplier tertutup bagi Vonny.
 - Lenni: melihat PO & SP (baca saja).

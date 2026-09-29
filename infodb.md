@@ -1143,6 +1143,8 @@ CREATE TABLE public.view_sebelum_57 (
   dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT view_sebelum_57_pkey PRIMARY KEY (nama)
 );
+-- Berkas 111 (#49): pelanggan_sales_lain(p_cari, p_dari, p_jumlah) [DEFINER] -> (nama, cabang, industri, sales_nama, total)
+--   hanya untuk peran sales: pelanggan yang dipegang sales LAIN; tanpa id/HP/alamat/PIC. RLS customers tidak berubah.
 CREATE TABLE public.customers_nama_sebelum_100 (   -- [berkas 100, #20] cadangan nama sebelum dirapikan (RLS, tanpa akses klien)
   id bigint NOT NULL,
   nama text NOT NULL,

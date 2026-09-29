@@ -7865,8 +7865,71 @@ function pasangHalamanPelanggan(el){
   });
 }
 
+/* #49: sales boleh MELIHAT pelanggan sales lain — baca saja, lewat RPC pelanggan_sales_lain (berkas 111) yang
+   hanya mengembalikan nama, cabang, industri, dan nama sales pemegang (tanpa HP/alamat/PIC/transaksi).
+   RLS customers tidak berubah: pelanggan itu tetap tidak bisa dipakai di PO/penawaran/SP. */
+function pilihanTampilPelanggan(P){
+  if (!peranSales()) return "";
+  return '<div class="baris-alat" style="margin-bottom:12px">'
+    + '<button class="btn' + (P.lihatLain ? '' : ' utama') + '" id="pl-tampil-saya" type="button">Pelanggan saya</button>'
+    + '<button class="btn' + (P.lihatLain ? ' utama' : '') + '" id="pl-tampil-lain" type="button">Pelanggan sales lain <span class="muted">(lihat saja)</span></button>'
+    + '</div>';
+}
+function pasangPilihanTampilPelanggan(P){
+  if ($("pl-tampil-saya")) $("pl-tampil-saya").addEventListener("click", function(){ P.lihatLain = false; panelPelangganTab(); });
+  if ($("pl-tampil-lain")) $("pl-tampil-lain").addEventListener("click", function(){ P.lihatLain = true; panelPelangganTab(); });
+}
+function panelPelangganLain(){
+  var el = $("p-pelanggan"), P = LANJUT.pelanggan, L = P.lain || (P.lain = { cari:"", hal:0, per:50, baris:null, total:0, memuat:false, galat:"" });
+  $("head-aksi").innerHTML = "";
+  function isi(){
+    if (L.galat) return kotakGalat(new Error(L.galat));
+    if (!L.baris) return kotakMuat("Memuat pelanggan sales lain…");
+    if (!L.baris.length) return kosong(L.cari ? "Tidak ada pelanggan sales lain yang cocok dengan “" + L.cari + "”." : "Belum ada pelanggan yang dipegang sales lain.");
+    var jml = Math.max(1, Math.ceil(L.total / L.per));
+    return '<div class="tw" id="daftar-pelanggan-lain"><table><thead><tr><th class="l">Nama</th><th class="l">Cabang</th>'
+      + '<th class="l">Industri</th><th class="l">Sales pemegang</th></tr></thead><tbody>'
+      + L.baris.map(function(c){
+          return '<tr><td class="l">' + esc(c.nama) + '</td><td class="l">' + (c.cabang ? esc(c.cabang) : '<span class="muted">—</span>') + '</td>'
+            + '<td class="l">' + (c.industri ? esc(c.industri) : '<span class="muted">—</span>') + '</td>'
+            + '<td class="l">' + esc(c.sales_nama || "—") + '</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+      + '<div class="baris-alat" style="margin-top:10px;align-items:center">'
+      +   '<button class="btn kecil" id="pll-mundur" type="button"' + (L.hal ? '' : ' disabled') + '>‹ Sebelumnya</button>'
+      +   '<span class="muted">Halaman ' + (L.hal + 1) + ' dari ' + jml + ' · ' + L.total + ' pelanggan</span>'
+      +   '<button class="btn kecil" id="pll-maju" type="button"' + (L.hal >= jml - 1 ? ' disabled' : '') + '>Berikutnya ›</button>'
+      + '</div>';
+  }
+  function gambarIsi(){
+    $("pll-isi").innerHTML = isi();
+    if ($("pll-mundur")) $("pll-mundur").addEventListener("click", function(){ L.hal--; muat(); });
+    if ($("pll-maju")) $("pll-maju").addEventListener("click", function(){ L.hal++; muat(); });
+  }
+  function muat(){
+    var giliran = L.giliran = (L.giliran || 0) + 1;
+    L.galat = ""; L.baris = null; gambarIsi();
+    api("POST", "/rpc/pelanggan_sales_lain", { p_cari: L.cari || null, p_dari: L.hal * L.per, p_jumlah: L.per })
+      .then(function(r){ if (giliran !== L.giliran) return; L.baris = r || []; L.total = L.baris.length ? Number(L.baris[0].total) : 0; gambarIsi(); })
+      .catch(function(e){ if (giliran !== L.giliran) return; L.galat = e.message; gambarIsi(); });
+  }
+  el.innerHTML = pilihanTampilPelanggan(P)
+    + '<div class="flag"><span class="f-ico">i</span><div><b>Hanya untuk dilihat.</b> Ini pelanggan yang dipegang sales lain — '
+    + 'nama, cabang, industri, dan sales pemegangnya saja (tanpa nomor HP, alamat, maupun transaksi). Pelanggan ini tidak bisa '
+    + 'dipakai di PO, penawaran, atau SP Anda. Kalau memang Anda yang menangani, minta owner/GM/staff memindahkannya.</div></div>'
+    + '<div class="baris-alat" style="margin-top:12px"><input type="search" id="pll-cari" style="min-width:280px" '
+    + 'placeholder="Cari nama perusahaan…" value="' + esc(L.cari) + '" autocomplete="off"></div>'
+    + '<div id="pll-isi" style="margin-top:10px"></div>';
+  pasangPilihanTampilPelanggan(P);
+  $("pll-cari").addEventListener("input", function(){
+    var inp = this; clearTimeout(inp._t);
+    inp._t = setTimeout(function(){ L.cari = inp.value.trim(); L.hal = 0; muat(); }, 350);
+  });
+  if (L.baris && !L.galat) gambarIsi(); else muat();
+}
 function panelPelangganTab(){
   var el = $("p-pelanggan"), P = LANJUT.pelanggan;
+  if (peranSales() && P.lihatLain) { panelPelangganLain(); return; }   /* #49 */
   if (!P.dimuat && !P.memuat) {
     el.innerHTML = kotakMuat("Memuat pelanggan…");
     /* Daftar sales ikut ditarik: tanpa itu kolom Sales cuma menampilkan
@@ -7882,7 +7945,8 @@ function panelPelangganTab(){
   if ($("btn-pl-baru")) $("btn-pl-baru").addEventListener("click", function(){ formPelangganTab(null); });
 
   var R = P.ringkas || {};
-  var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
+  var h = pilihanTampilPelanggan(P)   /* #49 */
+    + '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile("Pelanggan", R.semua === null || R.semua === undefined ? "—" : R.semua, "seluruh master", "", "pelanggan:semua")
     + tile("Dari pipeline", R.pipeline === null || R.pipeline === undefined ? "—" : R.pipeline, "pernah masuk CRM", "", "pelanggan:pipeline")
     + tile("Dari sheet master", R.master === null || R.master === undefined ? "—" : R.master, "daftar customer & prospek", "", "pelanggan:master")
@@ -7971,6 +8035,7 @@ function panelPelangganTab(){
     + 'yang selama ini menempel di satu perusahaan.');
 
   el.innerHTML = h;
+  pasangPilihanTampilPelanggan(P);   /* #49 */
 
   var ci = $("pl-cari");
   ci.addEventListener("input", function(){
