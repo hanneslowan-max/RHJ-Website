@@ -561,6 +561,13 @@ CREATE TABLE public.purchase_orders (
 );
 -- Constraint trigger po_pelanggan_sp (AFTER UPDATE OF customer_id, DEFERRABLE INITIALLY DEFERRED)
 --   [berkas 89] -> jaga_pelanggan_sp_po(): SP (tidak batal) yang menunjuk PO ini harus berpelanggan sama.
+-- Berkas 112: purchase_orders.lampiran = jalur storage 'dokumen' berawalan po/ (#36). Policy storage.objects:
+--   rhj_po_lampiran_tulis (insert: boleh_input_po), rhj_po_lampiran_baca (select: ada PO yang menunjuknya & terlihat
+--   oleh pembaca lewat RLS po_baca), rhj_po_lampiran_hapus (delete: pengunggah, belum dirujuk PO).
+--   lampirkan_po(p_po, p_path) [DEFINER] — tempel lampiran ke PO; bila sudah ada, hanya owner/GM yang boleh mengganti.
+--   lengkapi_pelanggan_sp(p_so, p_industri, p_hp, p_alamat) [DEFINER, owner/GM/Vonny] (#37) -> {customer_id, dibuat,
+--   industri, nama} — SP tanpa customer_id: cocokkan kepada ke master (kunci_nama_pelanggan) atau buat_pelanggan_baru;
+--   isi industri (yang sudah terisi tidak ditimpa), tautkan SP & PO-nya (bila PO belum bertuan).
 CREATE TABLE public.po_lines (
   id bigint NOT NULL DEFAULT nextval('po_lines_id_seq'::regclass),
   po_id bigint NOT NULL,

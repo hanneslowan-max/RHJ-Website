@@ -4741,6 +4741,13 @@ function panelPo(){
             + '<option value="0"'+(!f.ppn_kena?" selected":"")+'>Non-PPN</option></select>')
       + '</div>'
       + kotakSalesPelanggan()
+      + '<div style="margin-top:12px">'   /* #36 */
+      +   medanAlur("Lampiran PO customer <em>foto / PDF — boleh menyusul dari daftar PO</em>",
+            (f.lampiranBerkas
+              ? '<div class="bi-ket" style="font-size:13px">📎 <b>' + esc(f.lampiranBerkas.name) + '</b> (' + esc(ukuranTampil(f.lampiranBerkas.size)) + ') '
+                + '<button type="button" class="taut" id="po-lampiran-hapus">hapus</button></div>'
+              : '<input type="file" id="po-lampiran" accept="application/pdf,image/*,.xlsx,.xls,.csv,.docx,.doc">'))
+      + '</div>'
       + '</div></div>';
 
     h += '<h3 class="sec">Baris item PO <span class="muted">harga satuan terisi dari price list — boleh diubah sesuai PO customer</span></h3>';
@@ -4818,7 +4825,11 @@ function panelPo(){
               + '<br><span class="muted" style="font-size:11px">efektif '+rp(pb.grand_total_efektif)+'</span>'
             : ''; })(poBatalInfo(p.id))
       + '</td>'
-      + '<td>'+(p.lampiran?'<span class="pill p-lunas">ada</span>':'<span class="muted">—</span>')+'</td>'
+      + '<td>'+(p.lampiran
+          ? '<button type="button" class="btn kecil" data-po-lamp="'+p.id+'" title="Buka lampiran PO">📎 lihat</button>'   /* #36 */
+          : (bolehInputPo() && !p.batal
+              ? '<button type="button" class="btn kecil" data-po-unggah="'+p.id+'" title="Unggah lampiran PO customer">+ unggah</button>'
+              : '<span class="muted">—</span>'))+'</td>'
       + (bolehUsulPo ? '<td style="white-space:nowrap">' + (p.batal
             ? '<span class="pill p-belum" title="' + esc(p.alasan_batal || "") + '">batal</span>'
             : (usulMenunggu("po", p.id)
@@ -4834,6 +4845,38 @@ function panelPo(){
   el.innerHTML = h;
   pasangUrut(el, function(){ return ALUR.poSort; }, function(v){ ALUR.poSort = v; }, panelPo);   /* #24 */
   if ($("btn-po-saring-hapus")) $("btn-po-saring-hapus").addEventListener("click", function(){ ALUR.poSaring = ""; panelPo(); });   /* #16 */
+  /* #36: lampiran PO — buka (signed URL) / unggah menyusul (RPC lampirkan_po, berkas 112) */
+  Array.prototype.forEach.call(document.querySelectorAll("[data-po-lamp]"), function(b){
+    b.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      var p = ALUR.po.filter(function(x){ return String(x.id) === b.dataset.poLamp; })[0];
+      if (p && p.lampiran) bukaLampiranPo(p.lampiran);
+    });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-po-unggah]"), function(b){
+    b.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      var p = ALUR.po.filter(function(x){ return String(x.id) === b.dataset.poUnggah; })[0];
+      if (!p) return;
+      var inp = document.createElement("input");
+      inp.type = "file"; inp.accept = "application/pdf,image/*,.xlsx,.xls,.csv,.docx,.doc";
+      inp.addEventListener("change", function(){
+        var berkas = inp.files && inp.files[0]; if (!berkas) return;
+        var galat = cekLampiranPo(berkas); if (galat) { toast(galat, true); return; }
+        var jalur = null;
+        sibuk(true, "Mengunggah lampiran PO…");
+        unggahLampiranPo(berkas)
+          .then(function(j){ jalur = j; return api("POST", "/rpc/lampirkan_po", { p_po: p.id, p_path: j }); })
+          .then(function(pesan){ toast(String(pesan || "Lampiran tersimpan.")); ALUR.dimuatPo = false; panelPo(); })
+          .catch(function(e){
+            if (jalur) storage("DELETE", "/object/dokumen/" + encodeURI(jalur)).catch(function(){});
+            toast(e.message, true);
+          })
+          .then(function(){ sibuk(false); });
+      });
+      inp.click();
+    });
+  });
 
   $("po-periode").addEventListener("change", function(){
     ALUR.poPeriode = this.value; ALUR.dimuatPo = false; panelPo();
@@ -5843,6 +5886,13 @@ function pasangPo(){
     $(id).addEventListener("change", function(){ simpanNilai(); });
   });
   $("po-ppn").addEventListener("change", function(){ simpanNilai(); panelPo(); });
+  if ($("po-lampiran")) $("po-lampiran").addEventListener("change", function(){   /* #36 */
+    var b = this.files && this.files[0]; if (!b) return;
+    var galat = cekLampiranPo(b);
+    if (galat) { toast(galat, true); this.value = ""; return; }
+    simpanNilai(); f.lampiranBerkas = b; panelPo();
+  });
+  if ($("po-lampiran-hapus")) $("po-lampiran-hapus").addEventListener("click", function(){ simpanNilai(); f.lampiranBerkas = null; panelPo(); });
 
   /* nomor PO dobel diperiksa ke server, bukan ke daftar di layar —
      jendela waktu di layar mungkin tidak memuat PO lama yang bernomor sama */
@@ -6058,10 +6108,15 @@ function simpanPo(){
      punya product_id sejak awal. Itu sifat yang membuat rancangan ini
      bekerja: begitu usulannya disahkan nanti, PO dan SP yang terlanjur
      memakainya ikut benar tanpa ditautkan ulang. */
+  var jalurUnggah = null;   /* #36 */
   Promise.all(siap.kirim.filter(function(b){ return b.usulanTeks; }).map(function(b){
     return api("POST", "/rpc/usulkan_produk", { p_teks: b.usulanTeks })
       .then(function(id){ b.kode = (id && id.id) ? id.id : id; });
   }))
+  .then(function(){
+    if (!f.lampiranBerkas) return null;
+    return unggahLampiranPo(f.lampiranBerkas).then(function(j){ jalurUnggah = j; f.lampiran = j; });
+  })
   .then(function(){
   return api("POST", "/purchase_orders", {
       no_po: f.no_po.trim(), tanggal: f.tanggal, customer_id: f.customer_id,
@@ -6084,12 +6139,16 @@ function simpanPo(){
   })
   .then(function(po){
     ALUR.poForm = poFormBaru(); ALUR.dimuatPo = false;
-    ALUR.pesan = "✓ PO " + po.no_po + " tersubmit — sekarang bisa ditarik di tab Surat Pesanan.";
+    ALUR.pesan = "✓ PO " + po.no_po + " tersubmit" + (jalurUnggah ? " dengan lampiran" : "") + " — sekarang bisa ditarik di tab Surat Pesanan.";
     toast("PO " + po.no_po + " tersubmit.");
     panelPo();
   });
   })
-  .catch(function(e){ toast(e.message, true); })
+  .catch(function(e){
+    /* #36: PO gagal tersimpan → unggahan yang belum dipakai dibuang (policy hapus: pengunggah, belum dirujuk PO). */
+    if (jalurUnggah && f.lampiran === jalurUnggah) { storage("DELETE", "/object/dokumen/" + encodeURI(jalurUnggah)).catch(function(){}); f.lampiran = ""; }
+    toast(e.message, true);
+  })
   .then(function(){ sibuk(false); });
 }
 
@@ -7557,7 +7616,7 @@ var LANJUT = {
      sesudahnya yang dikerjakan invoice dan faktur. */
   kirim:    { hal:"belum", dimuat:false, cacah:null,
               hlm:{ belum:null, sudah:null } },
-  vonnycek: { baris:[], dimuat:false, memuat:false },   /* SP 'menunggu vonny' — tab Double Check Vonny */
+  vonnycek: { baris:[], riwayat:[], dimuat:false, memuat:false },   /* #35: riwayat = baru diloloskan */   /* SP 'menunggu vonny' — tab Double Check Vonny */
   lunas:    { baris:[], dimuat:false, memuat:false, cari:"", saring:"semua", rep:"",
               tglKol:"tgl_invoice", periode:"semua", dari:"", sampai:"", total:null, dipotong:false },
   /* Empat halaman (titik 19), masing-masing dengan kotak cari &
@@ -10083,7 +10142,7 @@ var KELAS_SP = { draft:"p-none", "menunggu gm":"p-sebagian", "menunggu vonny":"p
 function kolomSp(){
   return "id,no_sp,tanggal,kepada,sales_rep_id,status,batal,lunas,tgl_lunas,telat,"
        + "no_surat_jalan,tgl_surat_jalan,no_invoice,tgl_invoice,no_faktur,tgl_faktur,"
-       + "cash_minta,cash_ok,kirim_ok,kirim_alasan,catatan,vonny_ok,vonny_alasan,customer_id,"
+       + "cash_minta,cash_ok,kirim_ok,kirim_alasan,catatan,vonny_ok,vonny_alasan,vonny_pada,customer_id,"   /* #38: vonny_pada */
        + "po_id,po_menyusul,tanpa_po_ok,customers(industri,industri_lama,perlu_konfirmasi)";   /* #25: industri_lama */   /* #15: cermin gerbang kirim */
 }
 
@@ -10123,15 +10182,25 @@ function kirimHal(id){
 /* ═══ TAB · DOUBLE CHECK VONNY (#8) ══════════════════════════════════════
    SP berstatus 'menunggu vonny' dikumpulkan di sini untuk dicek Vonny sebelum
    masuk Pengiriman. Peran: owner/gm/vonny (RLS juga membatasi barisnya). */
-var VONNY_KOLOM = "/sales_orders?select=*,customers(industri,industri_lama),sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal,qty_batal)";   /* #18: qty_batal */
+var VONNY_KOLOM = "/sales_orders?select=*,customers(nama,industri,industri_lama),purchase_orders(no_po,tanggal,lampiran),"   /* #36: no PO & lampiran */
+  + "sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,ehc_item,jenis,batal,qty_batal)";   /* #18: qty_batal */
+/* #35: riwayat cek terakhir — supaya yang barusan diloloskan TERLIHAT pindah, bukan cuma lenyap. */
+var VONNY_RIWAYAT_HARI = 7;
 function muatVonnyCek(){
   var V = LANJUT.vonnycek;
   if (V.memuat) return Promise.resolve();
   V.memuat = true;
-  return api("GET", VONNY_KOLOM + "&batal=is.false&status=eq." + encodeURIComponent("menunggu vonny")
+  var sejak = new Date(Date.now() - VONNY_RIWAYAT_HARI * 86400000).toISOString();
+  return Promise.all([
+    api("GET", VONNY_KOLOM + "&batal=is.false&status=eq." + encodeURIComponent("menunggu vonny")
              + "&order=tanggal.desc,id.desc")
-    .then(function(r){ return ringkasSoUntuk(r || []); })
-    .then(function(x){ V.baris = x; V.dimuat = true; V.memuat = false; })
+      .then(function(r){ return ringkasSoUntuk(r || []); }),
+    api("GET", "/sales_orders?select=id,no_sp,tanggal,kepada,sales_rep_id,status,vonny_ok,vonny_pada,no_surat_jalan"
+             + "&batal=is.false&vonny_ok=is.true&vonny_pada=gte." + encodeURIComponent(sejak)
+             + "&order=vonny_pada.desc,id.desc&limit=50").catch(function(){ return []; }),
+    repAlur().catch(function(){ return []; })   /* nama sales di kolom Sales (dulu tampil "—" di tab ini) */
+  ])
+    .then(function(x){ V.baris = x[0]; V.riwayat = x[1] || []; V.dimuat = true; V.memuat = false; })
     .catch(function(e){ V.memuat = false; throw e; });
 }
 function panelVonnyCek(){
@@ -10142,29 +10211,55 @@ function panelVonnyCek(){
     return;
   }
   $("head-aksi").innerHTML = "";
-  var d = V.baris, boleh = bolehKonfirmasiKirim();
+  var boleh = bolehKonfirmasiKirim();
+  /* #35: SP yang DITAHAN tetap berstatus 'menunggu vonny' (sampai sales membereskan & Vonny meloloskannya),
+     jadi dulu tampil persis sama dengan yang belum dicek — setelah dicek tampilannya tidak berubah apa-apa.
+     Sekarang dipisah: belum dicek · ditahan (dengan alasannya) · baru diloloskan (sudah di Pengiriman). */
+  var menunggu = V.baris.filter(function(s){ return s.vonny_ok !== false; });
+  var ditahan  = V.baris.filter(function(s){ return s.vonny_ok === false; });
+  var riwayat  = V.riwayat || [];
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Menunggu cek Vonny", d.length, "SP perlu diloloskan", d.length ? "alert" : "", "vonnycek:daftar")
+    + tile("Menunggu cek Vonny", menunggu.length, "SP perlu dicek", menunggu.length ? "alert" : "", "vonnycek:daftar")
+    + tile("Ditahan Vonny", ditahan.length, "menunggu dibereskan sales", "", "vonnycek:tahan")
+    + tile("Baru diloloskan", riwayat.length, VONNY_RIWAYAT_HARI + " hari terakhir · sudah di Pengiriman", "", "vonnycek:lolos")
     + '</div>'
     + '<div class="flag"><span class="f-ico">i</span><div>SP yang baru dibuat sales masuk sini dulu untuk '
     + '<b>dicek kelayakannya oleh Vonny</b>. Selama di sini, SP <b>belum</b> tampil di Pengiriman & Invoice '
-    + 'dan Lie Sian belum bisa memprosesnya. Setelah <b>diloloskan</b>, SP pindah ke Pengiriman.</div></div>';
-  if (!d.length) {
-    h += kosong("Tidak ada SP yang menunggu cek Vonny.");
-  } else {
-    h += '<div class="tw" id="daftar-vonnycek"><table><thead><tr><th class="l">No SP</th><th>Tgl</th><th class="l">Kepada</th>'
-      +  '<th class="l">Sales</th><th class="r">Grand Total</th>' + (boleh ? '<th></th>' : '')
-      +  '</tr></thead><tbody>'
-      +  d.map(function(s){ var r = ringkasSo(s);
+    + 'dan Lie Sian belum bisa memprosesnya. Setelah <b>diloloskan</b>, SP keluar dari daftar ini dan masuk '
+    + '<b>Pengiriman</b> (tercatat di "Baru diloloskan" di bawah). Yang <b>ditahan</b> tetap di sini sampai diloloskan.</div></div>';
+
+  function tabelSp(daftar, id, kolomTambahan){
+    return '<div class="tw" id="' + id + '"><table><thead><tr><th class="l">No SP</th><th>Tgl</th><th class="l">Kepada</th>'
+      +  '<th class="l">Sales</th><th class="l">PO</th><th class="r">Grand Total</th>' + (kolomTambahan ? '<th class="l">' + kolomTambahan + '</th>' : '')
+      +  (boleh ? '<th></th>' : '') + '</tr></thead><tbody>'
+      +  daftar.map(function(s){ var r = ringkasSo(s), po = Array.isArray(s.purchase_orders) ? s.purchase_orders[0] : s.purchase_orders;
            return '<tr class="baris-klik" data-vc="' + s.id + '" tabindex="0"><td class="l"><code>' + esc(s.no_sp) + '</code></td>'
-             + '<td>' + td(s.tanggal) + '</td><td class="l"><b>' + esc(s.kepada || "") + '</b></td>'
+             + '<td>' + td(s.tanggal) + '</td><td class="l"><b>' + esc(s.kepada || "") + '</b>'
+             +   (!s.customer_id ? '<div><span class="pill p-sebagian">belum di data pelanggan</span></div>' : '') + '</td>'   /* #37 */
              + '<td class="l">' + esc(namaRepAlur(s.sales_rep_id) || "—") + '</td>'
+             + '<td class="l">' + (po ? esc(po.no_po) + (po.lampiran ? ' <span title="ada lampiran PO">📎</span>' : '') : '<span class="muted">' + (s.tanpa_po_ok ? 'tanpa PO' : 'menyusul') + '</span>') + '</td>'   /* #36 */
              + '<td class="r">' + rp(r ? r.grand_total : null) + '</td>'
+             + (kolomTambahan ? '<td class="l">' + esc(s.vonny_alasan || "—") + '<div class="muted" style="font-size:11px">' + (s.vonny_pada ? "ditahan " + waktuJkt(s.vonny_pada) : "") + '</div></td>' : '')
              + (boleh ? '<td><button class="btn kecil utama vc-cek" type="button" data-id="' + s.id + '">Cek</button></td>' : '')
              + '</tr>';
          }).join("")
       +  '</tbody></table></div>';
   }
+  h += '<h3 class="sec">Menunggu cek</h3>' + (menunggu.length ? tabelSp(menunggu, "daftar-vonnycek") : kosong("Tidak ada SP yang menunggu cek Vonny."));
+  if (ditahan.length) h += '<h3 class="sec" id="daftar-vonnycek-tahan">Ditahan — menunggu dibereskan sales</h3>' + tabelSp(ditahan, "tabel-vonnycek-tahan", "Alasan ditahan");
+  h += '<h3 class="sec" id="daftar-vonnycek-lolos">Baru diloloskan <span class="muted">' + VONNY_RIWAYAT_HARI + ' hari terakhir — sudah masuk Pengiriman</span></h3>';
+  h += riwayat.length
+    ? '<div class="tw"><table><thead><tr><th class="l">No SP</th><th class="l">Kepada</th><th class="l">Sales</th>'
+      + '<th class="l">Diloloskan</th><th class="l">Status sekarang</th></tr></thead><tbody>'
+      + riwayat.map(function(s){
+          return '<tr><td class="l"><code>' + esc(s.no_sp) + '</code></td><td class="l">' + esc(s.kepada || "") + '</td>'
+            + '<td class="l">' + esc(namaRepAlur(s.sales_rep_id) || "—") + '</td>'
+            + '<td class="l">' + esc(waktuJkt(s.vonny_pada)) + '</td>'
+            + '<td class="l"><span class="pill ' + (KELAS_SP[s.status] || "p-none") + '">' + esc(s.status) + '</span>'
+            +   (s.no_surat_jalan ? '' : ' <span class="muted" style="font-size:11.5px">menunggu diproses Lie Sian di Pengiriman</span>') + '</td></tr>';
+        }).join("")
+      + '</tbody></table></div>'
+    : kosong("Belum ada SP yang diloloskan dalam " + VONNY_RIWAYAT_HARI + " hari terakhir.");
   el.innerHTML = h;
   Array.prototype.forEach.call(el.querySelectorAll("[data-vc]"), function(tr){
     tr.addEventListener("click", function(e){
@@ -10198,7 +10293,9 @@ function bantuIndustriLama(s){
 function formCekVonny(s){
   if (!bolehKonfirmasiKirim()) { toast("Hanya owner, GM, atau Vonny yang boleh mengecek.", true); return; }
   var r = ringkasSo(s);
-  var perluKat = !(s.customers && s.customers.industri && String(s.customers.industri).trim());
+  var tanpaPelanggan = !s.customer_id;   /* #37: mis. perorangan / nama yang belum ada di master */
+  var perluKat = tanpaPelanggan || !(s.customers && s.customers.industri && String(s.customers.industri).trim());
+  var po = Array.isArray(s.purchase_orders) ? s.purchase_orders[0] : s.purchase_orders;   /* #36 */
   var lines = (s.sales_order_lines || []).filter(function(l){ return !l.batal && qtyEfektif(l) > 0; })   /* #18 */
                 .slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); });
   var h = '<div class="tiles" style="margin-bottom:4px">'
@@ -10206,6 +10303,15 @@ function formCekVonny(s){
     + tile("Nilai", rp(r ? r.grand_total : null), "termasuk PPN")
     + tile("Sales", namaRepAlur(s.sales_rep_id) || "—", esc(s.kepada || ""))
     + '</div>'
+    /* #36: nomor PO + lampirannya terbaca langsung di sini */
+    + (po
+        ? '<div class="flag"><span class="f-ico">📄</span><div><b>PO customer: ' + esc(po.no_po) + '</b>'
+          + (po.tanggal ? ' · ' + esc(tglTampil(po.tanggal)) : '')
+          + (po.lampiran
+              ? ' · <button type="button" class="btn kecil" id="btn-vc-lampiran">📎 Lihat lampiran PO</button>'
+              : ' · <span class="muted">belum ada lampiran PO — minta sales mengunggahnya di tab Upload PO</span>')
+          + '</div></div>'
+        : '')
     + (s.catatan ? '<div class="flag"><span class="f-ico">✎</span><div><b>Catatan sales:</b> ' + esc(s.catatan) + '</div></div>' : '')
     /* #8 #10: mode tanpa PO dinyatakan pembuat SP SEBELUM cek ini (berkas 88) — alasannya
        yang diperiksa Vonny, jadi harus terbaca di sini. */
@@ -10232,6 +10338,15 @@ function formCekVonny(s){
     + '<div class="kotak" style="border:1px solid #c99a2e;background:#fbf6e9;margin-top:12px"><div class="kotak-isi">'
     +   '<b>Cek kelayakan Vonny.</b> Loloskan supaya SP masuk ke Pengiriman, atau tahan dengan alasan.'
     +   (s.vonny_ok === false && s.vonny_alasan ? '<br><span class="muted">Sebelumnya ditahan — ' + esc(s.vonny_alasan) + '</span>' : '')
+    +   (tanpaPelanggan   /* #37 */
+        ? '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div><b>' + esc(s.kepada || "Pelanggan ini")
+          + '</b> belum tertaut ke data pelanggan. Saat diloloskan, namanya dicocokkan ke data pelanggan; kalau belum ada, '
+          + 'pelanggan dibuat dengan HP &amp; alamat di bawah (sales PIC: ' + esc(namaRepAlur(s.sales_rep_id) || "sales SP") + ').</div></div>'
+          + '<div class="baris">'
+          +   field({ nama:"vk_hp", label:"No. HP pelanggan", nilai: s.telp || "", tempel:"wajib bila pelanggan belum ada" })
+          +   field({ nama:"vk_alamat", label:"Alamat pelanggan", nilai: s.alamat || "", tempel:"wajib bila pelanggan belum ada" })
+          + '</div>'
+        : '')
     +   (perluKat ? '<div style="margin-top:10px">'
         + field({ nama:"vk_kat", label:"Kategori customer (wajib diisi dulu)", jenis:"select", nilai:"",
                   pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}],
@@ -10245,14 +10360,21 @@ function formCekVonny(s){
   $("laci-kaki").innerHTML = '<button class="btn" id="btn-vc-tutup" type="button">Tutup</button>';
   bukaLaci("Cek kelayakan Vonny — " + s.no_sp);
   $("btn-vc-tutup").addEventListener("click", tutupLaci);
+  if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
   $("btn-vc-ok").addEventListener("click", function(){
     var kat = perluKat ? nilaiForm("vk_kat") : null;
     if (perluKat && !kat) { tampilPesan("Isi kategori customer dulu sebelum SP diloloskan."); return; }
     sibuk(true);
     Promise.resolve()
-      .then(function(){ return (perluKat && kat && s.customer_id) ? simpanIndustri(s.customer_id, kat) : null; })   /* #25 */
+      .then(function(){
+        if (!perluKat) return null;
+        /* #37: satu pintu untuk dua keadaan — pelanggan sudah tertaut (isi kategori) atau belum (tautkan/buat, lalu isi). */
+        return api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: s.id, p_industri: kat,
+          p_hp: tanpaPelanggan ? (hpNormal(nilaiForm("vk_hp")) || nilaiForm("vk_hp")) : null,
+          p_alamat: tanpaPelanggan ? nilaiForm("vk_alamat") : null });
+      })
       .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
-      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — masuk ke Pengiriman."); segarkanVonnyCek(); })
+      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — keluar dari Double Check dan masuk ke Pengiriman."); segarkanVonnyCek(); })
       .catch(function(e){ tampilPesan(esc(e.message)); })
       .then(function(){ sibuk(false); });
   });
@@ -10262,12 +10384,19 @@ function formCekVonny(s){
     if (!String(alasan).trim()) { tampilPesan("Alasan wajib diisi."); return; }
     sibuk(true);
     api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: false, p_alasan: alasan })
-      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " ditahan."); segarkanVonnyCek(); })
+      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " ditahan — pindah ke bagian “Ditahan”."); segarkanVonnyCek(); })
       .catch(function(e){ tampilPesan(esc(e.message)); })
       .then(function(){ sibuk(false); });
   });
 }
 
+/* #38: SP yang baru diloloskan Vonny dan belum dikirim ditandai di Pengiriman — supaya Lie Sian tahu ada yang baru masuk. */
+function tandaBaruLolosVonny(s){
+  if (!s || s.vonny_ok !== true || s.no_surat_jalan || !s.vonny_pada) return "";
+  var t = tanggalDariCap(s.vonny_pada);
+  if (!t || Date.now() - t.getTime() > 3 * 86400000) return "";
+  return '<div><span class="pill p-jalan" title="lolos cek Vonny ' + esc(waktuJkt(s.vonny_pada)) + '">baru lolos cek Vonny</span></div>';
+}
 function muatKirim(){
   var K = LANJUT.kirim;
   var d = KIRIM_HAL.filter(function(x){ return x.id === K.hal; })[0] || KIRIM_HAL[0];
@@ -10355,7 +10484,7 @@ function panelKirim(){
       +  d.map(function(s){
            var r = ringkasSo(s);
            return '<tr data-krsp="' + s.id + '" tabindex="0" style="cursor:pointer">'
-             + '<td class="l">' + esc(s.no_sp) + '</td><td>' + td(s.tanggal) + '</td>'
+             + '<td class="l">' + esc(s.no_sp) + tandaBaruLolosVonny(s) + '</td><td>' + td(s.tanggal) + '</td>'
              + '<td class="l">' + esc(s.kepada || "—") + '</td>'
              + '<td class="l">' + esc(namaRepAlur(s.sales_rep_id) || "—") + '</td>'
              + '<td>' + rp(r ? r.grand_total : null) + '</td>'
@@ -14392,6 +14521,8 @@ function urutDomLabel(panel, label, arah){
   A["performa:komisi"] = function(){ return urut("daftar-performa", "Komisi", "desc"); };
   /* Cek Vonny */
   A["vonnycek:daftar"] = function(){ return "daftar-vonnycek"; };
+  A["vonnycek:tahan"]  = function(){ return "daftar-vonnycek-tahan"; };   /* #35 */
+  A["vonnycek:lolos"]  = function(){ return "daftar-vonnycek-lolos"; };
   /* Pengiriman */
   function kr(hal, dok){ return function(){
     var K = LANJUT.kirim; K.hal = hal; var H = kirimHal(hal); H.dok = dok || ""; return "daftar-kirim"; }; }
@@ -17684,6 +17815,40 @@ function ukuranTampil(n){
 }
 function amanNama(n){
   return String(n).replace(/[^\w.\- ]+/g, "_").replace(/\s+/g, "_").slice(-90);
+}
+/* #36: lampiran PO customer — bucket 'dokumen', awalan po/ (policy berkas 112: unggah = boleh input PO,
+   baca = hanya bila PO yang menunjuknya terlihat oleh pembaca). Jalur disimpan di purchase_orders.lampiran. */
+var MIME_LAMPIRAN_PO = ["application/pdf","image/jpeg","image/png","image/webp",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel","text/csv",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document","application/msword"];
+function cekLampiranPo(berkas){
+  if (!berkas) return "Belum ada berkas yang dipilih.";
+  if (berkas.size > 25 * 1024 * 1024) return "Berkas " + berkas.name + " lebih dari 25 MB.";
+  if (berkas.type && MIME_LAMPIRAN_PO.indexOf(berkas.type) < 0) return "Jenis berkas " + berkas.name + " tidak diterima — pakai PDF, foto (JPG/PNG/WEBP), Excel, CSV, atau Word.";
+  return "";
+}
+function unggahLampiranPo(berkas){
+  var galat = cekLampiranPo(berkas);
+  if (galat) return Promise.reject(new Error(galat));
+  var jalur = "po/" + new Date().toISOString().slice(0, 7) + "/" + Date.now().toString(36)
+            + Math.random().toString(36).slice(2, 8) + "-" + amanNama(berkas.name);
+  return storage("POST", "/object/dokumen/" + encodeURI(jalur), berkas, berkas.type || "application/octet-stream")
+    .then(function(){ return jalur; });
+}
+/* Dibuka lewat signed URL berumur pendek (sama seperti bukti EHC) — alamatnya tak bisa dibagikan ke luar. */
+function bukaLampiranPo(jalur){
+  sibuk(true, "Membuka lampiran PO…");
+  storage("POST", "/object/sign/dokumen/" + encodeURI(jalur), JSON.stringify({ expiresIn: 300 }), "application/json")
+    .then(function(j){
+      var u = j && (j.signedURL || j.signedUrl || j.url);
+      if (!u) throw new Error("Server tidak memberi alamat lampiran.");
+      if (u.indexOf("http") !== 0) u = url("/storage/v1" + (u.charAt(0) === "/" ? "" : "/") + u);
+      var a = document.createElement("a");
+      a.href = u; a.target = "_blank"; a.rel = "noopener"; a.download = String(jalur).split("/").pop();
+      document.body.appendChild(a); a.click(); a.remove();
+    })
+    .catch(function(e){ toast("Lampiran PO tidak bisa dibuka: " + e.message, true); })
+    .then(function(){ sibuk(false); });
 }
 function storage(metode, jalur, badan, tipe){
   var h = { "apikey": CONFIG.SUPABASE_KEY };

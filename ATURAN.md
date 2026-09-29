@@ -45,6 +45,9 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - **Invariant: grand total SP = grand total PO** (sampai sen).
 - SP boleh tanpa PO (customer perorangan) dengan alasan; ditandai pembuat SP sebelum cek Vonny.
 - Setiap SP wajib lolos **cek Vonny** sebelum ke pengiriman (Liesian). Hanya owner/GM/Vonny yang memutus. SP berubah sesudah lolos → kembali ke antrean cek.
+- Tab Double Check memisahkan SP **menunggu cek**, **ditahan** (beserta alasannya), dan **baru diloloskan** (7 hari terakhir). SP yang diloloskan keluar dari antrean dan masuk Pengiriman; di Pengiriman SP itu ditandai "baru lolos cek Vonny" (3 hari) untuk Lie Sian (#35 #38).
+- Sales melampirkan berkas PO customer saat input PO (boleh menyusul dari daftar PO). Mengganti lampiran yang sudah ada wewenang owner/GM. Lampiran hanya terbaca oleh yang boleh melihat PO-nya. Vonny melihat no PO & lampirannya saat cek (#36).
+- Semua SP harus bisa diberi kategori pelanggan (#37): SP yang pelanggannya belum ada di data pelanggan (mis. perorangan) ditautkan saat cek Vonny — nama dicocokkan ke data pelanggan; bila belum ada, pelanggan dibuat (wajib HP & alamat, sales PIC = sales SP).
 - SP punya catatan untuk pengiriman.
 - Pengiriman boleh bertahap (sebagian item/qty); setiap batch lewat gerbang yang sama (cek Vonny, konfirmasi pelanggan, harga GM, mode PO). Tulis surat jalan hanya lewat RPC.
 - Batal: boleh batal sisa qty yang belum terkirim; qty terkirim tidak bisa dibatalkan. SP habis dibatalkan → SP batal & PO ikut batal (bila tidak ada SP lain). PO menampilkan nilai batal & efektif.
