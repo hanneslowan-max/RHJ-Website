@@ -33,6 +33,7 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - Spesifikasi (#40): produk punya spesifikasi master (diubah owner/GM/staff/Vonny). Di penawaran kolom spesifikasi terisi otomatis dari spesifikasi **terakhir sales itu** untuk produk tersebut, atau dari master bila belum ada; tetap bisa diedit, dan setiap editan tersimpan lagi sebagai spesifikasi terakhir sales itu saat penawaran disimpan. Editan sales tidak mengubah master.
 
 ### PO & set
+- Pelanggan baru di form **PO** (#29) — nama yang tidak dipilih dari data pelanggan — ikut disimpan ke data pelanggan saat PO disubmit. Wajib: nama, alamat, No. HP, sales PIC (sales = dirinya). Nama/HP yang sudah ada di master ditolak (pilih dari daftar).
 - 1 set roda = 4 roda dari kategori & tipe sama; kombinasi sah: 4 rem, 4 hidup, 4 mati, 2 rem+2 hidup, 2 rem+2 mati, 2 hidup+2 mati. Di PO tampil "1 set @harga"; di SP dipecah ke pcs sesuai susunan set saat PO dibuat.
 - Set bisa dibuat **langsung di baris** PO / penawaran / SP tanpa PO oleh penginputnya (termasuk sales) tanpa data master: pilih tipe roda + kombinasi, jumlah set (bulat), harga **per set** sesuai PO customer; komponen ditentukan sistem dan disimpan hanya di baris itu (#28). DB menolak isi set yang tidak sah.
 - Harga per set dibagi ke tiap roda **sebanding price list** berlaku masing-masing, tepat sampai sen (grand total SP = PO tetap). Komponen tanpa price list → dibagi rata per pcs. Harga per roda di bawah price list tetap lewat approval GM.

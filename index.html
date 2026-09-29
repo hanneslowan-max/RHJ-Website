@@ -4228,13 +4228,15 @@ function barisPoBaru(){
      tanpa barang itu, dan barangnya tidak pernah masuk antrean usulan. */
   return { kode:null, deskripsi:"", usulanTeks:"", ketikan:"", jenis:"barang", qty:1, harga:0, keterangan:"", diskon:0, diskon_tipe:"rp", set_id:null, setKomp:null };
 }
+/* #29: PO untuk pelanggan yang belum ada di data pelanggan (nama diketik, tidak dipilih dari daftar). */
+function poPelangganBaru(f){ return !f.customer_id && String(f.nama_customer || "").trim().length > 0; }
 function poFormBaru(){
   /* Keterangan sales ikut dilepas bersama formnya. Kalau tidak, kotak
      merah "pelanggan ini belum punya sales" bertahan di atas form yang
      sudah kosong — keterangan yang tidak lagi menerangkan apa pun. */
   lupakanSalesPelanggan();
   return { tanggal: new Date().toISOString().slice(0,10), no_po: "", customer_id: null,
-           nama_customer: "", alamat: "", sales_rep_id: null, ppn_kena: true,
+           nama_customer: "", alamat: "", sales_rep_id: null, ppn_kena: true, hp: "", namaTerpilih: "",   /* #29 */
            lampiran: "", catatan: "", baris: [ barisPoBaru() ] };
 }
 /* Ongkos kirim dan biaya lain ikut ditagihkan, tapi TIDAK masuk dasar
@@ -4727,8 +4729,18 @@ function panelPo(){
             '<input type="text" id="po-cust" value="'+esc(f.nama_customer)+'" placeholder="ketik nama perusahaan…" autocomplete="off">'
             + '<div id="po-cust-hasil" class="cari-hasil" hidden></div>')
       + '</div>'
+      /* #29: nama yang tidak dipilih dari data pelanggan = pelanggan BARU — ikut disimpan ke data pelanggan saat
+         PO disubmit (buat_pelanggan_baru, berkas 109): nama, alamat, No. HP, dan sales PIC wajib. */
+      + '<div id="po-baru" class="flag" style="margin-top:10px"'+(poPelangganBaru(f)?'':' hidden')+'><span class="f-ico">＋</span><div>'
+      +   '<b>Pelanggan baru</b> — belum ada di data pelanggan. Saat PO disubmit, pelanggan ini ikut disimpan ke data '
+      +   'pelanggan: <b>nama, alamat, No. HP, dan sales PIC wajib diisi</b>. '
+      +   '<span class="muted">Kalau perusahaannya sebenarnya sudah ada, pilih dari daftar pencarian.</span></div></div>'
+      + '<div id="po-baru-hp" style="margin-top:12px"'+(poPelangganBaru(f)?'':' hidden')+'>'
+      +   medanAlur("No. HP pelanggan <em>wajib untuk pelanggan baru</em>",
+            '<input type="tel" id="po-hp" value="'+esc(f.hp || "")+'" placeholder="mis. 0812 3456 7890" autocomplete="off">')
+      + '</div>'
       + '<div style="margin-top:12px">'
-      +   medanAlur("Alamat <em>terisi sendiri kalau pelanggannya sudah ada</em>",
+      +   medanAlur("Alamat <em>terisi sendiri kalau pelanggannya sudah ada · wajib untuk pelanggan baru</em>",
             '<textarea id="po-alamat" rows="2">'+esc(f.alamat)+'</textarea>')
       + '</div>'
       + '<div class="baris2" style="margin-top:12px">'
@@ -5913,9 +5925,19 @@ function pasangPo(){
     }, 350);
   });
 
+  /* #29: nama yang diubah sesudah memilih dari daftar tidak lagi menunjuk pelanggan itu — jadi pelanggan baru
+     (penanda + kotak HP muncul). Digambar lewat DOM, bukan panel ulang, supaya kursor tidak lompat. */
+  $("po-cust").addEventListener("input", function(){
+    if (f.customer_id && this.value !== f.namaTerpilih) { f.customer_id = null; lupakanSalesPelanggan(); }
+    f.nama_customer = this.value;
+    var baru = poPelangganBaru(f);
+    $("po-baru").hidden = !baru; $("po-baru-hp").hidden = !baru;
+  });
+  $("po-hp").addEventListener("input", function(){ f.hp = this.value; });
   pasangCariPelanggan("po-cust", "po-cust-hasil", function(c){
     f.customer_id = c ? c.id : null;
     f.nama_customer = c ? c.nama : $("po-cust").value;
+    f.namaTerpilih = c ? c.nama : "";   /* #29 */
     if (c && c.lokasi) f.alamat = c.lokasi;
     f.pelangganDisentuh = true;
     /* Satu pelanggan dipegang satu sales, dan itu tercatat di master. Jadi
@@ -5996,7 +6018,7 @@ function pasangBarisPoAsli(){
       if (inp.classList.contains("po-qty")) f.baris[i].qty = v;
       else if (inp.classList.contains("po-diskon")) f.baris[i].diskon = v;   /* #7 */
       else f.baris[i].harga = v;
-      panelPo();
+      gambarUlangAman(panelPo);   /* klik Submit sesudah mengetik tidak hilang */
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-diskon-tipe"), function(sel){   /* #7: mode Rp / % */
@@ -6099,6 +6121,13 @@ function simpanPo(){
   var f = ALUR.poForm;
   if (!f.no_po.trim())        { toast("No PO belum diisi.", true); return; }
   if (!f.nama_customer.trim()){ toast("Perusahaan belum diisi.", true); return; }
+  var baruPel = poPelangganBaru(f);   /* #29 */
+  if (baruPel) {
+    var hpB = hpNormal(f.hp);
+    if (!hpB || !/^[1-9][0-9]{8,15}$/.test(hpB)) { toast("No. HP pelanggan baru belum diisi atau tidak valid (9–16 angka).", true); return; }
+    if (!String(f.alamat || "").trim()) { toast("Alamat pelanggan baru wajib diisi.", true); return; }
+    if (!peranSales() && !f.sales_rep_id) { toast("Pilih sales PIC untuk pelanggan baru ini.", true); return; }
+  }
   var siap = siapkanBarisPo(f);
   if (siap.salah.length)      { toast(siap.salah.join(" "), true); return; }
   if (!siap.kirim.length)     { toast("Belum ada baris item yang lengkap.", true); return; }
@@ -6108,7 +6137,7 @@ function simpanPo(){
      punya product_id sejak awal. Itu sifat yang membuat rancangan ini
      bekerja: begitu usulannya disahkan nanti, PO dan SP yang terlanjur
      memakainya ikut benar tanpa ditautkan ulang. */
-  var jalurUnggah = null;   /* #36 */
+  var jalurUnggah = null, pelangganDibuat = "";   /* #36 #29 */
   Promise.all(siap.kirim.filter(function(b){ return b.usulanTeks; }).map(function(b){
     return api("POST", "/rpc/usulkan_produk", { p_teks: b.usulanTeks })
       .then(function(id){ b.kode = (id && id.id) ? id.id : id; });
@@ -6116,6 +6145,19 @@ function simpanPo(){
   .then(function(){
     if (!f.lampiranBerkas) return null;
     return unggahLampiranPo(f.lampiranBerkas).then(function(j){ jalurUnggah = j; f.lampiran = j; });
+  })
+  .then(function(){
+    /* #29: pelanggan baru disimpan dulu (nama dirapikan DB: PT di depan), PO lalu menunjuknya. Kalau PO-nya
+       gagal sesudah ini, pelanggannya tetap ada dan form sudah menunjuknya — simpan ulang tidak membuat dobel. */
+    if (!baruPel) return null;
+    return api("POST", "/rpc/buat_pelanggan_baru", { p_nama: f.nama_customer.trim(), p_hp: hpNormal(f.hp),
+             p_lokasi: String(f.alamat).trim(), p_sales_rep: peranSales() ? null : Number(f.sales_rep_id) })
+      .then(function(id){ f.customer_id = Number(id); return api("GET", "/customers?select=id,nama&id=eq." + f.customer_id); })
+      .then(function(r){
+        if (r && r[0]) { f.nama_customer = r[0].nama; f.namaTerpilih = r[0].nama; }
+        pelangganDibuat = f.nama_customer;
+        LANJUT.pelanggan.dimuat = false; LANJUT.pelanggan.ringkas = null;
+      });
   })
   .then(function(){
   return api("POST", "/purchase_orders", {
@@ -6139,7 +6181,9 @@ function simpanPo(){
   })
   .then(function(po){
     ALUR.poForm = poFormBaru(); ALUR.dimuatPo = false;
-    ALUR.pesan = "✓ PO " + po.no_po + " tersubmit" + (jalurUnggah ? " dengan lampiran" : "") + " — sekarang bisa ditarik di tab Surat Pesanan.";
+    ALUR.pesan = "✓ PO " + po.no_po + " tersubmit" + (jalurUnggah ? " dengan lampiran" : "")
+      + (pelangganDibuat ? " — pelanggan baru " + pelangganDibuat + " ditambahkan ke data pelanggan" : "")
+      + " — sekarang bisa ditarik di tab Surat Pesanan.";
     toast("PO " + po.no_po + " tersubmit.");
     panelPo();
   });
@@ -6823,7 +6867,7 @@ function pasangSpIsi(f){
       if (inp.classList.contains("sp-qty"))       f.baris[i].qty  = v;
       else if (inp.classList.contains("sp-nett")) f.baris[i].nett = v;
       else                                        f.baris[i].ehc  = v;
-      panelSp();
+      gambarUlangAman(panelSp);   /* klik Simpan sesudah mengetik tidak hilang */
     });
   });
   if ($("sp-batal"))  $("sp-batal").addEventListener("click", function(){
@@ -15896,6 +15940,22 @@ function angkaForm(nama){ var v = nilaiForm(nama); return v === null ? null : an
     if (/,$/.test(el.value)) el.value = el.value.slice(0, -1);   /* nilainya sama: "12," = 12 */
   }, true);
 })();
+
+/* Kotak angka di form PO/SP menggambar ulang panelnya saat 'change' (lepas fokus). Kalau lepas fokusnya karena
+   orang MENEKAN TOMBOL (mis. langsung "Submit PO" sesudah mengetik qty), menggambar ulang di tengah klik
+   mengganti tombol di bawah jarinya: mousedown dan mouseup jatuh ke dua elemen berbeda, klik tidak pernah
+   terjadi, dan tombolnya harus ditekan dua kali. Jadi selama tombol sedang ditekan, gambar ulangnya ditunda
+   sampai kliknya selesai (datanya sendiri sudah diperbarui sebelum ditunda). */
+var TUNDA_GAMBAR = { tekan: false, fn: null };
+function jalankanTundaGambar(){ var fn = TUNDA_GAMBAR.fn; TUNDA_GAMBAR.fn = null; TUNDA_GAMBAR.tekan = false; if (fn) fn(); }
+document.addEventListener("pointerdown", function(e){
+  TUNDA_GAMBAR.tekan = !!(e.target && e.target.closest && e.target.closest("button, a, [role=button]"));
+}, true);
+document.addEventListener("click", function(){ if (TUNDA_GAMBAR.fn) setTimeout(jalankanTundaGambar, 0); else TUNDA_GAMBAR.tekan = false; });
+document.addEventListener("pointerup", function(){   /* ditekan lalu digeser keluar tombol: tak ada klik — tetap digambar */
+  setTimeout(function(){ if (TUNDA_GAMBAR.fn) jalankanTundaGambar(); else TUNDA_GAMBAR.tekan = false; }, 400);
+}, true);
+function gambarUlangAman(fn){ if (TUNDA_GAMBAR.tekan) { TUNDA_GAMBAR.fn = fn; return; } fn(); }
 
 function tampilPesan(teks, ok){
   var p = $("laci-form").querySelector(".pesan");
