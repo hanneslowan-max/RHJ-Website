@@ -4714,11 +4714,12 @@ function formBatal(jenis, o){
 /* Dipakai dua layar: daftar SP dan antrean GM. Karena itu ia memuat
    datanya sendiri, tidak menumpang ALUR — antrean GM tidak selalu
    memuat modul alur lebih dulu. */
-function formTautkanPo(soId){
+function formTautkanPo(soId, opsi){
   sibuk(true, "Memuat…");
   Promise.all([
-    api("GET", "/sales_orders?select=id,no_sp,kepada,customer_id,no_surat_jalan,"
-             + "po_menyusul,po_menyusul_alasan,tanpa_po_ok&id=eq." + soId),
+    api("GET", "/sales_orders?select=id,no_sp,kepada,customer_id,no_surat_jalan,no_invoice,"
+             + "po_menyusul,po_menyusul_alasan,tanpa_po_ok,tanpa_po_alasan,"
+             + "po_id,batal,sales_rep_id,dibuat_oleh,vonny_ok&id=eq." + soId),   /* #10 */
     api("GET", "/so_ringkas?select=so_id,grand_total&so_id=eq." + soId),
     api("GET", "/po_belum_sp?select=*&order=tanggal.desc&limit=300")
   ]).then(function(r){
@@ -4733,14 +4734,27 @@ function formTautkanPo(soId){
       .then(function(ring){
         var tot = {};
         (ring || []).forEach(function(x){ tot[x.po_id] = Number(x.grand_total); });
-        gambarTautkanPo(so, Number(totalSp || 0), kandidat, tot);
+        gambarTautkanPo(so, Number(totalSp || 0), kandidat, tot, opsi || {});
       });
   })
   .catch(function(e){ tampilPesan(esc(e.message)); })
   .then(function(){ sibuk(false); });
 }
 
-function gambarTautkanPo(so, totalSp, kandidat, tot){
+/* #10: cermin tandai_sp_tanpa_po() di DB — selain owner/GM (yang memakai "Izinkan tanpa PO"),
+   hanya PEMBUAT SP (sales: SP miliknya sendiri), sebelum cek Vonny & sebelum barang keluar.
+   Database tetap yang memutuskan; ini hanya supaya tombolnya tidak muncul untuk yang pasti ditolak. */
+function bolehTandaiTanpaPo(so){
+  if (!so || so.batal || so.po_id || so.tanpa_po_ok) return false;
+  if (!bolehInputPo() || bolehApprove()) return false;
+  if (!saya || so.dibuat_oleh !== saya.id) return false;
+  if (saya.peran === "sales") { var r = repSayaAlur(); if (!r || String(r.id) !== String(so.sales_rep_id)) return false; }
+  return true;
+}
+function tanpaPoTerlambat(so){ return !!(so.no_surat_jalan || so.no_invoice || (so.vonny_ok !== null && so.vonny_ok !== undefined)); }
+
+function gambarTautkanPo(so, totalSp, kandidat, tot, opsi){
+  opsi = opsi || {};
   /* Diurutkan: pelanggan yang sama dulu, lalu yang totalnya persis sama.
      Dua-duanya adalah petunjuk kuat "ini PO-nya", dan menaruhnya di atas
      menghemat pencarian mata di daftar tiga ratus baris. */
@@ -4801,6 +4815,27 @@ function gambarTautkanPo(so, totalSp, kandidat, tot){
                 tempel:"mis. pelanggan kecil, order lisan lewat telepon",
                 bantu:"Wajib diisi kalau Anda memakai tombol pengecualian." });
   }
+  /* #10: jalan coba-lagi untuk pembuat SP — kalau penandaan "tanpa PO" saat simpan gagal,
+     SP tertinggal tanpa mode dan tidak bisa dikirim. Sebelumnya hanya owner/GM yang punya pintu. */
+  var bisaTanpa = bolehTandaiTanpaPo(so), tanpaAktif = bisaTanpa && !tanpaPoTerlambat(so);
+  if (bisaTanpa) {
+    h += '<h4 class="sec" style="margin-top:18px">Atau: pelanggan ini memang tidak ber-PO (order lisan)</h4>';
+    if (tanpaAktif) {
+      h += '<div class="flag"><span class="f-ico">i</span><div>'
+        + 'Tandai SP ini <b>tanpa PO</b>: invoice boleh terbit tanpa PO, tapi <b>cek Vonny tetap wajib</b> '
+        + 'sebelum surat jalan.'
+        + (so.po_menyusul ? ' Mode <b>PO menyusul</b> yang sekarang akan diganti.' : '')
+        + ' Alasannya tercatat: siapa, kapan, dan kenapa.</div></div>'
+        + field({ nama:"tp_tanpa_alasan", label:"Alasan tanpa PO", nilai: opsi.alasan || "",
+                  tempel:"mis. pelanggan kecil, order lisan lewat telepon",
+                  bantu:"Wajib diisi." });
+    } else {
+      h += '<div class="flag"><span class="f-ico">i</span><div>'
+        + 'SP ini sudah ' + (so.no_surat_jalan || so.no_invoice ? 'mulai dikirim/ditagih' : 'diputus Vonny')
+        + ' — mode tanpa PO tidak bisa Anda nyatakan lagi. Minta owner/GM (tombol "Izinkan tanpa PO").'
+        + '</div></div>';
+    }
+  }
   if (so.tanpa_po_ok) {
     h += '<div class="flag"><span class="f-ico">i</span><div>'
       + 'Surat Pesanan ini <b>sudah dikecualikan</b> — invoicenya boleh terbit tanpa PO. '
@@ -4813,6 +4848,7 @@ function gambarTautkanPo(so, totalSp, kandidat, tot){
       (kandidat.length ? '<button class="btn utama" id="btn-tp-tempel" type="button">Tempelkan PO</button> ' : '')
     + ((bolehApprove() && !so.tanpa_po_ok)
         ? '<button class="btn bahaya" id="btn-tp-kecuali" type="button">Izinkan tanpa PO</button> ' : '')
+    + (tanpaAktif ? '<button class="btn bahaya" id="btn-tp-tanpa" type="button">Tandai tanpa PO</button> ' : '')   /* #10 */
     + '<button class="btn" id="btn-tp-tutup" type="button">Tutup</button>';
   bukaLaci("Tempelkan PO — " + so.no_sp);
   $("btn-tp-tutup").addEventListener("click", tutupLaci);
@@ -4848,6 +4884,16 @@ function gambarTautkanPo(so, totalSp, kandidat, tot){
     sibuk(true, "Menempelkan…");
     api("POST", "/rpc/tautkan_po_sp", { p_so: so.id, p_po: Number(po) })
       .then(function(r){ tutupLaci(); toast(String(r || "PO ditempelkan.")); segarkan(); })
+      .catch(function(e){ tampilPesan(esc(e.message)); })
+      .then(function(){ sibuk(false); });
+  });
+
+  if ($("btn-tp-tanpa")) $("btn-tp-tanpa").addEventListener("click", function(){   /* #10 */
+    var alasan = nilaiForm("tp_tanpa_alasan");
+    if (!alasan || !String(alasan).trim()) { tampilPesan("Mode tanpa PO wajib beralasan (mis. order lisan)."); return; }
+    sibuk(true, "Menyimpan…");
+    api("POST", "/rpc/tandai_sp_tanpa_po", { p_so: so.id, p_alasan: String(alasan).trim() })
+      .then(function(r){ tutupLaci(); toast(String(r || "SP ditandai tanpa PO.")); segarkan(); })
       .catch(function(e){ tampilPesan(esc(e.message)); })
       .then(function(){ sibuk(false); });
   });
@@ -4977,10 +5023,21 @@ function formDetailDoc(jenis, row){
   }
   if (!isPo && bolehLihatHpp() && r) h += '<p class="muted" style="margin-top:8px">Komisi terhitung: <b>'+rp(r.komisi)+'</b></p>';
   if (row.catatan) h += '<div class="flag" style="margin-top:10px"><span class="f-ico">✎</span><div>'+esc(row.catatan)+'</div></div>';
+  /* #10: SP tanpa PO — tampilkan modenya, dan beri jalan ke laci "Tempelkan PO / tanpa PO". */
+  var laciPo = !isPo && !row.po_id && !row.batal && bolehInputPo();
+  if (!isPo && !row.po_id && !row.batal) {
+    var modePo = row.tanpa_po_ok ? "tanpa PO — invoice boleh terbit tanpa PO"
+      : row.po_menyusul ? "PO menyusul — invoice tertahan sampai PO ditempel"
+      : "<b>belum dinyatakan</b> — SP belum bisa dikirim sebelum modenya jelas";
+    h += '<div class="flag' + (row.tanpa_po_ok || row.po_menyusul ? '' : ' merah') + '" style="margin-top:10px">'
+      + '<span class="f-ico">i</span><div>Mode PO: ' + modePo + '</div></div>';
+  }
   $("laci-form").innerHTML = h;
-  $("laci-kaki").innerHTML = '<button class="btn" id="btn-detail-tutup" type="button">Tutup</button>';
+  $("laci-kaki").innerHTML = (laciPo ? '<button class="btn utama" id="btn-detail-tp" type="button">Tempelkan PO / tanpa PO</button> ' : '')
+    + '<button class="btn" id="btn-detail-tutup" type="button">Tutup</button>';
   bukaLaci((isPo ? "Detail PO — " + row.no_po : "Detail SP — " + row.no_sp));
   $("btn-detail-tutup").addEventListener("click", tutupLaci);
+  if ($("btn-detail-tp")) $("btn-detail-tp").addEventListener("click", function(){ formTautkanPo(row.id); });
   if (isPo) return;
 
   /* #15 #18: terkirim/sisa per baris dari so_kirim_sisa, nilai awal/batal dari sp_nilai_batal. */
@@ -5756,8 +5813,11 @@ function panelSp(){
       +  '<th class="r">Grand Total</th>' + (bolehInputPo() ? '<th></th>' : '')
       +  '</tr></thead><tbody>';
     h += tanpaPo.map(function(x){
+      var belumMode = x.mode_po === "belum";   /* #10: DB lama tanpa mode_po → logika lama */
       var keadaan = x.tanpa_po_ok
         ? '<span class="pill p-lunas">dikecualikan — boleh ditagih</span>'
+        : belumMode
+          ? '<span class="pill p-belum">mode PO belum dinyatakan</span>'
         : x.sudah_kirim
           ? '<span class="pill p-belum">sudah dikirim · invoice tertahan</span>'
           : '<span class="pill p-sebagian">belum dikirim</span>';
@@ -5766,11 +5826,11 @@ function panelSp(){
         + '<td>' + esc(tglPendekAlur(x.tanggal)) + '</td>'
         + '<td>' + (Number(x.umur_hari) || 0) + ' hari</td>'
         + '<td class="l">' + keadaan + '</td>'
-        + '<td class="l">' + esc(x.alasan || "—") + '</td>'
+        + '<td class="l">' + esc(x.alasan || x.tanpa_po_alasan || "—") + '</td>'
         + '<td class="r">' + rp(x.grand_total) + '</td>'
         + (bolehInputPo()
             ? '<td><button class="btn kecil tautkan-po" type="button" data-id="' + x.so_id
-              + '">Tempelkan PO</button></td>' : '')
+              + '">' + (belumMode ? 'Tempelkan PO / tanpa PO' : 'Tempelkan PO') + '</button></td>' : '')
         + '</tr>';
     }).join("");
     h += '</tbody></table></div>'
@@ -6650,9 +6710,20 @@ function simpanSp(khusus){
     /* spFormBaru() sekaligus melupakan daftar harga khusus pelanggan itu
        — dan itu memang perlu di sini: daftarnya baru saja berubah oleh
        permintaan yang barusan dikirim. */
+    var alasanTadi = f.alasanMenyusul;   /* #10: dibawa ke laci coba-lagi */
     ALUR.spForm = spFormBaru(); ALUR.dimuatSp = false; ALUR.dimuatPo = false;
     LANJUT.vonnycek.dimuat = false;   /* #8: SP baru masuk tab Double Check Vonny */
     if (khusus) tutupLaci();
+    /* #10: kegagalan "tanpa PO" tidak boleh tertimpa pesan harga khusus — ia yang menahan SP. */
+    if (so._tanpaPoGagal) {
+      toast("SP " + so.no_sp + " tersimpan, tapi mode 'tanpa PO' belum tercatat: " + so._tanpaPoGagal
+          + " — SP ini belum bisa dikirim sebelum modenya jelas. Coba lagi di laci yang terbuka "
+          + "(atau lewat antrean 'SP menunggu PO')."
+          + (so._khususGagal ? " Permintaan harga khususnya juga gagal: " + so._khususGagal : ""), true);
+      panelSp();
+      formTautkanPo(so.id, { alasan: alasanTadi });
+      return;
+    }
     if (so._khususGagal) {
       toast("SP " + so.no_sp + " tersimpan, tapi permintaan harga khususnya gagal: "
         + so._khususGagal, true);
@@ -6660,12 +6731,6 @@ function simpanSp(khusus){
       toast("SP " + so.no_sp + " tersimpan. " + (so._khusus
         ? so._khusus + " item masuk antrean GM untuk harga & komisi khusus."
         : "Semua itemnya sudah punya harga khusus yang berlaku — tidak ada yang perlu diantrekan."));
-    } else if (so._tanpaPoGagal) {
-      /* #8: sesudah SP tersimpan, mode tanpa PO hanya bisa dinyatakan pembuatnya sebelum cek
-         Vonny (berkas 88); selebihnya pengecualian owner/GM di laci "Tempelkan PO". */
-      toast("SP " + so.no_sp + " tersimpan, tapi gagal ditandai tanpa PO: " + so._tanpaPoGagal
-          + " — surat jalannya akan tertahan sampai modenya dinyatakan. Minta owner/GM memberi "
-          + "pengecualian lewat \"Tempelkan PO\" → \"Izinkan tanpa PO\".", true);
     } else if (so._tanpaPo) {
       toast("Surat Pesanan " + so.no_sp + " tersimpan tanpa PO. Menunggu cek Vonny sebelum "
           + "surat jalan — invoicenya boleh terbit tanpa PO.");   /* #10 */
