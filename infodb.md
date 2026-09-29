@@ -541,7 +541,9 @@ CREATE TABLE public.po_lines (
   CONSTRAINT po_lines_diskon_sen CHECK (CASE WHEN diskon_tipe = 'persen'
     THEN qty * harga * diskon / 100 = trunc(qty * harga * diskon / 100, 2) ELSE diskon = trunc(diskon, 2) END),
   CONSTRAINT po_lines_set_qty_bulat CHECK (set_id IS NULL OR qty = trunc(qty)),
-  CONSTRAINT po_lines_set_bukan_produk CHECK (set_id IS NULL OR (product_id IS NULL AND jenis = 'barang'))
+  CONSTRAINT po_lines_set_bukan_produk CHECK (set_id IS NULL OR (product_id IS NULL AND jenis = 'barang')),
+  -- berkas 107 (#12): baris berdiskon → qty*harga habis dalam sen (harga_nett SP 2 desimal harus bisa menyamai PO)
+  CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2))
 );
 -- Nilai baris = qty*harga − potongan (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus po_ringkas.
 -- Baris SET (#1): jenis 'barang', product_id NULL, set_id terisi, harga = harga per set, qty = jumlah set

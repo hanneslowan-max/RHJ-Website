@@ -4226,6 +4226,11 @@ function cekDiskonPo(b, no){
   no = no || "";
   if (b.set_id && q !== Math.floor(q)) return no + "jumlah set harus bilangan bulat.";
   if (d < 0) return no + "diskon tidak boleh negatif.";
+  /* #12 (berkas 107, po_lines_diskon_bruto_sen): baris berdiskon → qty × harga harus habis dalam sen,
+     kalau tidak baris SP (harga_nett 2 desimal) tak bisa menyamai nilai PO. */
+  if (d > 0 && !habisSen(bruto))
+    return no + "qty × harga = Rp " + bruto.toLocaleString("id-ID", { maximumFractionDigits: 6 })
+      + " — tidak habis dalam sen, tidak bisa diberi diskon. Ubah qty/harga atau hapus diskonnya.";
   if (b.diskon_tipe === "persen") {
     if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
     if (!habisSen(bruto * d / 100))
@@ -4287,7 +4292,12 @@ function spBarisDariPo(l){
   }
   if (!l.set_id && !(Number(l.diskon) > 0))
     return [ jadi(l.product_id, l.deskripsi, l.jenis || "barang", { qty: Number(l.qty), nett: Number(l.harga) }) ];
-  var tSen = poNilaiBarisSen(l), pc;   /* bulat (sen), nilai po_ringkas sampai sen — #12: SP = PO dibanding sampai sen */
+  /* #12: nilai baris berpecahan di bawah sen tak bisa ditiru harga_nett 2 desimal → SP ≠ PO. Tolak jelas
+     (DB sudah mencegah lewat po_lines_diskon_bruto_sen, berkas 107; ini untuk data/jalur lama). */
+  if (poNilaiBaris1e4(l) % 100 !== 0)
+    throw new Error('Baris "' + nama + '": nilai sesudah diskon Rp ' + angkaTeks(poTotalBaris(l), 6)
+      + ' tidak habis dalam sen — tidak bisa dijadikan harga nett SP. Perbaiki qty/harga/diskon di PO.');
+  var tSen = poNilaiBarisSen(l), pc;   /* bulat (sen) = nilai po_ringkas persis (sudah dipastikan habis dalam sen) */
   if (!l.set_id) {
     pc = pecahNettSen(tSen, l.qty);
     if (!pc) throw new Error('Baris "' + nama + '": nilai sesudah diskon tidak bisa dibagi rata ke qty '
