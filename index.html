@@ -3302,8 +3302,8 @@ var TAB = [
   { id:"harga",     label:"Price List",     judul:"Price list",     sub:"Harga jual seluruh katalog",               peran:["owner","gm","staff","finance","sales"] },
   { id:"khusus",    label:"Harga Special",  judul:"Harga Special",  sub:"Harga & komisi khusus per customer + item", peran:["owner","gm","staff","finance","sales"], baru:1 },
   { id:"penawaran", label:"Penawaran",      judul:"Penawaran",      sub:"Pilih produk, harga dari price list, jadi PDF", peran:["owner","gm","staff","sales","vonny"], baru:1 },
-  { id:"po",        label:"Upload PO",      judul:"Upload PO",      sub:"PO customer masuk dulu — Surat Pesanan ditarik dari sini", peran:["owner","gm","staff","finance","sales","liesian","ichi","vonny"], baru:1 },
-  { id:"sp",        label:"Surat Pesanan",  judul:"Surat Pesanan",  sub:"Dari PO jadi SP ke gudang, dengan komisi sales", peran:["owner","gm","staff","finance","sales","liesian","ichi","vonny"], baru:1 },
+  { id:"po",        label:"Upload PO",      judul:"Upload PO",      sub:"PO customer masuk dulu — Surat Pesanan ditarik dari sini", peran:["owner","gm","staff","finance","sales","liesian","ichi","vonny","lenni"], baru:1 },
+  { id:"sp",        label:"Surat Pesanan",  judul:"Surat Pesanan",  sub:"Dari PO jadi SP ke gudang, dengan komisi sales", peran:["owner","gm","staff","finance","sales","liesian","ichi","vonny","lenni"], baru:1 },
   { id:"performa",  label:"Performa Sales", judul:"Performa sales", sub:"Corong bulanan dan perbandingan antar sales", peran:["owner","gm"], baru:1 },
 
   /* ── 2 · PENGIRIMAN ───────────────────────────────────────────── */
@@ -14008,7 +14008,8 @@ var KETERANGAN_PERAN = [
            "Menghapus produk, ubah massal, set roda, mengesahkan usulan produk"] },
   { peran:"lenni", ringkas:"Lenni — Laporan Finance, baca saja",
     bisa:["Menarik Laporan Finance","Melihat nominal klaim EHC dan komisi",
-          "Melihat SELURUH alur jual dan price list"],
+          "Melihat SELURUH alur jual dan price list",
+          "Membuka Upload PO & Surat Pesanan — baca saja (detail PO/SP)"],   /* #19 */
     tidak:["Melihat HPP dan margin — sengaja dipisah dari hak nominal klaim",
            "Mengubah apa pun"] },
   { peran:"selfie", ringkas:"Staf impor — jalannya barang saja",
