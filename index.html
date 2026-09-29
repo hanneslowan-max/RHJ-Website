@@ -1110,6 +1110,14 @@ function bandingList(nett, list, mode){
   if (mode === "include") { n *= 100; l *= 111; }
   return n < l ? -1 : (n > l ? 1 : 0);
 }
+/* Isian harga OTOMATIS dari price list (tanpa PPN) untuk sebuah mode. Include → list × 1,11; kalau hasilnya
+   tidak habis dalam sen, dinaikkan ke sen berikutnya (hanya usulan isian — kolom harga 2 desimal — dan tidak
+   pernah jatuh di bawah list). Harga yang diketik orang tidak pernah diubah. */
+function hargaDariList(list, mode){
+  if (!(Number(list) > 0)) return null;
+  if (mode !== "include") return Number(list);
+  return Math.ceil(senDari(list) * 111 / 100 - 1e-9) / 100;
+}
 function opsiModePpn(mode){
   return MODE_PPN.map(function(o){ return '<option value="' + o[0] + '"' + (o[0] === mode ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join("");
 }
@@ -4230,7 +4238,20 @@ function cariProdukLokal(q){
     return b.s - a.s || String(a.p.kode).localeCompare(String(b.p.kode), "id", { numeric: true });
   });
   cariProdukLokal.jumlah = hasil.length;
-  return hasil.slice(0, 40).map(function(x){ return x.p; });
+  /* #31 (verifikator): dulu dipotong 40 — "osaka" cocok ±190 produk dan OSJB 5" (urutan ~87) tak pernah tampil.
+     Daftar hasil bisa digulir (max-height), jadi yang cocok ditampilkan sampai 250. */
+  return hasil.slice(0, CARI_PRODUK_MAKS).map(function(x){ return x.p; });
+}
+var CARI_PRODUK_MAKS = 250;
+/* #32 (verifikator): produk NONAKTIF yang cocok dengan ketikan — supaya kotak cari tidak buntu tanpa pesan. */
+function cariProdukNonaktif(q){
+  var t = normalCari(q); if (!t) return [];
+  var kata = t.split(" ");
+  return PRODUK.filter(function(p){
+    if (p.usulan || p.aktif !== false) return false;
+    var idx = p._cari || normalCari((p.kode || "") + " " + (p.brand || "") + " " + (p.kelompok || "") + " " + (p.kategori || ""));
+    return kata.every(function(w){ return idx.indexOf(w) > -1; });
+  }).slice(0, 5);
 }
 /* Apakah ADA produk sah yang memuat teks ini utuh? Diperiksa ke seluruh
    PRODUK, bukan ke hasil pencarian yang sudah dipotong 20 baris — kalau
@@ -4346,6 +4367,12 @@ function cekDiskonPo(b, no){
   if (pj && !habisSen(bruto))
     return no + "qty × harga = Rp " + bruto.toLocaleString("id-ID", { maximumFractionDigits: 6 })
       + " tidak habis dalam sen, jadi totalnya tidak bisa disesuaikan.";
+  /* #34 (verifikator; = CHECK po_lines_pecahan_terbagi, berkas 115): qty pecahan berdiskon/berpenyesuaian → nilai
+     baris ÷ qty harus habis dalam sen, kalau tidak SP-nya tak pernah bisa dibuat. */
+  if (!adaSet(b) && q !== Math.floor(q) && (d > 0 || pj) && poNilaiBaris1e4(b) % 100 === 0
+      && !pecahNettSen(poNilaiBarisSen(b), q))
+    return no + "qty " + ribu(q) + " pecahan — nilai sesudah diskon/pembulatan tidak bisa dibagi rata ke qty itu. "
+      + "Pakai qty bilangan bulat atau ubah totalnya.";
   if (b.diskon_tipe === "persen") {
     if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
     if (!habisSen(bruto * d / 100))
@@ -5508,12 +5535,28 @@ function formDetailDoc(jenis, row){
     h += '<div class="flag' + (row.tanpa_po_ok || row.po_menyusul ? '' : ' merah') + '" style="margin-top:10px">'
       + '<span class="f-ico">i</span><div>Mode PO: ' + modePo + '</div></div>';
   }
+  var bisaLengkapi = !isPo && !row.customer_id && !row.batal && bolehKonfirmasiKirim();   /* #37 (verifikator) */
+  if (bisaLengkapi) h += kotakLengkapiPelangganSp(row);
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = (laciPo ? '<button class="btn utama" id="btn-detail-tp" type="button">Tempelkan PO / tanpa PO</button> ' : '')
     + '<button class="btn" id="btn-detail-tutup" type="button">Tutup</button>';
   bukaLaci((isPo ? "Detail PO — " + row.no_po : "Detail SP — " + row.no_sp));
   $("btn-detail-tutup").addEventListener("click", tutupLaci);
   if ($("btn-detail-tp")) $("btn-detail-tp").addEventListener("click", function(){ formTautkanPo(row.id); });
+  if ($("btn-dd-pelanggan")) $("btn-dd-pelanggan").addEventListener("click", function(){   /* #37 */
+    var kat = nilaiForm("dd_kat");
+    if (!kat) { tampilPesan("Pilih kategori customer dulu."); return; }
+    sibuk(true);
+    api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: row.id, p_industri: kat,
+        p_hp: hpNormal(nilaiForm("dd_hp")) || nilaiForm("dd_hp") || null, p_alamat: nilaiForm("dd_alamat") || null })
+      .then(function(r){
+        tutupLaci(); toast(("SP " + row.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, kat)).trim());
+        ALUR.dimuatSp = false; if (LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;
+        if (tabAktif === "sp") panelSp();
+      })
+      .catch(function(e){ tampilPesan(esc(e.message)); })
+      .then(function(){ sibuk(false); });
+  });
   if (isPo) return;
 
   /* #15 #18: terkirim/sisa per baris dari so_kirim_sisa, nilai awal/batal dari sp_nilai_batal. */
@@ -5864,6 +5907,13 @@ function formMintaUbah(jenis, id){
 /* #34: Total baris bisa diubah (customer biasa membulatkan) — selisih terhadap qty × harga − diskon dicatat
    sebagai penyesuaian pembulatan baris itu, maks ±Rp 1.000 (CHECK po_lines, berkas 113). */
 var PENYESUAIAN_MAKS = 1000;
+/* #30 (verifikator): baris barang PO yang nilai per unitnya (sesudah diskon/pembulatan) di bawah price list —
+   dari DPP pada mode include (bandingList). Hanya peringatan: gerbangnya tetap di SP → GM. */
+function poBawahList(b, p, f){
+  var l = p ? hargaListProduk(p.id) : null, q = Number(b.qty) || 0;
+  if (!l || !(q > 0) || b.jenis === "biaya" || adaSet(b)) return false;
+  return bandingList(poTotalBaris(b) / q, l, modePpnDok(f)) < 0;
+}
 function poTotalBarisHtml(b, i){
   var pj = Number(b.penyesuaian) || 0;
   return '<div class="bi-hasil"><label>Total baris <span class="muted" style="font-weight:400">bisa diubah</span></label>'
@@ -5929,7 +5979,8 @@ function poBarisHtml(f){
         +   'placeholder="ketik nama atau kode SKU…">'
         + '<div class="cari-hasil" hidden></div>'
         + '<span class="bi-ket">'+(p ? esc(p.kode) + ' · ' + esc(p.brand || "")
-            + (hargaListProduk(p.id) ? ' · list ' + rp(hargaListProduk(p.id)) : '')
+            + (hargaListProduk(p.id) ? ' · list ' + rp(hargaListProduk(p.id)) + (modePpnDok(f) === "include" ? ' (tanpa PPN)' : '') : '')
+            + (poBawahList(b, p, f) ? ' <span class="bi-tanda bad" style="display:inline">· di bawah list — SP-nya ke GM</span>' : '')   /* #30 */
             : (String(b.ketikan || "").trim()
                 ? '<b class="bi-belum">belum tersambung ke master</b> — pilih dari daftar, '
                   + 'atau pilih “+ Pakai … sebagai item baru”'
@@ -5975,7 +6026,13 @@ function pasangPo(){
   ["po-tanggal","po-alamat","po-rep"].forEach(function(id){
     $(id).addEventListener("change", function(){ simpanNilai(); });
   });
-  $("po-ppn").addEventListener("change", function(){ simpanNilai(); panelPo(); });
+  $("po-ppn").addEventListener("change", function(){
+    simpanNilai();
+    f.baris.forEach(function(b){   /* #30: harga otomatis dari price list ikut mode PPN baru */
+      if (b.hargaAutoList) { b.harga = hargaDariList(b.hargaAutoList, modePpnDok(f)); b.penyesuaian = 0; }
+    });
+    panelPo();
+  });
   if ($("po-lampiran")) $("po-lampiran").addEventListener("change", function(){   /* #36 */
     var b = this.files && this.files[0]; if (!b) return;
     var galat = cekLampiranPo(b);
@@ -6052,7 +6109,8 @@ function pasangPo(){
               keterangan:"", diskon:0, diskon_tipe:"rp" });
     }, function(s){               /* set master (jalan pintas) */
       taruh({ kode:null, set_id:s.id, setKomp:(s.komponen||[]), deskripsi:s.nama,
-              usulanTeks:"", ketikan:"", jenis:"barang", qty:1, harga:setHargaSet(s),
+              usulanTeks:"", ketikan:"", jenis:"barang", qty:1,
+              harga:hargaDariList(setHargaSet(s), modePpnDok(f)) || setHargaSet(s), hargaAutoList:setHargaSet(s),   /* #30 */
               keterangan:"", diskon:0, diskon_tipe:"rp" });
     });
   });
@@ -6095,7 +6153,7 @@ function pasangBarisPoAsli(){
       var v = angkaAlur(inp.value);
       if (inp.classList.contains("po-qty")) f.baris[i].qty = v;
       else if (inp.classList.contains("po-diskon")) f.baris[i].diskon = v;   /* #7 */
-      else f.baris[i].harga = v;
+      else { f.baris[i].harga = v; f.baris[i].hargaAutoList = null; }   /* #30: diketik → bukan otomatis lagi */
       if (Number(f.baris[i].penyesuaian)) {   /* #34: penyesuaian mengacu qty×harga−diskon lama — dilepas, total ikut rumus lagi */
         f.baris[i].penyesuaian = 0;
         toast("Baris " + (i + 1) + ": penyesuaian pembulatan dilepas karena qty/harga/diskon berubah — ubah Total baris lagi bila perlu.");
@@ -6152,7 +6210,11 @@ function pasangBarisPoAsli(){
       f.baris[i].kode = p.id;
       f.baris[i].usulanTeks = "";
       f.baris[i].ketikan = "";
-      f.baris[i].harga = hargaListProduk(p.id) || f.baris[i].harga;
+      /* #30: isian otomatis dari price list — include → × 1,11. Diingat (hargaAutoList) supaya ikut bila mode
+         PPN diganti; barang tanpa price list tidak mewarisi harga otomatis barang sebelumnya. */
+      var l = hargaListProduk(p.id), b = f.baris[i];
+      if (l) { b.harga = hargaDariList(l, modePpnDok(f)); b.hargaAutoList = l; b.penyesuaian = 0; }
+      else if (b.hargaAutoList) { b.harga = 0; b.hargaAutoList = null; b.penyesuaian = 0; }
       panelPo();
     }, function(teks){
       /* Belum diusulkan ke server di sini — baru saat PO disimpan. Kalau
@@ -6963,13 +7025,15 @@ function pasangSpIsi(f){
     });
   });
   if ($("sp-ppn")) $("sp-ppn").addEventListener("change", function(){
-    f.mode_ppn = this.value; f.ppn_kena = f.mode_ppn !== "non"; panelSp();   /* #30 */
+    f.mode_ppn = this.value; f.ppn_kena = f.mode_ppn !== "non";   /* #30 */
+    (f.baris || []).forEach(function(b){ if (b.nettAutoList) b.nett = hargaDariList(b.nettAutoList, f.mode_ppn); });
+    panelSp();
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-sp .sp-qty, #p-sp .sp-nett, #p-sp .sp-ehc"), function(inp){
     inp.addEventListener("change", function(){
       var i = +inp.dataset.i, v = angkaAlur(inp.value);
       if (inp.classList.contains("sp-qty"))       f.baris[i].qty  = v;
-      else if (inp.classList.contains("sp-nett")) f.baris[i].nett = v;
+      else if (inp.classList.contains("sp-nett")) { f.baris[i].nett = v; f.baris[i].nettAutoList = null; }   /* #30: diketik */
       else                                        f.baris[i].ehc  = v;
       gambarUlangAman(panelSp);   /* klik Simpan sesudah mengetik tidak hilang */
     });
@@ -7106,7 +7170,10 @@ function pasangSpMenyusul(f){
       f.baris[i].usulanTeks = "";
       f.baris[i].ketikan = "";
       f.baris[i].list = hargaListProduk(pr.id) || null;
-      if (!Number(f.baris[i].nett)) f.baris[i].nett = hargaListProduk(pr.id) || 0;
+      if (!Number(f.baris[i].nett) || f.baris[i].nettAutoList) {   /* #30: include → list × 1,11; ikut bila mode diganti */
+        f.baris[i].nett = hargaDariList(f.baris[i].list, modePpnDok(f)) || 0;
+        f.baris[i].nettAutoList = f.baris[i].list;
+      }
       panelSp();
     }, function(teks){
       /* Belum diusulkan ke server di sini — baru saat SP disimpan, supaya
@@ -7178,7 +7245,9 @@ function khususBaris(b){
   /* Aktif = batas BAWAH. Kalau harga yang diketik masih di atas batasnya,
      kesepakatannya berlaku dan tidak ada yang perlu diminta. Kalau di
      bawahnya, ini permintaan baru yang sungguhan. */
-  return Number(b.nett) >= Number(cocok.harga_nett)
+  /* #30 (verifikator): batas harga khusus selalu tanpa PPN — SP include dibandingkan dari DPP-nya
+     (= so_baris_hitung: nett_dpp >= harga_nett), dihitung bulat lewat bandingList. */
+  return bandingList(b.nett, cocok.harga_nett, modePpnDok(ALUR.spForm)) >= 0
     ? { status:"aktif", h:cocok }
     : { status:"di bawah batas", h:cocok };
 }
@@ -7188,7 +7257,7 @@ function spBarisSudahKhusus(f){
   return (f.baris || []).filter(function(b){
     if (b.jenis === "biaya" || !b.kode) return false;
     if (!(Number(b.qty) > 0) || !(Number(b.nett) > 0)) return false;
-    if (!(!b.list || Number(b.nett) < Number(b.list))) return false;
+    if (!(!b.list || bandingList(b.nett, b.list, modePpnDok(f)) < 0)) return false;   /* #30: DPP */
     var k = khususBaris(b);
     return !!k && (k.status === "aktif" || k.status === "menunggu");
   });
@@ -7675,7 +7744,13 @@ function pasangCariProduk(inp, pilih, usulkan){
        garis pemisah, jadi orang melihat "Gigi 4" sebelum memutuskan
        membuat yang baru. */
     var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q));
-    if (!r.length && !tawaran) { box.hidden = true; return; }
+    if (!r.length && !tawaran) {
+      var mati = q ? cariProdukNonaktif(q) : [];   /* #32: jelaskan, jangan diam */
+      if (!mati.length) { box.hidden = true; return; }
+      box.innerHTML = '<div class="cari-kosong">Produk yang cocok sudah <b>dinonaktifkan</b>: '
+        + mati.map(function(p){ return esc(p.kode); }).join(", ") + '. Hubungi owner bila masih dipakai.</div>';
+      box.hidden = false; return;
+    }
     var lebih = String(inp.value || "").trim() && cariProdukLokal.jumlah > r.length ? cariProdukLokal.jumlah - r.length : 0;   /* #31 */
     box.innerHTML = r.map(function(p){
         return '<div class="cari-opsi" data-id="'+p.id+'"><b>'+esc(p.nama || p.kode)+'</b>'
@@ -9150,7 +9225,7 @@ function pnwBarisHtml(f){
        tak punya kode). Harga boleh diturunkan; ditandai terhadap harga set. */
     if (b.set_id || b.setInline) {   /* #28: juga set inline */
       var totSet = (Number(b.qty)||0) * (Number(b.harga)||0);
-      var bawahSet = b.list != null && b.list !== "" && Number(b.harga) < Number(b.list);
+      var bawahSet = b.list != null && b.list !== "" && bandingList(b.harga, b.list, pnwModeForm()) < 0;   /* #42: include → DPP */
       return '<div class="baris-item" data-i="' + i + '">'
         + '<div class="bi-produk">'
         +   '<span class="pill p-lunas" style="float:right">set</span>'
@@ -9174,12 +9249,12 @@ function pnwBarisHtml(f){
     }
     var p = b.kode ? produkById(b.kode) : null;
     var total = (Number(b.qty)||0) * (Number(b.harga)||0);   /* #12 */
-    var bawah = b.list && Number(b.harga) < Number(b.list);
+    var bawah = b.list && bandingList(b.harga, b.list, pnwModeForm()) < 0;   /* #42: include → DPP vs price list */
     return '<div class="baris-item" data-i="' + i + '">'
       + '<div class="bi-produk"><label>Nama barang</label>'
       +   (p ? '<div class="bi-nama">' + esc(p.nama || p.kode) + '</div>'
              + '<span class="bi-ket">' + esc(p.kode) + ' · ' + esc(p.brand || "")
-             + (b.list ? ' · price list ' + rp(b.list) : ' · price list belum ada')
+             + (b.list ? ' · price list ' + rp(b.list) + (pnwModeForm() === "include" ? ' (tanpa PPN)' : '') : ' · price list belum ada')
              + ' · <button type="button" class="taut pnw-ganti" data-i="' + i + '">ganti barang</button></span>'   /* #43 */
            : '<input type="text" class="pnw-cari" data-i="' + i + '" value="' + esc(b.ketikan || b.deskripsi || "")
              + '" placeholder="ketik kode, merek, atau nama barang…" autocomplete="off">'
@@ -9221,7 +9296,11 @@ function pasangPenawaran(){
   $("pnw-tanggal").addEventListener("change", function(){ f.tanggal = this.value; });
   $("pnw-hari").addEventListener("input", function(){ f.berlaku_hari = this.value; });
   $("pnw-catatan").addEventListener("input", function(){ f.catatan = this.value; });
-  $("pnw-ppn").addEventListener("change", function(){ f.mode_ppn = this.value; ulang(); });   /* #42 */
+  $("pnw-ppn").addEventListener("change", function(){   /* #42 */
+    f.mode_ppn = this.value;
+    f.baris.forEach(function(b){ if (b.hargaAuto && b.list) b.harga = hargaDariList(b.list, f.mode_ppn); });   /* harga otomatis ikut mode */
+    ulang();
+  });
   if ($("pnw-rep")) $("pnw-rep").addEventListener("change", function(){   /* #11 */
     f.sales_rep_id = this.value ? Number(this.value) : null;
     /* #48: pelanggan bertuan hanya bisa atas nama pemegangnya (dijaga trigger) — semua peran.
@@ -9275,7 +9354,8 @@ function pasangPenawaran(){
   function setMasterKeBaris(s){
     var hargaSet = setHargaSet(s);
     return { kode:null, set_id:s.id, setRinci:setRincian(s), deskripsi:s.nama, qty:1,
-             harga:hargaSet, list:hargaSet, satuan:"set", spesifikasi:"Isi: " + setRincian(s), spekAuto:null, spekAsal:"" };
+             harga:hargaDariList(hargaSet, f.mode_ppn) || hargaSet, hargaAuto: !!hargaSet,   /* #42 */
+             list:hargaSet, satuan:"set", spesifikasi:"Isi: " + setRincian(s), spekAuto:null, spekAsal:"" };
   }
   if ($("pnw-set")) $("pnw-set").addEventListener("click", function(){   /* #1: set → 1 baris berharga set */
     function taruh(baru){
@@ -9308,10 +9388,13 @@ function pasangPenawaran(){
     inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].ketikan = inp.value; });
     pasangCariProduk(inp, function(p){
       var b = f.baris[Number(inp.dataset.i)], listLama = b.list;
+      /* #43: harga yang belum diubah orang (otomatis / kosong / = isian otomatis barang sebelumnya) ikut barang baru;
+         barang baru tanpa price list → harga DIKOSONGKAN (ditegur saat simpan), bukan membawa harga barang lama. */
+      var auto = b.hargaAuto || !(Number(b.harga) > 0)
+              || (listLama != null && Number(b.harga) === Number(hargaDariList(listLama, f.mode_ppn)));
       b.kode = p.id; b.deskripsi = p.nama || p.kode; b.ketikan = "";
       b.list = hargaListProduk(p.id);
-      /* #43: harga yang belum diubah (kosong / sama dengan price list barang sebelumnya) ikut barang baru. */
-      if (b.list && (!(Number(b.harga) > 0) || (listLama != null && Number(b.harga) === Number(listLama)))) b.harga = b.list;
+      if (auto) { b.harga = b.list ? hargaDariList(b.list, f.mode_ppn) : ""; b.hargaAuto = !!b.list; }   /* #42: include → × 1,11 */
       /* #40: spesifikasi awal — kecuali orangnya sudah mengetik sendiri. */
       if (!String(b.spesifikasi || "").trim() || b.spesifikasi === b.spekAuto) {
         var sa = spekAwalPenawaran(p.id, repPenawaranForm(f));
@@ -9324,7 +9407,7 @@ function pasangPenawaran(){
     inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].qty = n === null ? "" : n; ulang0(); });   /* #14 */
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-harga"), function(inp){
-    inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].harga = angkaId(inp.value); ulang0(); });   /* #14 */
+    inp.addEventListener("input", function(){ var b = f.baris[Number(inp.dataset.i)]; b.harga = angkaId(inp.value); b.hargaAuto = false; ulang0(); });   /* #14; diketik → bukan otomatis */
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-spek"), function(inp){   /* #3 */
     inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].spesifikasi = inp.value; });
@@ -9349,6 +9432,13 @@ function pasangPenawaran(){
       var b = f.baris[i]; if (!b) return;
       var t = el.querySelector(".bi-hasil b");
       if (t) t.textContent = rp((Number(b.qty) || 0) * (Number(b.harga) || 0));   /* #12 */
+      /* #42 (verifikator): tanda "di bawah list" ikut diperbarui saat mengetik (include → dari DPP). */
+      var isSet = !!(b.set_id || b.setInline), hasil = el.querySelector(".bi-hasil");
+      var bawah = b.list != null && b.list !== "" && Number(b.list) > 0 && bandingList(b.harga, b.list, pnwModeForm()) < 0;
+      var tanda = hasil && hasil.querySelector(".bi-tanda.bad");
+      if (bawah && !tanda && hasil) hasil.insertAdjacentHTML("beforeend", '<span class="bi-tanda bad">' + (isSet ? 'di bawah harga set' : 'di bawah list') + '</span>');
+      if (!bawah && tanda) tanda.parentNode.removeChild(tanda);
+      var hi = el.querySelector(".pnw-harga"); if (hi) hi.classList.toggle("bawah", !!bawah);
     });
     $("pnw-jumlah").innerHTML = pnwJumlahHtml(f);
   }
@@ -9427,26 +9517,36 @@ function docPenawaranHtml(d){
     + (d.catatan ? '<div class="dp-catatan"><b>Catatan</b><br>' + esc(d.catatan).replace(/\n/g, "<br>") + '</div>' : '')
     + '</div>';
 }
-function barisDokPenawaran(b){   /* baris form → baris dokumen */
+function barisDokPenawaran(b, mode){   /* baris form → baris dokumen; mode = mode PPN (#42: bawah list dari DPP) */
   var pr = b.kode ? produkById(b.kode) : null, isSet = !!(b.set_id || b.setInline);
   return { judul: isSet ? (b.deskripsi || "Set") : (pr ? pr.kode : (b.deskripsi || "—")),
            sub: isSet ? ("1 set = " + (b.setRinci || "—")) : (pr ? (pr.brand || "") : ""),
            spesifikasi: String(b.spesifikasi || "").trim(), qty: b.qty, satuan: b.satuan || (isSet ? "set" : "pcs"),
-           harga: b.harga, set: isSet, bawah: b.list != null && b.list !== "" && Number(b.harga) < Number(b.list) };
+           harga: b.harga, set: isSet, bawah: b.list != null && b.list !== "" && bandingList(b.harga, b.list, mode) < 0 };
 }
 
 /* #39: pratinjau dulu, baru simpan — tombol Simpan ada di laci pratinjau. */
 function pratinjauPenawaran(){
   var f = LANJUT.penawaran.form, cek = periksaPenawaran(f);
   if (cek.salah) { toast(cek.salah, true); return; }
+  if (!f.baru) { gambarPratinjauPenawaran(f, cek, f.kepada); return; }
+  /* #39 #47: nama pelanggan baru ditampilkan seperti yang AKAN tersimpan (dirapikan DB: PT di depan, dst.). */
+  var ketik = String(f.baru.nama).trim();
+  sibuk(true);
+  api("POST", "/rpc/rhj_nama_rapi", { p: ketik })
+    .then(function(r){ return (typeof r === "string" && r.trim()) ? r.trim() : ketik; }, function(){ return ketik; })
+    .then(function(nama){ sibuk(false); gambarPratinjauPenawaran(f, cek, nama); });
+}
+function gambarPratinjauPenawaran(f, cek, kepada){
   $("laci-form").innerHTML = '<div class="flag" style="margin-bottom:10px"><span class="f-ico">i</span><div>'
     + 'Periksa sekali lagi sebelum disimpan. Nomor penawaran diberikan database saat disimpan.'
-    + (f.baru ? ' <b>' + esc(String(f.baru.nama).trim()) + '</b> ikut disimpan sebagai pelanggan baru (HP ' + esc(hpTampil(hpNormal(f.baru.hp)))
+    + (f.baru ? ' <b>' + esc(kepada) + '</b> ikut disimpan sebagai pelanggan baru (HP ' + esc(hpTampil(hpNormal(f.baru.hp)))
         + ', sales PIC ' + esc(namaSalesPnw(f) || "—") + ').' : '')
     + '</div></div>'
-    + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: f.baru ? String(f.baru.nama).trim() : f.kepada,
+    + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: kepada,
         alamat: f.baru ? String(f.baru.lokasi).trim() : "", sales: namaSalesPnw(f), berlaku_hari: f.berlaku_hari,
-        mode_ppn: f.mode_ppn, catatan: String(f.catatan || "").trim(), baris: cek.isi.map(barisDokPenawaran) });
+        mode_ppn: f.mode_ppn, catatan: String(f.catatan || "").trim(),
+        baris: cek.isi.map(function(b){ return barisDokPenawaran(b, f.mode_ppn); }) });
   $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-pnw-simpan-akhir" type="button">Simpan penawaran</button> '
     + '<button class="btn" id="btn-pnw-kembali" type="button">Kembali ubah</button>';
   bukaLaci("Pratinjau penawaran");
@@ -9609,7 +9709,7 @@ function formDetailPenawaran(q){
       return { judul: pr ? pr.kode : (l.deskripsi || "—"),
                sub: pr ? [pr.brand, (l.deskripsi && l.deskripsi !== pr.kode) ? l.deskripsi : ""].filter(Boolean).join(" · ") : "",
                spesifikasi: l.spesifikasi, qty: l.qty, satuan: l.satuan, harga: l.harga, set: isSet,
-               bawah: l.harga_list != null && Number(l.harga) < Number(l.harga_list) };
+               bawah: l.harga_list != null && bandingList(l.harga, l.harga_list, q.mode_ppn) < 0 };   /* #42: DPP */
     }) });
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = (bolehBuatPenawaran()
@@ -10439,6 +10539,33 @@ function segarkanVonnyCek(){
 function simpanIndustri(cid, kat){
   return api("POST", "/rpc/set_industri_pelanggan", { p_customer: cid, p_industri: kat });
 }
+/* #37 (verifikator): kalimat hasil lengkapi_pelanggan_sp untuk Vonny — ke pelanggan mana SP ditautkan, dan
+   apakah kategori pilihannya dipakai (kategori yang sudah terisi di data pelanggan tidak ditimpa). */
+function ketHasilLengkapi(r, kat){
+  if (!r || typeof r !== "object") return "";
+  var t = r.dicocokkan === "baru" ? " Pelanggan baru " + (r.nama || "") + " dibuat di data pelanggan."
+        : r.dicocokkan === "hp"   ? " Ditautkan ke pelanggan " + (r.nama || "") + " (No. HP sama)."
+        : r.dicocokkan === "nama" ? " Ditautkan ke pelanggan " + (r.nama || "") + "."
+        : "";
+  if (r.kategori_dipakai === false)
+    t += " Kategori tetap " + (r.industri || "—") + " (sudah terisi di data pelanggan; pilihan " + (kat || "—")
+      + " tidak dipakai — ubah di tab Pelanggan bila perlu).";
+  return t;
+}
+/* #37 (verifikator): SP tanpa pelanggan yang sudah lewat Double Check — ditautkan dari detail SP (owner/GM/Vonny). */
+function kotakLengkapiPelangganSp(row){
+  return '<div class="kotak" style="margin-top:10px"><div class="kotak-isi">'
+    + '<b>SP ini belum tertaut ke data pelanggan</b> — belum punya kategori. Nama dicocokkan ke data pelanggan '
+    + '(atau No. HP); bila tidak ada, pelanggan baru dibuat (sales PIC = sales SP).'
+    + '<div class="baris2" style="margin-top:8px">'
+    +   field({ nama:"dd_kat", label:"Kategori customer", jenis:"select", wajib:true,
+                pilihan:[{v:"",l:"— pilih —"},{v:"Otomotif",l:"Otomotif"},{v:"Non Otomotif",l:"Non Otomotif"},{v:"Bengkel Otomotif",l:"Bengkel Otomotif"}] })
+    +   field({ nama:"dd_hp", label:"No. HP", nilai: row.telp || "" })
+    + '</div>'
+    + field({ nama:"dd_alamat", label:"Alamat", jenis:"textarea", nilai: row.alamat || "" })
+    + '<button class="btn" id="btn-dd-pelanggan" type="button">Tautkan & isi kategori</button>'
+    + '</div></div>';
+}
 function bantuIndustriLama(s){
   var t = s && s.customers && s.customers.industri_lama;
   return t ? "Catatan sheet lama: <b>" + esc(t) + "</b>" : "";
@@ -10515,7 +10642,7 @@ function formCekVonny(s){
   $("btn-vc-tutup").addEventListener("click", tutupLaci);
   if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
   $("btn-vc-ok").addEventListener("click", function(){
-    var kat = perluKat ? nilaiForm("vk_kat") : null;
+    var kat = perluKat ? nilaiForm("vk_kat") : null, hasilLengkapi = null;
     if (perluKat && !kat) { tampilPesan("Isi kategori customer dulu sebelum SP diloloskan."); return; }
     sibuk(true);
     Promise.resolve()
@@ -10526,8 +10653,9 @@ function formCekVonny(s){
           p_hp: tanpaPelanggan ? (hpNormal(nilaiForm("vk_hp")) || nilaiForm("vk_hp")) : null,
           p_alamat: tanpaPelanggan ? nilaiForm("vk_alamat") : null });
       })
-      .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
-      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — keluar dari Double Check dan masuk ke Pengiriman."); segarkanVonnyCek(); })
+      .then(function(r){ hasilLengkapi = r; return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
+      .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — keluar dari Double Check dan masuk ke Pengiriman."
+          + ketHasilLengkapi(hasilLengkapi, kat)); segarkanVonnyCek(); })   /* #37: hasil pencocokan pelanggan */
       .catch(function(e){ tampilPesan(esc(e.message)); })
       .then(function(){ sibuk(false); });
   });
@@ -10795,8 +10923,12 @@ function formKirim(s){
       if (perluKat && !kat) { tampilPesan("Isi kategori customer dulu sebelum SP diloloskan."); return; }
       sibuk(true);
       Promise.resolve()
-        .then(function(){ return (perluKat && kat && s.customer_id)
-          ? simpanIndustri(s.customer_id, kat) : null; })   /* #25 */
+        .then(function(){   /* #25; #37 (verifikator): SP tanpa pelanggan → ditautkan/dibuat, bukan dibuang diam-diam */
+          if (!(perluKat && kat)) return null;
+          return s.customer_id ? simpanIndustri(s.customer_id, kat)
+            : api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: s.id, p_industri: kat })
+                .then(function(r){ if (r) toast(ketHasilLengkapi(r, kat).trim()); });
+        })
         .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
         .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " dinyatakan layak diproses.");
           LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8 */
@@ -19111,6 +19243,7 @@ window.__alur = {
   hitungSp: function(f){ return spHitungLokal(f); },
   panelSp: function(){ panelSp(); },
   spBarisDariPo: function(l){ return spBarisDariPo(l); },   /* #34 */
+  khususBaris: function(b, hk, form){ SP_KHUSUS.baris = hk; ALUR.spForm = form; return khususBaris(b); },   /* #30 (verifikator) */
   cekDiskonPo: function(b, no){ return cekDiskonPo(b, no); },
   panelBelum: function(id){ panelBelum(id); },
   panelLanjut: function(id){ if (PANEL_LANJUT[id]) PANEL_LANJUT[id](); },

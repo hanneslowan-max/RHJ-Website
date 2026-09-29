@@ -115,6 +115,8 @@ CREATE TABLE public.products (
 -- tipe_roda(kode) [berkas 94]: kunci tipe roda dari kode — produk yang hanya beda fungsi (H/M/R/S,
 --   OSJ/OSK/OSJB, OSNJ/OSNJB/OSNBK, SPJ/SPK/SPJB, HSUCJ/HSUCJB/HSUCK, JCB/KCB/JBCB, TSH/TFH/TSHJB,
 --   Hammer 320S/320SR, 500BPS/500BPR) mendapat kunci sama; dibandingkan tanpa spasi.
+-- Berkas 115: hapus_produk juga menghitung komponen set inline/snapshot (po_lines & quote_lines.set_komponen) dan
+--   usul_ubah 'menunggu' (jsonb_path '$.** ? (@.product_id == id)') sebagai "sudah dipakai".
 -- Berkas 110: hapus_produk(p_id) [DEFINER, owner] -> teks — hapus permanen bila belum dipakai (po_lines,
 --   sales_order_lines, quote_lines, leads, product_set_components, import_lines, harga_khusus); price_list,
 --   product_costs, edit_massal_nilai, spesifikasi_sales ikut (cascade); factory_codes.product_id dilepas (NULL).
@@ -578,6 +580,22 @@ CREATE TABLE public.purchase_orders (
 --   = mode PO (include & non bisa sama grand-nya). putuskan_ubah menerapkan kepala.mode_ppn (PO & SP).
 -- Constraint trigger po_pelanggan_sp (AFTER UPDATE OF customer_id, DEFERRABLE INITIALLY DEFERRED)
 --   [berkas 89] -> jaga_pelanggan_sp_po(): SP (tidak batal) yang menunjuk PO ini harus berpelanggan sama.
+-- BERKAS 115 (perbaikan verifikator):
+--   Trigger po_b_wajib_pelanggan (BEFORE INSERT OR UPDATE OF customer_id) -> jaga_pelanggan_po(): PO baru wajib
+--     customer_id (PO lama tanpa pelanggan tidak disentuh; update ke NULL ditolak).
+--   Trigger po_c_lampiran (BEFORE INSERT OR UPDATE OF lampiran) -> jaga_lampiran_po() [DEFINER]: jalur po/, objek ada,
+--     owner objek = auth.uid() kecuali setara_owner, belum menjadi lampiran PO lain.
+--   Policy storage lama dokumen_baca/_tulis/_ubah (peran impor) kini mengecualikan awalan po/, ehc/, komisi/ —
+--     awalan itu hanya diatur policy rhj_po_lampiran_*, rhj_ehc_bukti_*, rhj_komisi_bukti_*.
+--   hp_baku(text) -> HP baku 62… (tanpa validasi). buat_pelanggan_baru: bentrok HP dengan pelanggan milik sales lain
+--     -> pesan umum untuk peran sales. lengkapi_pelanggan_sp: cocok nama lalu HP; pelanggan dipegang sales lain -> 42501;
+--     kembalian + dicocokkan ('nama'|'hp'|'baru'|'sudah'), kategori_dipakai.
+--   catat_spesifikasi_sales: baris terakhir per produk; teks = products.spesifikasi (btrim) tidak dicatat & catatan
+--     lama dihapus. sinkron_mode_ppn: UPDATE mode SP yang old.no_invoice terisi -> 23514.
+--   laporan_penjualan potongan produk/kategori: nilai_barang_dpp/nilai_ehc_dpp. harga_khusus_lengkap.dipakai_baris:
+--     dpp_ppn(l.harga_nett, o.mode_ppn, l.jenis) >= h.harga_nett. gm_konteks_keputusan ('ubah' PO): u_eff + penyesuaian/qty.
+--   CHECK po_lines_pecahan_terbagi: qty pecahan (bukan set) berdiskon/berpenyesuaian -> nilai ÷ qty = trunc(…, 2);
+--     periksa_baris_po_usul memeriksa hal yang sama.
 -- Berkas 112: purchase_orders.lampiran = jalur storage 'dokumen' berawalan po/ (#36). Policy storage.objects:
 --   rhj_po_lampiran_tulis (insert: boleh_input_po), rhj_po_lampiran_baca (select: ada PO yang menunjuknya & terlihat
 --   oleh pembaca lewat RLS po_baca), rhj_po_lampiran_hapus (delete: pengunggah, belum dirujuk PO).
