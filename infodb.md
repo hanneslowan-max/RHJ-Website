@@ -107,6 +107,7 @@ CREATE TABLE public.products (
   usulan boolean NOT NULL DEFAULT false,
   usulan_teks text,
   kategori text NOT NULL CHECK (kategori = ANY (ARRAY['Roda'::text, 'Pallet Mesh'::text, 'Hospital'::text, 'Filing Cabinet'::text, 'Trolley'::text, 'Hand Pallet'::text, 'Lainnya'::text])),
+  spesifikasi text,                                           -- #40 (berkas 109): spesifikasi baku → isian awal penawaran
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_dibuat_oleh_fkey FOREIGN KEY (dibuat_oleh) REFERENCES auth.users(id),
   CONSTRAINT products_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)
@@ -114,6 +115,14 @@ CREATE TABLE public.products (
 -- tipe_roda(kode) [berkas 94]: kunci tipe roda dari kode — produk yang hanya beda fungsi (H/M/R/S,
 --   OSJ/OSK/OSJB, OSNJ/OSNJB/OSNBK, SPJ/SPK/SPJB, HSUCJ/HSUCJB/HSUCK, JCB/KCB/JBCB, TSH/TFH/TSHJB,
 --   Hammer 320S/320SR, 500BPS/500BPR) mendapat kunci sama; dibandingkan tanpa spasi.
+-- Berkas 115: hapus_produk juga menghitung komponen set inline/snapshot (po_lines & quote_lines.set_komponen) dan
+--   usul_ubah 'menunggu' (jsonb_path '$.** ? (@.product_id == id)') sebagai "sudah dipakai".
+-- Berkas 110: hapus_produk(p_id) [DEFINER, owner] -> teks — hapus permanen bila belum dipakai (po_lines,
+--   sales_order_lines, quote_lines, leads, product_set_components, import_lines, harga_khusus); price_list,
+--   product_costs, edit_massal_nilai, spesifikasi_sales ikut (cascade); factory_codes.product_id dilepas (NULL).
+--   Sudah dipakai -> aktif = false.
+--   View so_ringkas (+ n_bawah_list, n_tanpa_list di ujung — alasan pct NULL); antrean_gm 'harga' keterangan
+--   'Belum ada price list (produk baru/usulan) …' / 'Harga di bawah price list' (+ campuran).
 CREATE TABLE public.product_sets (   -- #1 set roda (berkas 74; dipakai PO sejak 85; aturan & snapshot 94)
   id bigint NOT NULL DEFAULT nextval('product_sets_id_seq'::regclass),
   kode text UNIQUE,
@@ -445,6 +454,8 @@ CREATE TABLE public.quotes (
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
   dibuat_oleh uuid,
   sales_rep_id bigint,
+  mode_ppn text NOT NULL DEFAULT 'exclude'::text,             -- #42 (berkas 109): exclude | include | non
+  CONSTRAINT quotes_mode_ppn_cek CHECK (mode_ppn = ANY (ARRAY['exclude'::text, 'include'::text, 'non'::text])),
   CONSTRAINT quotes_pkey PRIMARY KEY (id),
   CONSTRAINT quotes_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id) ON DELETE SET NULL,
   CONSTRAINT quotes_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
@@ -492,6 +503,28 @@ CREATE TABLE public.quote_lines (
 --   quote_lines_set_inline (jaga_set_baris_quote) menormalkan + periksa_komposisi_set, satuan := 'set',
 --   deskripsi kosong/'—' := label_set_inline. simpan_penawaran menerima set_komponen per baris.
 -- RLS: ql_baca = boleh_lihat_quote(quote_id); ql_tulis = boleh_tulis_quote(quote_id).
+-- Berkas 109 (penawaran #40 #41 #42 #47 #48):
+--   simpan_penawaran(p_kepala, p_baris) [INVOKER] — p_kepala.pelanggan_baru {nama,hp,lokasi} → pelanggan dibuat
+--     di transaksi yang sama; kepada := customers.nama (rapi); p_kepala.mode_ppn; memanggil catat_spesifikasi_sales.
+--     Kembali {id, nomor, customer_id, kepada}.
+--   buat_pelanggan_baru(p_nama, p_hp, p_lokasi, p_sales_rep) [DEFINER] -> customers.id — wajib nama, alamat, HP
+--     (dibakukan 62…), sales PIC (sales = dirinya; lainnya wajib pilih sales aktif). Tolak dobel nama
+--     (kunci_nama_pelanggan: kata alfanumerik tanpa PT/CV/UD/…, juga nama_lama) atau dobel HP. Dipakai #41 & #29.
+--   catat_spesifikasi_sales(p_quote) [DEFINER] — upsert spesifikasi per (produk, sales penawaran); kosong → dihapus.
+--   quotes_jaga_sales (trigger): pelanggan bertuan HANYA atas nama pemegangnya — semua peran (dulu owner/GM/staff bebas).
+CREATE TABLE public.spesifikasi_sales (   -- #40 (berkas 109): spesifikasi terakhir tiap sales per produk; RLS baca (sales: miliknya), tulis hanya lewat catat_spesifikasi_sales()
+  product_id bigint NOT NULL,
+  sales_rep_id bigint NOT NULL,
+  spesifikasi text NOT NULL CHECK (btrim(spesifikasi) <> ''::text),
+  quote_id bigint,
+  diubah_pada timestamp with time zone NOT NULL DEFAULT now(),
+  diubah_oleh uuid,
+  CONSTRAINT spesifikasi_sales_pkey PRIMARY KEY (product_id, sales_rep_id),
+  CONSTRAINT spesifikasi_sales_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE,
+  CONSTRAINT spesifikasi_sales_sales_rep_id_fkey FOREIGN KEY (sales_rep_id) REFERENCES public.sales_reps(id) ON DELETE CASCADE,
+  CONSTRAINT spesifikasi_sales_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.quotes(id) ON DELETE SET NULL,
+  CONSTRAINT spesifikasi_sales_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id)
+);
 CREATE TABLE public.quote_counter (
   tahun integer NOT NULL,
   bulan integer NOT NULL,
@@ -510,7 +543,8 @@ CREATE TABLE public.purchase_orders (
   nama_customer text NOT NULL,
   alamat text,
   sales_rep_id bigint,
-  ppn_kena boolean NOT NULL DEFAULT true,
+  ppn_kena boolean NOT NULL DEFAULT true,                     -- selalu = (mode_ppn <> 'non') (trigger, berkas 114)
+  mode_ppn text NOT NULL,                                     -- #30 (berkas 114): exclude | include | non
   lampiran text,
   catatan text,
   dibuat_pada timestamp with time zone NOT NULL DEFAULT now(),
@@ -528,8 +562,47 @@ CREATE TABLE public.purchase_orders (
   CONSTRAINT purchase_orders_diubah_oleh_fkey FOREIGN KEY (diubah_oleh) REFERENCES auth.users(id),
   CONSTRAINT purchase_orders_dibatalkan_oleh_fkey FOREIGN KEY (dibatalkan_oleh) REFERENCES auth.users(id)
 );
+-- #30 #42 MODE PPN [berkas 114] (purchase_orders & sales_orders.mode_ppn, CHECK *_mode_ppn_cek: nilai sah &
+--   ppn_kena = mode <> 'non'):
+--   · exclude: grand = Σ nilai baris + 11% × Σ barang (rumus lama).  · non: grand = Σ nilai baris.
+--   · include: harga yang diketik SUDAH termasuk PPN → grand = Σ nilai baris PERSIS; dasar_ppn (DPP) = Σ barang ÷ 1,11;
+--     ppn = Σ barang − DPP; sub_total = grand − ppn. Baris biaya tidak pernah kena PPN (semua mode).
+--   Trigger po_a_mode_ppn / so_a_mode_ppn (BEFORE INSERT OR UPDATE) -> sinkron_mode_ppn() [DEFINER]: mode kosong
+--   saat insert (klien lama) diturunkan dari ppn_kena; update ppn_kena saja -> exclude/non; lalu ppn_kena := mode<>'non'.
+--   SP yang menunjuk PO memakai mode PO (saat insert, saat po_id berganti, saat mode/ppn_kena SP disentuh).
+--   Trigger po_mode_ppn_sp (AFTER UPDATE OF mode_ppn, ppn_kena, WHEN mode berubah) -> mode_ppn_po_ke_sp() [DEFINER]:
+--   SP (tidak batal) PO itu ikut; bila ada yang sudah ber-invoice -> ditolak (23514).
+--   dpp_ppn(nilai, mode, jenis) = nilai ÷ 1,11 untuk barang mode include, selain itu nilai. label_mode_ppn(mode).
+--   Include: komisi, tier price list (komisi_tier/_cash), harga khusus, margin (laporan_margin_sp/_produk,
+--   gm_konteks_keputusan), total_barang/total_ehc so_ringkas memakai DPP (so_baris_hitung.nett_dpp,
+--   nilai_barang_dpp, nilai_ehc_dpp, nilai_baris_dpp, mode_ppn — kolom di ujung). harga_khusus.harga_nett = DPP.
+--   View + mode_ppn di ujung: po_ringkas, so_ringkas, po_belum_sp. periksa_total_sp & tautkan_po_sp: mode SP harus
+--   = mode PO (include & non bisa sama grand-nya). putuskan_ubah menerapkan kepala.mode_ppn (PO & SP).
 -- Constraint trigger po_pelanggan_sp (AFTER UPDATE OF customer_id, DEFERRABLE INITIALLY DEFERRED)
 --   [berkas 89] -> jaga_pelanggan_sp_po(): SP (tidak batal) yang menunjuk PO ini harus berpelanggan sama.
+-- BERKAS 115 (perbaikan verifikator):
+--   Trigger po_b_wajib_pelanggan (BEFORE INSERT OR UPDATE OF customer_id) -> jaga_pelanggan_po(): PO baru wajib
+--     customer_id (PO lama tanpa pelanggan tidak disentuh; update ke NULL ditolak).
+--   Trigger po_c_lampiran (BEFORE INSERT OR UPDATE OF lampiran) -> jaga_lampiran_po() [DEFINER]: jalur po/, objek ada,
+--     owner objek = auth.uid() kecuali setara_owner, belum menjadi lampiran PO lain.
+--   Policy storage lama dokumen_baca/_tulis/_ubah (peran impor) kini mengecualikan awalan po/, ehc/, komisi/ —
+--     awalan itu hanya diatur policy rhj_po_lampiran_*, rhj_ehc_bukti_*, rhj_komisi_bukti_*.
+--   hp_baku(text) -> HP baku 62… (tanpa validasi). buat_pelanggan_baru: bentrok HP dengan pelanggan milik sales lain
+--     -> pesan umum untuk peran sales. lengkapi_pelanggan_sp: cocok nama lalu HP; pelanggan dipegang sales lain -> 42501;
+--     kembalian + dicocokkan ('nama'|'hp'|'baru'|'sudah'), kategori_dipakai.
+--   catat_spesifikasi_sales: baris terakhir per produk; teks = products.spesifikasi (btrim) tidak dicatat & catatan
+--     lama dihapus. sinkron_mode_ppn: UPDATE mode SP yang old.no_invoice terisi -> 23514.
+--   laporan_penjualan potongan produk/kategori: nilai_barang_dpp/nilai_ehc_dpp. harga_khusus_lengkap.dipakai_baris:
+--     dpp_ppn(l.harga_nett, o.mode_ppn, l.jenis) >= h.harga_nett. gm_konteks_keputusan ('ubah' PO): u_eff + penyesuaian/qty.
+--   CHECK po_lines_pecahan_terbagi: qty pecahan (bukan set) berdiskon/berpenyesuaian -> nilai ÷ qty = trunc(…, 2);
+--     periksa_baris_po_usul memeriksa hal yang sama.
+-- Berkas 112: purchase_orders.lampiran = jalur storage 'dokumen' berawalan po/ (#36). Policy storage.objects:
+--   rhj_po_lampiran_tulis (insert: boleh_input_po), rhj_po_lampiran_baca (select: ada PO yang menunjuknya & terlihat
+--   oleh pembaca lewat RLS po_baca), rhj_po_lampiran_hapus (delete: pengunggah, belum dirujuk PO).
+--   lampirkan_po(p_po, p_path) [DEFINER] — tempel lampiran ke PO; bila sudah ada, hanya owner/GM yang boleh mengganti.
+--   lengkapi_pelanggan_sp(p_so, p_industri, p_hp, p_alamat) [DEFINER, owner/GM/Vonny] (#37) -> {customer_id, dibuat,
+--   industri, nama} — SP tanpa customer_id: cocokkan kepada ke master (kunci_nama_pelanggan) atau buat_pelanggan_baru;
+--   isi industri (yang sudah terisi tidak ditimpa), tautkan SP & PO-nya (bila PO belum bertuan).
 CREATE TABLE public.po_lines (
   id bigint NOT NULL DEFAULT nextval('po_lines_id_seq'::regclass),
   po_id bigint NOT NULL,
@@ -544,6 +617,7 @@ CREATE TABLE public.po_lines (
   diskon_tipe text NOT NULL DEFAULT 'rp'::text CHECK (diskon_tipe = ANY (ARRAY['rp'::text, 'persen'::text])),
   set_id bigint,                                              -- #1 (berkas 85): baris SET
   set_komponen jsonb,                                         -- #1 (berkas 94): snapshot komponen set
+  penyesuaian numeric(14,2) NOT NULL DEFAULT 0,               -- #34 (berkas 113): penyesuaian pembulatan total baris (±)
   CONSTRAINT po_lines_pkey PRIMARY KEY (id),
   CONSTRAINT po_lines_po_id_fkey FOREIGN KEY (po_id) REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
   CONSTRAINT po_lines_product_id_fkey FOREIGN KEY (product_id) REFERENCES public.products(id),
@@ -558,9 +632,17 @@ CREATE TABLE public.po_lines (
     OR (product_id IS NULL AND jenis = 'barang')),
   CONSTRAINT po_lines_set_komponen_larik CHECK (set_komponen IS NULL OR jsonb_typeof(set_komponen) = 'array'),
   -- berkas 107 (#12): baris berdiskon → qty*harga habis dalam sen (harga_nett SP 2 desimal harus bisa menyamai PO)
-  CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2))
+  CONSTRAINT po_lines_diskon_bruto_sen CHECK (COALESCE(diskon, 0) = 0 OR qty * harga = trunc(qty * harga, 2)),
+  -- berkas 113 (#34):
+  CONSTRAINT po_lines_penyesuaian_batas CHECK (abs(penyesuaian) <= 1000),
+  CONSTRAINT po_lines_penyesuaian_bruto_sen CHECK (penyesuaian = 0 OR qty * harga = trunc(qty * harga, 2)),
+  CONSTRAINT po_lines_nilai_tak_negatif CHECK (qty * harga − potongan + penyesuaian >= 0)
 );
--- Nilai baris = qty*harga − potongan (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus po_ringkas.
+-- Nilai baris = qty*harga − potongan + penyesuaian (potongan = diskon Rp, atau qty*harga*diskon/100) — rumus
+--   po_ringkas (berkas 113, security_invoker tetap). Penyesuaian = total baris yang diketik penginput (PO customer
+--   dibulatkan) − (qty*harga − potongan); FE poNilaiBaris1e4. SP dari PO: baris berpenyesuaian dipecah seperti
+--   baris berdiskon (spBarisDariPo/pecahNettSen) → SP = PO sampai sen. periksa_baris_po_usul memeriksa
+--   penyesuaian (±1.000, 2 desimal, bruto habis sen); putuskan_ubah menulis ulang kolom ini dari usulan.
 -- Baris SET (#1): jenis 'barang', product_id NULL, set_id terisi, harga = harga per set, qty = jumlah set
 --   (bulat), deskripsi = nama set. set_komponen = [{product_id,qty,harga_nett,urut}] diisi trigger
 --   po_lines_set_snapshot (BEFORE INSERT/UPDATE -> jaga_set_baris_po, berkas 94): diambil dari definisi
@@ -599,7 +681,8 @@ CREATE TABLE public.sales_orders (
   up text,
   telp text,
   no_seri text,
-  ppn_kena boolean NOT NULL DEFAULT true,
+  ppn_kena boolean NOT NULL DEFAULT true,                     -- selalu = (mode_ppn <> 'non') (trigger, berkas 114)
+  mode_ppn text NOT NULL,                                     -- #30 (berkas 114): = mode PO bila po_id terisi
   catatan text,
   kirim_syarat text,
   bayar_syarat text,
@@ -663,7 +746,7 @@ CREATE TABLE public.sales_orders (
 --   menolak peran lain, kecuali pengguguran sistem (flag rhj.vonny_gugur, hanya mengosongkan) [berkas 86, 88].
 -- Trigger so_status_dok (AFTER INSERT / UPDATE OF no_surat_jalan, no_invoice, no_faktur, lunas, batal,
 --   harga_ok, vonny_ok, cash_ok, customer_id, sales_rep_id) -> so_sesudah_ubah() hitung ulang status [berkas 86].
--- Trigger so_vonny_gugur (AFTER UPDATE, WHEN customer_id/kepada/alamat/up/telp/ppn_kena/catatan berubah,
+-- Trigger so_vonny_gugur (AFTER UPDATE, WHEN customer_id/kepada/alamat/up/telp/ppn_kena/mode_ppn (114)/catatan berubah,
 --   PO dilepas/diganti, atau po_menyusul/alasannya berganti pada SP tanpa PO) oleh selain owner/gm/vonny
 --   -> gugurkan_cek_vonny(): vonny_ok/oleh/pada -> null selama barang belum keluar [berkas 88].
 -- RPC tandai_sp_tanpa_po: selain owner/gm hanya PEMBUAT SP, sebelum cek Vonny & sebelum barang keluar [berkas 88].
@@ -1112,6 +1195,8 @@ CREATE TABLE public.view_sebelum_57 (
   dicatat_pada timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT view_sebelum_57_pkey PRIMARY KEY (nama)
 );
+-- Berkas 111 (#49): pelanggan_sales_lain(p_cari, p_dari, p_jumlah) [DEFINER] -> (nama, cabang, industri, sales_nama, total)
+--   hanya untuk peran sales: pelanggan yang dipegang sales LAIN; tanpa id/HP/alamat/PIC. RLS customers tidak berubah.
 CREATE TABLE public.customers_nama_sebelum_100 (   -- [berkas 100, #20] cadangan nama sebelum dirapikan (RLS, tanpa akses klien)
   id bigint NOT NULL,
   nama text NOT NULL,
