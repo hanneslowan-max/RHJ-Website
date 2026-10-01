@@ -7,6 +7,8 @@
 # (files stay on disk so Claude Code still reads them; git just ignores them)
 .claude/*
 !.claude/settings.json
+!.claude/agents/
+!.claude/skills/
 .claude-flow/
 .agents/
 .swarm/
