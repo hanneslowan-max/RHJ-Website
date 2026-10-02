@@ -3894,6 +3894,24 @@ function labelRep(r){
     + (r.aktif === false ? " — nonaktif" : "");
 }
 function peranSales(){ return saya && saya.peran === "sales"; }
+/* Kotak "Sales" di form PO & SP. Peran sales hanya boleh membuat dokumen atas nama
+   dirinya (dijaga trigger jaga_pemilik_dokumen) — jadi pilihannya dikunci ke dirinya,
+   bukan dibiarkan memilih sales lain lalu ditolak saat simpan. */
+function kotakSalesDok(id, f){
+  if (peranSales()) {
+    var rs = repSayaAlur();
+    if (rs) f.sales_rep_id = rs.id;
+    return medanAlur("Sales", '<select id="' + id + '" disabled>'
+      + (rs ? '<option value="' + rs.id + '" selected>' + esc(labelRep(rs)) + '</option>'
+            : '<option value="">— akun belum ditautkan ke nama sales —</option>')
+      + '</select>');
+  }
+  return medanAlur("Sales", '<select id="' + id + '"><option value="">— pilih sales —</option>'
+    + repPilihan(ALUR.rep, f.sales_rep_id).map(function(r){
+        return '<option value="' + r.id + '"' + (String(r.id) === String(f.sales_rep_id) ? " selected" : "") + '>'
+             + esc(labelRep(r)) + '</option>'; }).join("")
+    + '</select>');
+}
 function repSayaAlur(){
   if (!saya || !saya.id) return null;
   function cari(d){
@@ -4824,11 +4842,7 @@ function panelPo(){
             '<textarea id="po-alamat" rows="2">'+esc(f.alamat)+'</textarea>')
       + '</div>'
       + '<div class="baris2" style="margin-top:12px">'
-      +   medanAlur("Sales", '<select id="po-rep"><option value="">— pilih sales —</option>'
-            + repPilihan(ALUR.rep, f.sales_rep_id).map(function(r){
-                return '<option value="'+r.id+'"'+(String(r.id)===String(f.sales_rep_id)?" selected":"")+'>'
-                     + esc(labelRep(r)) + '</option>'; }).join("")
-            + '</select>')
+      +   kotakSalesDok("po-rep", f)   /* sales: terkunci ke dirinya */
       +   medanAlur("PPN", '<select id="po-ppn">' + opsiModePpn(modePpnDok(f)) + '</select>')   /* #30 */
       + '</div>'
       + kotakSalesPelanggan()
@@ -6569,12 +6583,7 @@ function panelSp(){
            komisinya tidak punya penerima. Dua-duanya baru ketahuan
            belakangan, dan dua-duanya bisa dicegah dengan satu kotak. */
         + '<div style="margin-top:12px">'
-        +   medanAlur("Sales", '<select id="sp-rep"><option value="">— pilih sales —</option>'
-              + repPilihan(ALUR.rep, f.sales_rep_id).map(function(r){
-                  return '<option value="'+r.id+'"'
-                       + (String(r.id)===String(f.sales_rep_id)?" selected":"") + '>'
-                       + esc(labelRep(r)) + '</option>'; }).join("")
-              + '</select>')
+        +   kotakSalesDok("sp-rep", f)   /* sales: terkunci ke dirinya */
         + '</div>'
         + kotakSalesPelanggan()
         /* Kalau kotak merah di atas sudah menyebut pelanggannya, kalimat
