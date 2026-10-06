@@ -172,8 +172,10 @@
   /* Baris tanpa "Total baris" di kanan (editor Set) — tak perlu kolom 150px. */
   .baris-item.bi-tanpahasil{grid-template-columns:1fr}
   /* Baris lebar penuh (Keterangan PO, Spesifikasi penawaran): samakan input-nya. */
-  .bi-ketpo input,.bi-spek input{width:100%;padding:7px 9px;border:1px solid var(--garis-kuat,#c9d2d6);
+  .bi-ketpo input,.bi-spek input,.bi-spek textarea{width:100%;padding:7px 9px;border:1px solid var(--garis-kuat,#c9d2d6);
     border-radius:8px;font:inherit;font-size:13px;background:var(--kartu2,#f7fafa)}
+  .bi-spek textarea{resize:vertical;min-height:38px;line-height:1.4;display:block}   /* #56 */
+  .dok-pnw .dp-spek{font-size:12px;white-space:pre-line;overflow-wrap:anywhere;min-width:120px}   /* #56 */
   .diskon-grup{display:flex;gap:6px;align-items:stretch}
   .diskon-grup select{flex:0 0 50px;padding:7px 4px;border:1px solid var(--garis-kuat,#c9d2d6);
     border-radius:8px;font:inherit;font-size:12px;background:var(--kartu2,#f7fafa);color:inherit;text-align:center}
@@ -7750,7 +7752,7 @@ function pasangCariPelanggan(idInput, idHasil, pilih, opsi){
   });
   inp.addEventListener("blur", function(){ setTimeout(function(){ box.hidden = true; }, 150); });
 }
-function pasangCariProduk(inp, pilih, usulkan){
+function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): keterangan tawaran item baru */
   var box = inp.parentNode.querySelector(".cari-hasil");
   function gambarBox(){
     var q = String(inp.value || "").trim();
@@ -7789,7 +7791,7 @@ function pasangCariProduk(inp, pilih, usulkan){
       + (tawaran
           ? '<div class="cari-opsi cari-usul" data-usul="1">'
             + '<b>+ Pakai "'+esc(q)+'" sebagai item baru</b>'
-            + '<span>belum ada di master — masuk antrean usulan, komisinya menunggu disahkan</span>'
+            + '<span>' + esc(ketUsul || "belum ada di master — masuk antrean usulan, komisinya menunggu disahkan") + '</span>'
             + '</div>'
           : '');
     box.hidden = false;
@@ -9287,7 +9289,7 @@ function pnwBarisHtml(f){
         +   ' · <button type="button" class="taut pnw-ganti-set" data-i="' + i + '">ganti set</button></span>'   /* #43 */
         + '</div>'
         + '<div class="bi-spek" style="grid-column:1/-1">' + labelSpek
-        +   '<input type="text" class="pnw-spek" data-i="' + i + '" value="' + esc(b.spesifikasi || "") + '" placeholder="opsional — mis. dimensi / bahan / beban"></div>'   /* #3 */
+        +   '<textarea class="pnw-spek" rows="2" data-i="' + i + '" placeholder="opsional — mis. dimensi / bahan / beban">' + esc(b.spesifikasi || "") + '</textarea></div>'   /* #3; #56: multi-baris */
         + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(totSet) + '</b>'
         +   (bawahSet ? '<span class="bi-tanda bad">di bawah harga set</span>' : '') + '</div>'
         + '<div class="bi-angka bi-mini">'
@@ -9303,15 +9305,19 @@ function pnwBarisHtml(f){
     return '<div class="baris-item" data-i="' + i + '">'
       + '<div class="bi-produk"><label>Nama barang</label>'
       +   (p ? '<div class="bi-nama">' + esc(p.nama || p.kode) + '</div>'
-             + '<span class="bi-ket">' + esc(p.kode) + ' · ' + esc(p.brand || "")
+             + '<span class="bi-ket">' + esc(p.kode) + ' · ' + (p.usulan ? '<b>item baru</b> — menunggu disahkan' : esc(p.brand || ""))   /* #59 */
              + (b.list ? ' · price list ' + rp(b.list) + (pnwModeForm() === "include" ? ' (tanpa PPN)' : '') : ' · price list belum ada')
              + ' · <button type="button" class="taut pnw-ganti" data-i="' + i + '">ganti barang</button></span>'   /* #43 */
+           : b.usulanTeks   /* #59: barang yang belum ada di master — diusulkan saat penawaran disimpan */
+           ? '<div class="bi-nama">' + esc(b.usulanTeks) + '</div>'
+             + '<span class="bi-ket"><b>item baru</b> — belum ada di master; diusulkan saat penawaran disimpan, '
+             + 'lalu disahkan owner/GM/staff · <button type="button" class="taut pnw-ganti" data-i="' + i + '">ganti barang</button></span>'
            : '<input type="text" class="pnw-cari" data-i="' + i + '" value="' + esc(b.ketikan || b.deskripsi || "")
              + '" placeholder="ketik kode, merek, atau nama barang…" autocomplete="off">'
              + '<div class="cari-hasil" hidden></div>')
       + '</div>'
       + '<div class="bi-spek" style="grid-column:1/-1">' + labelSpek
-      +   '<input type="text" class="pnw-spek" data-i="' + i + '" value="' + esc(b.spesifikasi || "") + '" placeholder="opsional — mis. dimensi / bahan / beban"></div>'   /* #3 */
+      +   '<textarea class="pnw-spek" rows="2" data-i="' + i + '" placeholder="opsional — mis. dimensi / bahan / beban">' + esc(b.spesifikasi || "") + '</textarea></div>'   /* #3; #56: multi-baris */
       + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(total) + '</b>'
       +   (bawah ? '<span class="bi-tanda bad">di bawah list</span>' : '') + '</div>'
       + '<div class="bi-angka bi-mini">'
@@ -9426,7 +9432,8 @@ function pasangPenawaran(){
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-ganti"), function(btn){   /* #43 */
     btn.addEventListener("click", function(){
       var i = Number(btn.dataset.i), b = f.baris[i], p = produkById(b.kode);
-      b.kode = null; b.ketikan = p ? p.kode : "";   /* b.list lama diingat: harga yang belum diubah ikut barang pengganti */
+      b.ketikan = p ? (p.usulan ? (p.usulan_teks || p.kode) : p.kode) : (b.usulanTeks || "");   /* #59 */
+      b.kode = null; b.usulanTeks = "";   /* b.list lama diingat: harga yang belum diubah ikut barang pengganti */
       ulang();
       var inp = document.querySelector('#pnw-form .pnw-cari[data-i="' + i + '"]');
       if (inp) { inp.focus(); inp.select(); }
@@ -9450,8 +9457,17 @@ function pasangPenawaran(){
         var sa = spekAwalPenawaran(p.id, repPenawaranForm(f));
         b.spesifikasi = sa ? sa.teks : ""; b.spekAuto = b.spesifikasi; b.spekAsal = sa ? sa.asal : "";
       }
+      b.usulanTeks = "";   /* #59 */
       ulang();
-    });
+    }, function(teks){
+      /* #59: barang yang belum ada di master — sama seperti form PO, baru DIUSULKAN saat penawaran disimpan
+         (usulkan_produk), supaya penawaran yang batal disimpan tidak meninggalkan usulan. */
+      var b = f.baris[Number(inp.dataset.i)];
+      b.usulanTeks = teks; b.kode = null; b.ketikan = ""; b.deskripsi = teks; b.list = null;
+      if (b.hargaAuto) { b.harga = ""; b.hargaAuto = false; }   /* tanpa price list: harga diketik sendiri */
+      if (b.spesifikasi === b.spekAuto) { b.spesifikasi = ""; b.spekAuto = null; b.spekAsal = ""; }   /* spesifikasi barang sebelumnya */
+      ulang();
+    }, "belum ada di master — diusulkan saat penawaran disimpan, lalu disahkan owner/GM/staff");
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-qty"), function(inp){
     inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].qty = n === null ? "" : n; ulang0(); });   /* #14 */
@@ -9514,7 +9530,7 @@ function periksaPenawaran(f){
   f.baris.forEach(function(b, i){
     if (salah) return;
     var ketik = String(b.ketikan || "").trim();
-    var terpilih = !!(b.kode || b.set_id || b.setInline);   /* #28 */
+    var terpilih = !!(b.kode || b.set_id || b.setInline || b.usulanTeks);   /* #28; #59 item baru */
     if (!terpilih && !ketik && !String(b.qty || "").trim() && !String(b.harga == null ? "" : b.harga).trim()) return;
     if (!terpilih) { salah = "Baris " + (i + 1) + ": pilih barangnya dari daftar pencarian (atau hapus barisnya)."; return; }
     if (!(Number(b.qty) > 0)) { salah = "Baris " + (i + 1) + ": qty belum diisi atau bukan angka."; return; }
@@ -9550,14 +9566,15 @@ function docPenawaranHtml(d){
     +   '<span>Harga</span><div>' + esc(labelModePpn(d.mode_ppn)) + (d.mode_ppn === "include" ? ' — harga di bawah sudah termasuk PPN 11%'
           : (d.mode_ppn === "non" ? '' : ' — harga di bawah belum termasuk PPN 11%')) + '</div>'
     + '</div>'
-    + '<div class="tw"><table class="dp-baris"><thead><tr><th>No</th><th class="l">Barang &amp; spesifikasi</th>'
-    +   '<th>Qty</th><th class="r">Harga</th><th class="r">Jumlah</th></tr></thead><tbody>'
+    /* #56: Spesifikasi kolom tersendiri (baris baru dipertahankan), bukan teks kecil di bawah kode barang. */
+    + '<div class="tw"><table class="dp-baris"><thead><tr><th>No</th><th class="l">Barang</th>'
+    +   '<th class="l">Spesifikasi</th><th>Qty</th><th class="r">Harga</th><th class="r">Jumlah</th></tr></thead><tbody>'
     + d.baris.map(function(b, i){
         return '<tr><td>' + (i + 1) + '</td>'
           + '<td class="l">' + esc(b.judul || "—") + (b.set ? ' <span class="pill p-lunas">set</span>' : '')
           +   (b.sub ? '<div class="muted" style="font-size:11.5px">' + esc(b.sub) + '</div>' : '')
-          +   (b.spesifikasi ? '<div style="font-size:12px;white-space:normal">' + esc(b.spesifikasi) + '</div>' : '')
           +   (b.bawah ? '<div><span class="pill p-belum">di bawah list</span></div>' : '') + '</td>'
+          + '<td class="l dp-spek">' + esc(String(b.spesifikasi || "").trim()) + '</td>'
           + '<td>' + esc(angkaTeks(b.qty)) + ' ' + esc(b.satuan || "") + '</td>'
           + '<td class="r">' + rp(b.harga) + '</td>'
           + '<td class="r">' + rp((Number(b.qty) || 0) * (Number(b.harga) || 0)) + '</td></tr>';
@@ -9570,7 +9587,7 @@ function docPenawaranHtml(d){
 function barisDokPenawaran(b, mode){   /* baris form → baris dokumen; mode = mode PPN (#42: bawah list dari DPP) */
   var pr = b.kode ? produkById(b.kode) : null, isSet = !!(b.set_id || b.setInline);
   return { judul: isSet ? (b.deskripsi || "Set") : (pr ? pr.kode : (b.deskripsi || "—")),
-           sub: isSet ? ("1 set = " + (b.setRinci || "—")) : (pr ? (pr.brand || "") : ""),
+           sub: isSet ? ("1 set = " + (b.setRinci || "—")) : (pr && !pr.usulan ? (pr.brand || "") : ""),   /* #59: tanpa "(usulan)" */
            spesifikasi: String(b.spesifikasi || "").trim(), qty: b.qty, satuan: b.satuan || (isSet ? "set" : "pcs"),
            harga: b.harga, set: isSet, bawah: b.list != null && b.list !== "" && bandingList(b.harga, b.list, mode) < 0 };
 }
@@ -9612,7 +9629,13 @@ function simpanPenawaran(isi){
      (berkas 87/109). Gagal di tengah = tidak ada yang tersimpan, nomor tidak
      terbuang. Pemilik penawaran (#11 #48) diisi/dijaga trigger quotes_jaga_sales. */
   sibuk(true);
-  api("POST", "/rpc/simpan_penawaran", {
+  /* #59: item baru diusulkan lebih dulu (usulkan_produk tidak menggandakan teks yang sama), supaya barisnya
+     menunjuk product_id. Kalau simpan sesudahnya gagal, barisnya sudah membawa id — simpan ulang tidak dobel. */
+  Promise.all(isi.filter(function(b){ return b.usulanTeks && !b.kode; }).map(function(b){
+    return api("POST", "/rpc/usulkan_produk", { p_teks: b.usulanTeks })
+      .then(function(id){ b.kode = (id && id.id) ? id.id : id; });
+  }))
+  .then(function(){ return api("POST", "/rpc/simpan_penawaran", {
     p_kepala: {
       customer_id: f.baru ? null : f.customer_id, tanggal: f.tanggal,
       berlaku_hari: (String(f.berlaku_hari).trim() === "" || isNaN(Number(f.berlaku_hari))) ? null : Number(f.berlaku_hari),   /* #5: kosong = tanpa batas */
@@ -9629,7 +9652,7 @@ function simpanPenawaran(isi){
                qty: Number(b.qty), satuan: b.satuan || "pcs", harga: Number(b.harga),   /* #12: tanpa pembulatan */
                harga_list: b.list || null };
     })
-  })
+  }); })
   .then(function(q){
     q = Array.isArray(q) ? q[0] : q;
     tutupLaci();
@@ -9756,8 +9779,9 @@ function formDetailPenawaran(q){
     baris: lines.map(function(l){
       var pr = l.product_id ? produkById(l.product_id) : null;
       var isSet = !!l.set_id || l.satuan === "set" || adaSet(l);   /* set yang sudah dihapus: set_id NULL, satuan tetap "set"; #28 set inline */
-      return { judul: pr ? pr.kode : (l.deskripsi || "—"),
-               sub: pr ? [pr.brand, (l.deskripsi && l.deskripsi !== pr.kode) ? l.deskripsi : ""].filter(Boolean).join(" · ") : "",
+      var usul = pr && pr.usulan;   /* #59: item baru — merek "(usulan)" tidak ikut ke dokumen */
+      return { judul: pr ? (usul ? (pr.usulan_teks || pr.kode) : pr.kode) : (l.deskripsi || "—"),
+               sub: pr && !usul ? [pr.brand, (l.deskripsi && l.deskripsi !== pr.kode) ? l.deskripsi : ""].filter(Boolean).join(" · ") : "",
                spesifikasi: l.spesifikasi, qty: l.qty, satuan: l.satuan, harga: l.harga, set: isSet,
                bawah: l.harga_list != null && bandingList(l.harga, l.harga_list, q.mode_ppn) < 0 };   /* #42: DPP */
     }) });

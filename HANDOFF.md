@@ -84,10 +84,10 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 | 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
 | 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 | 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
-| 56 | Spesifikasi sudah ada di form; di dokumen hanya teks kecil di bawah kode, input 1 baris | dikerjakan |
+| 56 | Dokumen penawaran (pratinjau & detail) kini punya kolom **Spesifikasi** tersendiri (baris baru dipertahankan); isian spesifikasi jadi textarea multi-baris (dulu input 1 baris membuang Enter dari spesifikasi master) | **selesai (FE)** |
 | 57 | Set dipecah per pcs di SP sesuai ATURAN; usul tampilan berkelompok + kolom penanda set | tanya: "set (sudah diubah)" & kunci qty |
 | 58 | Indo Kida (Iwan, 2604) vs Garuda Metalindo (Hendri, 2354) — menabrak #48 | tanya: opsi A ganti nama / B induk / C gabung |
-| 59 | DB sudah dukung usulan produk dari penawaran; form tidak menampilkan "+ item baru" | inti dikerjakan; tanya: "Buang" usulan |
+| 59 | Form penawaran menawarkan "+ Pakai … sebagai item baru"; item diusulkan (`usulkan_produk`) saat penawaran disimpan, lalu disahkan owner/GM/staff; dokumen tanpa "(usulan)" | **inti selesai (FE)**; tanya: tombol "Buang" usulan yang tak jadi order |
 | 60 | UP, e-mail, diskon, TOP belum ada | tanya: bentuk diskon/TOP/UP |
 | 61 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 
