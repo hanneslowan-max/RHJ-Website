@@ -11565,7 +11565,7 @@ var EHC_KOLOM = "id,so_id,sales_rep_id,pic_id,bank,no_rekening,atas_nama,tanggal
   + "dibuat_pada,cepat_minta,cepat_ok,cepat_alasan,cepat_catatan,"
   + "customers(nama),customer_pics(nama,jabatan),ehc_klaim_nilai(nominal),"
   + "ehc_klaim_alokasi(so_id,nominal,sales_orders(no_sp,lunas)),"
-  + "ehc_klaim_berkas(id,nama_berkas,path,ukuran)";
+  + "ehc_klaim_berkas(id,nama_berkas,path,ukuran,dibuang_pada)";
 
 var EHC_HAL = [
   { id:"saldo",    label:"Saldo per SP",
@@ -11623,13 +11623,18 @@ function nilaiKlaim(k){
   if (Array.isArray(n)) n = n[0];
   return n || null;
 }
+/* Berkas 140: lampiran yang dibuang saat klaim diubah tidak dihapus,
+   hanya ditandai (dibuang_pada); SP yang dilepas dari klaim tetap tercatat
+   dengan nominal 0. Keduanya riwayat — tidak ditampilkan sebagai isi klaim. */
 function berkasKlaim(k){
   var b = k.ehc_klaim_berkas;
-  return Array.isArray(b) ? b : (b ? [b] : []);
+  b = Array.isArray(b) ? b : (b ? [b] : []);
+  return b.filter(function(f){ return !f.dibuang_pada; });
 }
 function alokasiKlaim(k){
   var a = k.ehc_klaim_alokasi;
-  return Array.isArray(a) ? a : (a ? [a] : []);
+  a = Array.isArray(a) ? a : (a ? [a] : []);
+  return a.filter(function(x){ return Number(x.nominal) > 0; });
 }
 
 function muatEhcHal(){

@@ -58,6 +58,23 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
    (cutoff 18, proses 20, tunggu lunas, EHC cepat). 4. Komisi (cutoff 23, transfer 25, potongan, tutup EHC → kas
    sales, #61). 5. #54 edit EHC di SP. 6. Laporan finance.
 
+### Posisi tahap 1 (6 Okt sore)
+- **Kode selesai, BELUM dijalankan di DEV**: `db/140-ehc-saldo-pemakaian.sql` (masih bertanda DRAF), `db/140b-…`
+  (DROP manual), layar EHC/Kas/Laporan Finance/peringatan komisi di index.html, ATURAN B bagian "EHC".
+- Rancangan diuji adversarial (4 sudut + pembantah); semua temuan berat sudah masuk 140.
+- Uji layar Playwright (Supabase dicegat, tanpa request keluar): **14/14 lulus**, desktop & 390px. Harness di
+  scratchpad sesi (`layar/run.js`), tidak ikut repo.
+- **Uji DB dalam transaksi rollback belum bisa jalan**:
+  1. MCP Supabase macet (timeout 60 dtk, menunggu konfirmasi yang tidak muncul) untuk DROP **dan untuk fungsi yang
+     badannya memuat DELETE dengan syarat nyata**. 140 sudah ditulis ulang tanpa DELETE: lampiran dibuang = ditandai
+     `dibuang_pada`; SP yang dilepas saat klaim diubah = alokasi nominal 0; pengajuan transfer kosong tidak dibuat.
+     Skrip uji (scratchpad `uji/uji1.py` → `uji1.sql`, ±45 skenario per peran) juga sudah bebas DELETE.
+  2. Sejak ±sore konektor Supabase menjawab `FGA Authentication Error. Unauthorized` untuk semua perintah —
+     perlu Hannes menyambungkan ulang konektor Supabase.
+- Langkah berikut begitu konektor pulih: jalankan `uji1.sql` (rollback) → perbaiki bila ada yang gagal →
+  `apply_migration` 140 ke DEV → Hannes menjalankan 140b di SQL Editor DEV → uji multi-klaim per SP & reimburse →
+  hapus tanda DRAF → commit.
+
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
 - **Revisi 29–49 selesai dikerjakan** di branch `claude/nice-cray-21r8g4` (belum di-merge, belum ada PR).

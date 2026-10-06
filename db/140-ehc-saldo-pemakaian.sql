@@ -137,9 +137,11 @@ create table if not exists public.ehc_klaim_alokasi (
   id       bigserial primary key,
   klaim_id bigint not null references public.ehc_klaim(id) on delete cascade,
   so_id    bigint not null references public.sales_orders(id),
-  nominal  numeric(14,2) not null check (nominal > 0),
+  nominal  numeric(14,2) not null check (nominal >= 0),
   constraint ekal_klaim_so_uniq unique (klaim_id, so_id)
 );
+comment on column public.ehc_klaim_alokasi.nominal is
+  'Bagian klaim yang memotong saldo SP ini. 0 = SP dilepas saat klaim diubah (baris disimpan sebagai riwayat, tidak dihapus).';
 create index if not exists ekal_so_idx on public.ehc_klaim_alokasi (so_id);
 comment on table public.ehc_klaim_alokasi is
   'Bagian satu klaim EHC yang memotong saldo EHC tiap SP (berkas 140). Diisi hanya lewat simpan_klaim_ehc().';
@@ -203,6 +205,11 @@ do $$ begin
 end $$;
 
 -- ── 6. lampiran: satu berkas satu klaim, diaudit, dibaca peran yang berhak ─
+-- Lampiran yang dibuang saat klaim diubah tidak dihapus, hanya ditandai —
+-- bukti yang pernah dilihat orang tetap bisa ditelusuri.
+alter table public.ehc_klaim_berkas
+  add column if not exists dibuang_pada timestamptz,
+  add column if not exists dibuang_oleh uuid references auth.users(id);
 create unique index if not exists ekb_path_uniq on public.ehc_klaim_berkas (path);
 create or replace trigger zz_audit_ehc_klaim_berkas
   after insert or update or delete on public.ehc_klaim_berkas
@@ -277,7 +284,7 @@ select s.id                                   as so_id,
   left join public.so_ringkas r on r.so_id = s.id
   left join public.customers  c on c.id = s.customer_id
   left join lateral (
-    select sum(x.nominal) as terpakai, count(distinct x.klaim_id) as jumlah_klaim
+    select sum(x.nominal) as terpakai, count(distinct x.klaim_id) filter (where x.nominal > 0) as jumlah_klaim
       from public.ehc_klaim_alokasi x
       join public.ehc_klaim k on k.id = x.klaim_id
      where x.so_id = s.id and k.status in ('diajukan','disetujui')
@@ -594,7 +601,7 @@ returns boolean language sql stable security definer set search_path = public as
   select exists (select 1 from public.ehc_klaim k
                    join public.ehc_klaim_alokasi a on a.klaim_id = k.id
                    join public.sales_orders s on s.id = a.so_id
-                  where k.id = p_klaim and s.customer_id is distinct from k.customer_id)
+                  where k.id = p_klaim and a.nominal > 0 and s.customer_id is distinct from k.customer_id)
 $$;
 revoke all on function public.klaim_ehc_lintas(bigint) from public, anon;
 grant execute on function public.klaim_ehc_lintas(bigint) to authenticated;
@@ -888,10 +895,14 @@ begin
            diubah_oleh = auth.uid(), diubah_pada = now()
      where id = v_id;
     update public.ehc_klaim_nilai set nominal = v_total, kas = 0 where klaim_id = v_id;
-    delete from public.ehc_klaim_alokasi where klaim_id = v_id;
+    -- SP yang tidak dipakai lagi: nominalnya 0 (barisnya tetap sebagai riwayat).
+    update public.ehc_klaim_alokasi a set nominal = 0
+     where a.klaim_id = v_id
+       and a.so_id not in (select x.so_id from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric));
     if jsonb_typeof(p_data->'berkas_hapus') = 'array' then
-      delete from public.ehc_klaim_berkas f
-       where f.klaim_id = v_id
+      update public.ehc_klaim_berkas f
+         set dibuang_pada = now(), dibuang_oleh = auth.uid()
+       where f.klaim_id = v_id and f.dibuang_pada is null
          and f.id in (select x::bigint from jsonb_array_elements_text(p_data->'berkas_hapus') x);
     end if;
   end if;
@@ -899,7 +910,8 @@ begin
   insert into public.ehc_klaim_alokasi (klaim_id, so_id, nominal)
   select v_id, x.so_id, x.nominal
     from jsonb_to_recordset(v_alok) with ordinality as x(so_id bigint, nominal numeric, ord bigint)
-   order by x.ord;
+   order by x.ord
+  on conflict (klaim_id, so_id) do update set nominal = excluded.nominal;
 
   insert into public.ehc_klaim_berkas (klaim_id, nama_berkas, path, ukuran, mime, dibuat_oleh)
   select v_id, btrim(x->>'nama_berkas'), btrim(x->>'path'),
@@ -910,7 +922,7 @@ begin
          auth.uid()
     from jsonb_array_elements(v_berk) x;
 
-  select count(*) into v_n from public.ehc_klaim_berkas where klaim_id = v_id;
+  select count(*) into v_n from public.ehc_klaim_berkas where klaim_id = v_id and dibuang_pada is null;
   if v_n = 0 then
     raise exception 'Lampiran wajib: lampirkan bill/nota atau bukti transfer.' using errcode = '22023';
   end if;
@@ -1016,7 +1028,7 @@ begin
     raise exception 'Klaim EHC ini berstatus % — hanya klaim yang masih diajukan yang bisa dipercepat.',
                     k.status using errcode = '22023';
   end if;
-  if not exists (select 1 from public.ehc_klaim_berkas f where f.klaim_id = p_klaim) then
+  if not exists (select 1 from public.ehc_klaim_berkas f where f.klaim_id = p_klaim and f.dibuang_pada is null) then
     raise exception 'Klaim ini belum punya lampiran. Ubah klaimnya dan lampirkan bukti dulu.' using errcode = '22023';
   end if;
   if public.klaim_ehc_lintas(p_klaim) then
@@ -1109,6 +1121,27 @@ select k.id AS klaim_id,
 -- hanya klaim aktif yang bukan klaim cepat, bukan lintas customer (menunggu
 -- GM per klaim, tahap 3), punya rekening tujuan, dan SEMUA SP alokasinya
 -- sudah lunas & tidak batal. Cabang komisi tidak berubah.
+-- Daftar klaim EHC yang siap ditransfer untuk periode p_bulan (dan periode
+-- sebelumnya yang tertunda). Dipakai ajukan_transfer.
+create or replace function public.ehc_klaim_siap_transfer(p_bulan text)
+returns setof bigint language sql stable security definer set search_path = public as $$
+  select k.id from public.ehc_klaim k
+   where k.transfer_batch_id is null
+     and k.status in ('diajukan','disetujui')
+     and k.periode <= p_bulan
+     and k.cara_bayar in ('transfer','reimburse','tunai')
+     and (k.cara_bayar = 'tunai' or coalesce(btrim(k.no_rekening), '') <> '')
+     and not (k.cepat_minta and k.cepat_ok is distinct from false)
+     and not public.klaim_ehc_lintas(k.id)
+     and public.klaim_ehc_terkunci_pengajuan(k.id) is null
+     and exists (select 1 from public.ehc_klaim_alokasi a where a.klaim_id = k.id and a.nominal > 0)
+     and not exists (select 1 from public.ehc_klaim_alokasi a
+                       join public.sales_orders s on s.id = a.so_id
+                      where a.klaim_id = k.id and a.nominal > 0 and (not s.lunas or s.batal))
+$$;
+revoke all on function public.ehc_klaim_siap_transfer(text) from public, anon, authenticated;
+
+-- Pengajuan kosong tidak dibuat sama sekali (dulu dibuat lalu dihapus).
 create or replace function public.ajukan_transfer(p_jenis text, p_bulan text, p_catatan text default null::text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_id bigint; v_n integer; v_total numeric(14,2); v_lama public.transfer_pengajuan;
@@ -1142,25 +1175,27 @@ begin
                end);
   end if;
 
+  if p_jenis = 'ehc' then
+    select count(*) into v_n from public.ehc_klaim_siap_transfer(p_bulan);
+  else
+    select count(*) into v_n from public.komisi_klaim k
+     where k.transfer_batch_id is null and to_char(k.tanggal, 'YYYY-MM') = p_bulan;
+  end if;
+  if v_n = 0 then
+    return jsonb_build_object('pengajuan', null, 'jumlah', 0, 'total', 0,
+      'pesan', 'Tidak ada klaim ' || p_jenis || ' bulan ' || p_bulan
+            || ' yang siap ditransfer. Tidak ada yang perlu disetujui.');
+  end if;
+
   insert into public.transfer_pengajuan (jenis, bulan, catatan, diajukan_oleh)
   values (p_jenis, p_bulan, nullif(btrim(coalesce(p_catatan,'')), ''), auth.uid())
   returning id into v_id;
 
+  -- Daftarnya DIKUNCI di sini. Klaim yang masuk sesudah ini menunggu
+  -- pengajuan berikutnya.
   if p_jenis = 'ehc' then
     insert into public.transfer_pengajuan_baris (pengajuan_id, klaim_id)
-    select v_id, k.id from public.ehc_klaim k
-     where k.transfer_batch_id is null
-       and k.status in ('diajukan','disetujui')
-       and k.periode <= p_bulan
-       and k.cara_bayar in ('transfer','reimburse','tunai')
-       and (k.cara_bayar = 'tunai' or coalesce(btrim(k.no_rekening), '') <> '')
-       and not (k.cepat_minta and k.cepat_ok is distinct from false)
-       and not public.klaim_ehc_lintas(k.id)
-       and public.klaim_ehc_terkunci_pengajuan(k.id) is null
-       and exists (select 1 from public.ehc_klaim_alokasi a where a.klaim_id = k.id)
-       and not exists (select 1 from public.ehc_klaim_alokasi a
-                         join public.sales_orders s on s.id = a.so_id
-                        where a.klaim_id = k.id and (not s.lunas or s.batal));
+    select v_id, x from public.ehc_klaim_siap_transfer(p_bulan) x;
     select count(*), coalesce(sum(n.nominal), 0) into v_n, v_total
       from public.transfer_pengajuan_baris b
       join public.ehc_klaim_nilai n on n.klaim_id = b.klaim_id
@@ -1173,13 +1208,6 @@ begin
       from public.transfer_pengajuan_baris b
       join public.komisi_klaim_nilai n on n.klaim_id = b.klaim_id
      where b.pengajuan_id = v_id;
-  end if;
-
-  if v_n = 0 then
-    delete from public.transfer_pengajuan where id = v_id;
-    return jsonb_build_object('pengajuan', null, 'jumlah', 0, 'total', 0,
-      'pesan', 'Tidak ada klaim ' || p_jenis || ' bulan ' || p_bulan
-            || ' yang siap ditransfer. Tidak ada yang perlu disetujui.');
   end if;
 
   update public.transfer_pengajuan
