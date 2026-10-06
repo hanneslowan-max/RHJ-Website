@@ -58,27 +58,36 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
    (cutoff 18, proses 20, tunggu lunas, EHC cepat). 4. Komisi (cutoff 23, transfer 25, potongan, tutup EHC → kas
    sales, #61). 5. #54 edit EHC di SP. 6. Laporan finance.
 
-### Posisi tahap 1 (6 Okt sore)
-- **Kode selesai, BELUM dijalankan di DEV**: `db/140-ehc-saldo-pemakaian.sql` (masih bertanda DRAF), `db/140b-…`
-  (DROP manual), layar EHC/Kas/Laporan Finance/peringatan komisi di index.html, ATURAN B bagian "EHC".
-- Rancangan diuji adversarial (4 sudut + pembantah); semua temuan berat sudah masuk 140.
-- Uji layar Playwright (Supabase dicegat, tanpa request keluar): **14/14 lulus**, desktop & 390px. Harness di
-  scratchpad sesi (`layar/run.js`), tidak ikut repo.
-- **Uji DB dalam transaksi rollback belum bisa jalan**:
-  1. MCP Supabase macet (timeout 60 dtk, menunggu konfirmasi yang tidak muncul) untuk DROP **dan untuk fungsi yang
-     badannya memuat DELETE dengan syarat nyata**. 140 sudah ditulis ulang tanpa DELETE: lampiran dibuang = ditandai
-     `dibuang_pada`; SP yang dilepas saat klaim diubah = alokasi nominal 0; pengajuan transfer kosong tidak dibuat.
-     Skrip uji (scratchpad `uji/uji1.py` → `uji1.sql`, ±45 skenario per peran) juga sudah bebas DELETE.
-  2. Sejak ±sore konektor Supabase menjawab `FGA Authentication Error. Unauthorized` untuk semua perintah —
-     perlu Hannes menyambungkan ulang konektor Supabase.
+### Posisi tahap 1 (6 Okt malam)
+- **`db/140-ehc-saldo-pemakaian.sql` SUDAH diterapkan di DEV** (`apply_migration 140_ehc_saldo_pemakaian`).
+  Sebelumnya diuji utuh dalam transaksi rollback di DEV: **46/46 skenario lulus** (konversi klaim lama, saldo per SP,
+  simpan/ubah/batal klaim, lampiran dibuang lunak, hak per peran & RLS, Vonny tidak melihat nominal, gerbang batal
+  SP/qty, EHC cepat, ajukan transfer sesudah cutoff, PIC terkunci, rekening PIC ≠ rekening sales, laporan komisi,
+  `so_ringkas` tidak berubah). Diperiksa sesudah diterapkan: klaim lama #6/#7 → `diajukan`, periode 2026-10,
+  alokasi SP 41 Rp 5.000 & SP 35 Rp 20.000; md5 `so_ringkas` tetap; kas sales 0 baris.
+- **`db/140b-ehc-buang-batas-lama.sql` BELUM dijalankan — tugas Hannes** di SQL Editor DEV (isinya hanya DROP
+  indeks `ehck_so_uniq` + check `ehck_cara_bayar_sah`; MCP macet untuk DROP). Sebelum 140b: satu SP baru bisa
+  dipakai satu klaim aktif dan cara bayar *reimburse* masih ditolak (layar menampilkan pesan yang menunjuk 140b).
+- Sesudah 140b: jalankan uji pasca-140b (scratchpad `uji/uji2.py` → `uji2.sql`, rollback, ±17 skenario: dua klaim
+  pada SP yang sama, reimburse menyalin rekening sales, ubah klaim sampai pas sisa, batal → saldo kembali,
+  klaim multi-SP beda customer = lintas & tidak bisa cepat, lepas SP saat ubah).
+- Layar (index.html) sudah memakai struktur 140; uji Playwright 14/14 (harness di scratchpad `layar/`).
+- Catatan teknis MCP Supabase: DROP dan fungsi berisi `DELETE … WHERE` macet → 140 ditulis tanpa DELETE.
+  Panggilan besar (>80 KB) kadang terputus di tengah; skrip uji diringkas dengan fungsi bantu `pg_temp.c`/`pg_temp.u`.
+- **Fungsi yang ditimpa 140** (sesi 50–61: jangan `create or replace` dari salinan lama — ambil dari DEV):
+  `batalkan_baris_sp`, `pulihkan_baris_sp` (cek klaim EHC dibuang), `jaga_rekening_pic` (customer_id ikut
+  terkunci), `jaga_gerbang_klaim`, `minta_klaim_cepat`, `ajukan_transfer`, `laporan_komisi`,
+  `klaim_ehc_saya`, `ajukan_klaim_ehc`/`ajukan_klaim_ehc_cepat` (dipensiunkan), view `kas_sales`, `ehc_cepat_siap`.
 - **Saat merge dengan branch 50–61 (#52 muat ulang diam-diam):** di sana `muatEhc`/`muatKomisi`/`muatGm` diberi
   pola `var awal = X.dimuat;` + di awal `.then` `if (awal && !X.dimuat) { X.memuat = false; SEGAR.dibatalkan++;
   return muatX(); }`, dan registry `MUAT_DIAM` punya entri ehc/komisi/gm (ehc memanggil muatEhc + muatEhcHal +
   cacah — nama fungsi itu tetap ada di versi baru). `muatEhc` versi sesi ini ditulis ulang → pasang ulang pola itu
   saat merge; kas & laporan belum terdaftar di MUAT_DIAM (lihat HANDOFF branch itu, "Catatan #52 untuk sesi lain").
-- Langkah berikut begitu konektor pulih: jalankan `uji1.sql` (rollback) → perbaiki bila ada yang gagal →
-  `apply_migration` 140 ke DEV → Hannes menjalankan 140b di SQL Editor DEV → uji multi-klaim per SP & reimburse →
-  hapus tanda DRAF → commit.
+- **Menunggu keputusan Hannes:** (1) isian nominal di HP — titik jadi koma desimal (#45), usul tampilkan
+  "terbaca: Rp …"; (2) EHC SP Office/cabang/sales nonaktif tidak pernah tertutup (tahap 4); (3) #54 butuh mekanisme
+  "persen tetap" karena EHC bagian dari harga (tahap 5); (4) di luar lingkup: sales bisa mengganti `customer_id` SP
+  lewat REST (melanggar #37).
+- Tahap berikut yang diusulkan: 3 (periode & pemeriksaan GM) sebelum 2 (kartu kredit), lalu 4, 5, 6.
 
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
