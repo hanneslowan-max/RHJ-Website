@@ -1,4 +1,4 @@
--- DRAF — BELUM dijalankan. Jangan dijalankan.
+-- Jalankan MANUAL oleh Hannes di SQL Editor DEV, SESUDAH 140 diterapkan. Belum dijalankan.
 -- ═══════════════════════════════════════════════════════════════════════
 -- 140b · EHC tahap 1 — buang dua batas lama (DIJALANKAN MANUAL di SQL Editor)
 --
