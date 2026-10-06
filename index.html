@@ -297,6 +297,9 @@
   .head-aksi{margin-left:auto;display:flex;gap:9px;flex-wrap:wrap}
   /* #52: tombol muat ulang data halaman */
   .head-segar{margin-left:9px;flex:none}
+  /* #50: alasan SP belum bisa diloloskan di daftar Double Check */
+  .vc-kendala{margin-top:4px;font-size:12px;line-height:1.4;color:#a8261c;max-width:420px;white-space:normal}
+  .vc-kendala .muted{color:var(--ink-2,#5a6672)}
   .head-segar.putar svg{animation:segar-putar .9s linear infinite}
   @keyframes segar-putar{to{transform:rotate(360deg)}}
   main{flex:1 1 auto;padding:0 clamp(16px,2.4vw,30px) 72px}
@@ -10796,11 +10799,17 @@ function muatVonnyCek(){
     api("GET", "/sales_orders?select=id,no_sp,tanggal,kepada,sales_rep_id,status,vonny_ok,vonny_pada,no_surat_jalan"
              + "&batal=is.false&vonny_ok=is.true&vonny_pada=gte." + encodeURIComponent(sejak)
              + "&order=vonny_pada.desc,id.desc&limit=50").catch(function(){ return []; }),
-    repAlur().catch(function(){ return []; })   /* nama sales di kolom Sales (dulu tampil "—" di tab ini) */
+    repAlur().catch(function(){ return []; }),   /* nama sales di kolom Sales (dulu tampil "—" di tab ini) */
+    /* #50 (berkas 120): alasan SP belum bisa diloloskan — dibaca SEBELUM Vonny menekan tombol.
+       null = database belum punya fungsinya → perilaku lama (tanpa tanda). */
+    api("POST", "/rpc/cek_kelayakan_vonny", {}).catch(function(){ return null; })
   ])
     .then(function(x){
       if (awal && !V.dimuat) { V.memuat = false; SEGAR.dibatalkan++; return muatVonnyCek(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
-      V.baris = x[0]; V.riwayat = x[1] || []; V.dimuat = true; V.memuat = false;
+      V.baris = x[0]; V.riwayat = x[1] || [];
+      V.kelayakan = Array.isArray(x[3]) ? {} : null;
+      if (V.kelayakan) x[3].forEach(function(k){ V.kelayakan[k.so_id] = k; });
+      V.dimuat = true; V.memuat = false;
     })
     .catch(function(e){ V.memuat = false; throw e; });
 }
@@ -10819,15 +10828,26 @@ function panelVonnyCek(){
   var menunggu = V.baris.filter(function(s){ return s.vonny_ok !== false; });
   var ditahan  = V.baris.filter(function(s){ return s.vonny_ok === false; });
   var riwayat  = V.riwayat || [];
+  /* #50: SP yang belum bisa diloloskan — alasannya dari cek_kelayakan_vonny (berkas 120) */
+  var kendala = V.kelayakan ? V.baris.filter(function(s){ var k = V.kelayakan[s.id]; return k && !k.siap; }) : [];
+  var kendalaVonny = kendala.filter(function(s){ return V.kelayakan[s.id].siapa === "Vonny"; }).length;
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
     + tile("Menunggu cek Vonny", menunggu.length, "SP perlu dicek", menunggu.length ? "alert" : "", "vonnycek:daftar")
+    + (V.kelayakan ? tile("Belum bisa diloloskan", kendala.length,
+        kendala.length ? (kendalaVonny + " bisa dibereskan Vonny · " + (kendala.length - kendalaVonny) + " perlu orang lain") : "semua siap dicek",
+        kendala.length ? "alert" : "", "vonnycek:daftar") : '')
     + tile("Ditahan Vonny", ditahan.length, "menunggu dibereskan sales", "", "vonnycek:tahan")
     + tile("Baru diloloskan", riwayat.length, VONNY_RIWAYAT_HARI + " hari terakhir · sudah di Pengiriman", "", "vonnycek:lolos")
     + '</div>'
     + '<div class="flag"><span class="f-ico">i</span><div>SP yang baru dibuat sales masuk sini dulu untuk '
     + '<b>dicek kelayakannya oleh Vonny</b>. Selama di sini, SP <b>belum</b> tampil di Pengiriman & Invoice '
     + 'dan Lie Sian belum bisa memprosesnya. Setelah <b>diloloskan</b>, SP keluar dari daftar ini dan masuk '
-    + '<b>Pengiriman</b> (tercatat di "Baru diloloskan" di bawah). Yang <b>ditahan</b> tetap di sini sampai diloloskan.</div></div>';
+    + '<b>Pengiriman</b> (tercatat di "Baru diloloskan" di bawah). Yang <b>ditahan</b> tetap di sini sampai diloloskan.</div></div>'
+    + (kendala.length
+        ? '<div class="flag merah"><span class="f-ico">!</span><div><b>' + kendala.length + ' SP belum bisa diloloskan.</b> '
+          + 'Alasannya tertulis merah di kolom Kepada. Yang bertanda <b>perlu: Vonny</b> bisa dibereskan di laci cek '
+          + '(mis. isi No. HP / alamat); yang bertanda <b>perlu: owner/GM</b> atau <b>GM</b> menunggu mereka dulu.</div></div>'
+        : '');
 
   function tabelSp(daftar, id, kolomTambahan){
     return '<div class="tw" id="' + id + '"><table><thead><tr><th class="l">No SP</th><th>Tgl</th><th class="l">Kepada</th>'
@@ -10836,7 +10856,8 @@ function panelVonnyCek(){
       +  daftar.map(function(s){ var r = ringkasSo(s), po = Array.isArray(s.purchase_orders) ? s.purchase_orders[0] : s.purchase_orders;
            return '<tr class="baris-klik" data-vc="' + s.id + '" tabindex="0"><td class="l"><code>' + esc(s.no_sp) + '</code></td>'
              + '<td>' + td(s.tanggal) + '</td><td class="l"><b>' + esc(s.kepada || "") + '</b>'
-             +   (!s.customer_id ? '<div><span class="pill p-sebagian">belum di data pelanggan</span></div>' : '') + '</td>'   /* #37 */
+             +   (!s.customer_id ? '<div><span class="pill p-sebagian">belum di data pelanggan</span></div>' : '')   /* #37 */
+             +   tandaKelayakan(V.kelayakan && V.kelayakan[s.id]) + '</td>'   /* #50 */
              + '<td class="l">' + esc(namaRepAlur(s.sales_rep_id) || "—") + '</td>'
              + '<td class="l">' + (po ? esc(po.no_po) + (po.lampiran ? ' <span title="ada lampiran PO">📎</span>' : '') : '<span class="muted">' + (s.tanpa_po_ok ? 'tanpa PO' : 'menyusul') + '</span>') + '</td>'   /* #36 */
              + '<td class="r">' + rp(r ? r.grand_total : null) + '</td>'
@@ -10875,6 +10896,22 @@ function panelVonnyCek(){
       if (s) formCekVonny(s);
     });
   });
+}
+/* #50: tanda kelayakan per SP (berkas 120). Merah = belum bisa diloloskan, dengan alasan & siapa yang membereskan. */
+function tandaKelayakan(k){
+  if (!k) return '';
+  if (k.siap) return k.kode === "ok" ? '' : '<div class="muted" style="font-size:11.5px;margin-top:3px">✓ ' + esc(k.pesan || "") + '</div>';
+  return '<div class="vc-kendala"><span class="pill p-belum">belum bisa diloloskan</span> ' + esc(k.pesan || "")
+    + (k.siapa ? '<div class="muted" style="font-size:11.5px">perlu: <b>' + esc(k.siapa) + '</b>' + (k.tindakan ? ' — ' + esc(k.tindakan) : '') + '</div>' : '')
+    + '</div>';
+}
+function kotakKelayakan(k){
+  if (!k) return '';
+  if (k.siap) return '<div class="flag" style="margin-top:10px"><span class="f-ico">✓</span><div><b>Siap diloloskan.</b> '
+    + esc(k.kode === "ok" ? "Pelanggan sudah tertaut." : (k.pesan || "")) + '</div></div>';
+  return '<div class="flag merah" style="margin-top:10px"><span class="f-ico">!</span><div><b>Belum bisa diloloskan:</b> '
+    + esc(k.pesan || "") + (k.tindakan ? '<br><b>Yang perlu dilakukan</b> (' + esc(k.siapa || "—") + '): ' + esc(k.tindakan) : '')
+    + '</div></div>';
 }
 function segarkanVonnyCek(){
   LANJUT.vonnycek.dimuat = false;
@@ -10926,6 +10963,7 @@ function formCekVonny(s){
   var po = Array.isArray(s.purchase_orders) ? s.purchase_orders[0] : s.purchase_orders;   /* #36 */
   var lines = (s.sales_order_lines || []).filter(function(l){ return !l.batal && qtyEfektif(l) > 0; })   /* #18 */
                 .slice().sort(function(a,b){ return (a.urut||0)-(b.urut||0); });
+  var V = LANJUT.vonnycek, kelayakanSp = V.kelayakan ? (V.kelayakan[s.id] || null) : null;   /* #50 */
   var h = '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, tglTampil(s.tanggal))
     + tile("Nilai", rp(r ? r.grand_total : null), ketPpn(r))   /* #30 */
@@ -10966,6 +11004,7 @@ function formCekVonny(s){
     + '<div class="kotak" style="border:1px solid #c99a2e;background:#fbf6e9;margin-top:12px"><div class="kotak-isi">'
     +   '<b>Cek kelayakan Vonny.</b> Loloskan supaya SP masuk ke Pengiriman, atau tahan dengan alasan.'
     +   (s.vonny_ok === false && s.vonny_alasan ? '<br><span class="muted">Sebelumnya ditahan — ' + esc(s.vonny_alasan) + '</span>' : '')
+    +   '<div id="vc-kelayakan">' + kotakKelayakan(kelayakanSp) + '</div>'   /* #50 */
     +   (tanpaPelanggan   /* #37 */
         ? '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div><b>' + esc(s.kepada || "Pelanggan ini")
           + '</b> belum tertaut ke data pelanggan. Saat diloloskan, namanya dicocokkan ke data pelanggan; kalau belum ada, '
@@ -10989,7 +11028,35 @@ function formCekVonny(s){
   bukaLaci("Cek kelayakan Vonny — " + s.no_sp);
   $("btn-vc-tutup").addEventListener("click", tutupLaci);
   if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
+  /* #50: tombol loloskan dikunci selama SP belum bisa diloloskan; No. HP / alamat yang diketik diperiksa langsung
+     (cek_kelayakan_vonny dengan isian laci) supaya Vonny tahu hasilnya SEBELUM menekan tombol. */
+  function pasangKelayakan(k){
+    kelayakanSp = k || null;
+    if ($("vc-kelayakan")) $("vc-kelayakan").innerHTML = kotakKelayakan(kelayakanSp);
+    var b = $("btn-vc-ok");
+    if (b) { b.disabled = !!(kelayakanSp && !kelayakanSp.siap);
+             b.title = b.disabled ? "Bereskan dulu: " + (kelayakanSp.pesan || "") : ""; }
+  }
+  pasangKelayakan(kelayakanSp);
+  var tCek = null, giliranCek = 0;
+  function cekLangsung(){
+    if (!V.kelayakan) return;   /* database lama tanpa berkas 120 */
+    clearTimeout(tCek);
+    tCek = setTimeout(function(){
+      var g = ++giliranCek;
+      api("POST", "/rpc/cek_kelayakan_vonny", { p_so: s.id,
+            p_hp: tanpaPelanggan ? (nilaiForm("vk_hp") || null) : null,
+            p_alamat: tanpaPelanggan ? (nilaiForm("vk_alamat") || null) : null })
+        .then(function(r){ if (g === giliranCek && $("btn-vc-ok")) pasangKelayakan(Array.isArray(r) ? r[0] : r); })
+        .catch(function(){});
+    }, 400);
+  }
+  ["vk_hp","vk_alamat"].forEach(function(n){
+    var el = $("f_" + n);
+    if (el) el.addEventListener("input", cekLangsung);
+  });
   $("btn-vc-ok").addEventListener("click", function(){
+    if (kelayakanSp && !kelayakanSp.siap) { tampilPesan(esc("Belum bisa diloloskan: " + (kelayakanSp.pesan || ""))); return; }
     var kat = perluKat ? nilaiForm("vk_kat") : null, hasilLengkapi = null;
     if (perluKat && !kat) { tampilPesan("Isi kategori customer dulu sebelum SP diloloskan."); return; }
     sibuk(true);
@@ -11004,7 +11071,7 @@ function formCekVonny(s){
       .then(function(r){ hasilLengkapi = r; return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
       .then(function(){ tutupLaci(); toast("SP " + s.no_sp + " diloloskan — keluar dari Double Check dan masuk ke Pengiriman."
           + ketHasilLengkapi(hasilLengkapi, kat)); segarkanVonnyCek(); })   /* #37: hasil pencocokan pelanggan */
-      .catch(function(e){ tampilPesan(esc(e.message)); })
+      .catch(function(e){ tampilPesan(esc(e.message)); cekLangsung(); })   /* #50: keadaan terbaru ditampilkan lagi */
       .then(function(){ sibuk(false); });
   });
   $("btn-vc-tahan").addEventListener("click", function(){

@@ -84,7 +84,7 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 
 | # | Ringkas | Status |
 |---|---|---|
-| 50 | Cek Vonny: layar memanggil `lengkapi_pelanggan_sp` dulu; bila ditolak (HP kosong/format/bentrok, nama milik sales lain) `putuskan_vonny_cek` tak pernah dipanggil → SP tetap di Double Check (log DEV 2 Okt) | tanya: lolos tanpa tautan utk kasus HP; HP wajib di form SP |
+| 50 | Cek Vonny: `cek_kelayakan_vonny` (berkas 120, baca saja) memeriksa tiap SP di Double Check dengan syarat yang sama dengan putuskan_vonny_cek + lengkapi_pelanggan_sp + buat_pelanggan_baru. Daftar: kartu "Belum bisa diloloskan" + alasan merah per SP + "perlu: Vonny / owner-GM / GM / sales". Laci: kotak status, cek langsung saat mengetik No. HP/alamat, tombol loloskan terkunci sampai beres (Tahan tetap bisa). Keputusan Hannes: SP tetap tidak lolos sebelum beres — Vonny diberi tahu alasannya | **selesai (DB 120 + FE)**; pertanyaan no. 2 (HP wajib di form SP) belum dijawab |
 | 51 | Form SP tidak menampilkan komisi; sales baru lihat di tab Komisi › Belum bisa klaim. Bug: `gm_pct` utk baris di bawah list diabaikan bila SP tidak telat (SP 007/010/011/015-IX: komisi 0) | tanya: maksud "tampilkan"? perbaiki gm_pct? |
 | 52 | Muat ulang diam-diam saat pindah tab, klik tab yang sama, jendela kembali dilihat (visibilitychange/focus/pageshow), dan tombol **Muat ulang** di header. Data lama tetap tampil; gambar ulang ditunda saat mengetik / laci terbuka / form PO-SP-penawaran terisi | **selesai (FE)**, lihat catatan #52 |
 | 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
