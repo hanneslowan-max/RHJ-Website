@@ -619,7 +619,10 @@
     :root{--rail-w:58px}
     .head-in{padding:13px 0}
     .head-name{font-size:17px}
-    .head-segar-teks{display:none}   /* #52: di HP cukup ikon */
+    .head-segar-teks{display:none}   /* #52: di HP cukup ikon, di pojok kanan atas judul */
+    .head-in{position:relative}
+    .head-segar{position:absolute;top:11px;right:0;margin:0}
+    .head-name{padding-right:44px}
     td,th{padding:11px 12px}
     td{font-size:12.5px}
     .tile b{font-size:22px}
@@ -1413,7 +1416,7 @@ function muatCrm(paksa){
   var janji = [ api("GET", q) ];
   if (!CRM.rep.length) janji.push(api("GET", "/sales_reps?select=*&order=nama"));
   return Promise.all(janji).then(function(r){
-    if (awal && !CRM.dimuat) { CRM.memuat = false; return muatCrm(true); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+    if (awal && !CRM.dimuat) { CRM.memuat = false; SEGAR.dibatalkan++; return muatCrm(true); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     CRM.lead = r[0] || [];
     if (r[1]) CRM.rep = r[1] || [];
     CRM.dimuat = true; CRM.memuat = false;
@@ -3043,8 +3046,7 @@ function apiSemua(jalur){
    diam-diam (muatSemuaDiam) memakai jalur yang sama tanpa penghalang layar. Nomor gen menjaga agar
    hasil tarikan yang lebih tua tidak menimpa yang lebih baru. */
 var MUAT_SEMUA = { gen: 0, terapan: 0, jalan: null, terakhir: 0 };
-function muatSemua(diam){
-  if (diam) return muatSemuaDiam();   /* segarkanUsulan: muatSemua(true) = tanpa penghalang layar */
+function muatSemua(){
   sibuk(true, "Memuat data…");
   var g = ++MUAT_SEMUA.gen;
   return ambilSemua().then(function(d){
@@ -3692,7 +3694,9 @@ function pindahTab(nama){
    Tanpa entri (kas, laporan, report) tab tetap memakai perilaku lama.
    ═══════════════════════════════════════════════════════════════════════ */
 var SEGAR = { siap: false, jalan: {}, terakhir: {}, basi: {}, tunda: null, jedaBawaan: 20000,
-              jedaSemuaLatar: 300000 };
+              jedaSemuaLatar: 300000,
+              dibatalkan: 0,   /* naik tiap loader menarik lagi karena ditandai ulang selagi menarik (simpan/saringan) */
+              tekan: false };  /* tombol mouse / jari sedang menekan → jangan ganti DOM di bawahnya */
 var GRUP_SEMUA = ["ringkas","order","bayar","tindak","harga","produk","sinkron","pengguna","riwayat"];
 function tandaiBasi(tab){
   if (!tab) return;
@@ -3700,9 +3704,8 @@ function tandaiBasi(tab){
   SEGAR.basi[tab] = true;
 }
 function isiTeks(v){ return String(v === null || v === undefined ? "" : v).trim() !== ""; }
-function barisDiisi(b){
-  return !!(b && (b.kode || b.set_id || b.setInline || b.usulanTeks || isiTeks(b.ketikan)
-                  || isiTeks(b.qty) || Number(b.harga) > 0));
+function barisDiisi(b){   /* qty sengaja tidak dihitung: baris PO baru sudah berisi qty 1 */
+  return !!(b && (b.kode || b.set_id || b.setInline || b.usulanTeks || isiTeks(b.ketikan) || Number(b.harga) > 0));
 }
 var MUAT_DIAM = {
   crm: { boleh: function(){ return CRM.dimuat && !CRM.memuat; }, kunci: function(){ return String(CRM.hari); },
@@ -3718,13 +3721,13 @@ var MUAT_DIAM = {
                tunda: function(){ var f = LANJUT.penawaran.form;
                  return !!f && !!(f.customer_id || f.baru || isiTeks(f.kepada) || isiTeks(f.catatan)
                                   || (f.baris || []).some(barisDiisi)); } },
-  po: { kunciJalan: "alur", boleh: function(){ return ALUR.dimuatPo && ALUR.dimuatUsul; },
+  po: { boleh: function(){ return ALUR.dimuatPo && ALUR.dimuatUsul; },
         muat: function(){ return Promise.all([muatPo(true), muatUsul(true)]); }, gambar: function(){ panelPo(); },
         tunda: function(){ var f = ALUR.poForm;
           return !!f && !!(isiTeks(f.no_po) || f.customer_id || isiTeks(f.nama_customer) || isiTeks(f.hp)
                            || isiTeks(f.alamat) || isiTeks(f.catatan) || f.lampiranBerkas
                            || (f.baris || []).some(barisDiisi)); } },
-  sp: { kunciJalan: "alur", boleh: function(){ return ALUR.dimuatSp && ALUR.dimuatPo && ALUR.dimuatUsul; },
+  sp: { boleh: function(){ return ALUR.dimuatSp && ALUR.dimuatPo && ALUR.dimuatUsul; },
         muat: function(){ return Promise.all([muatSp(true), muatPo(true), muatUsul(true)]); }, gambar: function(){ panelSp(); },
         tunda: function(){ var f = ALUR.spForm;
           return !!f && !!(f.po_id || f.customer_id || isiTeks(f.kepada) || (f.baris || []).length); } },
@@ -3783,40 +3786,59 @@ function muatUlangDiam(opsi){
   /* muatSemua() biasa (login, sesudah simpan) juga menyegarkan grup _semua */
   var terakhir = Math.max(SEGAR.terakhir[kj] || 0, kj === "_semua" ? MUAT_SEMUA.terakhir : 0);
   if (!opsi.manual && !SEGAR.basi[tab] && kini - terakhir < jeda) return Promise.resolve();
-  /* Data belum pernah dimuat / sedang dimuat terlihat oleh panelnya sendiri → biarkan jalur itu. */
-  if (def.boleh && !def.boleh()) { SEGAR.terakhir[kj] = kini; return Promise.resolve(); }
+  /* Data belum pernah dimuat / sedang dimuat terlihat oleh panelnya sendiri → biarkan jalur itu.
+     Tombol Muat ulang: panelnya digambar lagi — bila tarikan terakhir gagal, panel mencobanya lagi. */
+  if (def.boleh && !def.boleh()) {
+    SEGAR.terakhir[kj] = kini;
+    if (opsi.manual) { try { def.gambar(); } catch (e) {} }
+    return Promise.resolve();
+  }
   /* tarikan bersama (grup _semua, po+sp) menyegarkan semua tab anggotanya */
   Object.keys(MUAT_DIAM).forEach(function(t){ if ((MUAT_DIAM[t].kunciJalan || t) === kj) SEGAR.basi[t] = false; });
-  var k = def.kunci ? def.kunci() : "";
+  var k = def.kunci ? def.kunci() : "", c0 = SEGAR.dibatalkan;
   var p = (sedangSegar || Promise.resolve())
     .then(function(){ return def.muat(); })
-    .then(function(){ if (def.kunci && def.kunci() !== k) return def.muat(); })   /* saringan berganti di tengah jalan */
+    .then(function(){
+      /* saringan berganti di tengah jalan dan loader-nya belum menarik ulang sendiri → tarik sekali lagi */
+      if (def.kunci && def.kunci() !== k && SEGAR.dibatalkan === c0) return def.muat();
+    })
     .then(function(){
       SEGAR.terakhir[kj] = Date.now();
-      if (tabAktif === tab) gambarDiam(tab);
+      /* tindakan pengguna (simpan / ganti saringan) terjadi selagi menarik → ia menunggu daftar baru:
+         gambar walau sedang mengetik di kotak cari (panelnya memulihkan fokus sendiri) */
+      var dipaksa = SEGAR.dibatalkan !== c0 || (def.kunci && def.kunci() !== k);
+      if (tabAktif === tab) { try { gambarDiam(tab, { paksa: dipaksa }); } catch (e) { SEGAR.basi[tab] = true; } }
     }, function(e){
       SEGAR.basi[tab] = true;
       if (opsi.manual) toast(e && e.message ? e.message : "Gagal memuat ulang.", true);
     })
-    .then(function(){ SEGAR.jalan[kj] = null; });
+    .then(function(){ SEGAR.jalan[kj] = null; }, function(){ SEGAR.jalan[kj] = null; });
   SEGAR.jalan[kj] = p;
   return p;
 }
-function gambarDiam(tab){
+function gambarDiam(tab, opsi){
+  opsi = opsi || {};
   var def = MUAT_DIAM[tab], panel = $("p-" + tab), a = document.activeElement;
   if (!def || !panel || panel.hidden || tabAktif !== tab) return;
   var ketik = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && (panel.contains(a) || $("head-aksi").contains(a));
-  if (!$("laci").hidden || ketik || panel.querySelector(".cari-hasil:not([hidden])") || (def.tunda && def.tunda())) {
+  if (!$("laci").hidden || SEGAR.tekan || (def.tunda && def.tunda())
+      || (!opsi.paksa && (ketik || panel.querySelector(".cari-hasil:not([hidden])")))) {
     SEGAR.tunda = tab; return;
   }
   SEGAR.tunda = null;
   var gulir = Array.prototype.map.call(panel.querySelectorAll(".tw[id]"), function(t){ return [t.id, t.scrollTop, t.scrollLeft]; });
   var y = window.scrollY;
+  /* gambar ulang yang dipaksa saat orang mengetik (mis. kotak cari): fokus & kursor dikembalikan */
+  var fokus = ketik && a.id ? { id: a.id, a: a.selectionStart, b: a.selectionEnd } : null;
   gambarUlangAman(function(){
     if (tabAktif !== tab) return;
     def.gambar();
     gulir.forEach(function(x){ var t = $(x[0]); if (t) { t.scrollTop = x[1]; t.scrollLeft = x[2]; } });
     window.scrollTo(window.scrollX, y);
+    if (fokus) {
+      var el = $(fokus.id);
+      if (el) { el.focus(); try { if (fokus.a !== null && fokus.a !== undefined) el.setSelectionRange(fokus.a, fokus.b); } catch (e) {} }
+    }
   });
 }
 /* Gambar ulang yang tertunda dijalankan begitu orang selesai mengetik / laci ditutup. */
@@ -3835,7 +3857,12 @@ function pasangMuatUlangDiam(){
   });
   window.addEventListener("focus", function(){ muatUlangDiam(); });
   window.addEventListener("pageshow", function(e){ if (e.persisted) muatUlangDiam(); });
-  document.addEventListener("focusout", function(){ setTimeout(jalankanTundaSegar, 0); });
+  /* > 150 ms: kotak hasil cari (.cari-hasil) disembunyikan 150 ms sesudah blur */
+  document.addEventListener("focusout", function(){ setTimeout(jalankanTundaSegar, 250); });
+  document.addEventListener("pointerdown", function(){ SEGAR.tekan = true; }, true);
+  ["pointerup","pointercancel"].forEach(function(ev){
+    document.addEventListener(ev, function(){ SEGAR.tekan = false; setTimeout(jalankanTundaSegar, 250); }, true);
+  });
   var b = $("btn-muat-ulang");
   if (b) b.addEventListener("click", function(){
     if (b.classList.contains("putar")) return;
@@ -4240,7 +4267,7 @@ function muatPo(paksa){
      ia ikut menyempit, PO umur tiga hari hilang dari pilihan SP tanpa
      pesan apa pun. Begitu juga nomor dobel — yang justru perlu ketahuan
      adalah nomor yang dipakai ulang beberapa minggu kemudian. */
-  return Promise.all([
+  var janji = Promise.all([
       kosongkan ? Promise.resolve([]) : api("GET", q),
       repAlur(),
       kosongkan ? Promise.resolve([])
@@ -4251,7 +4278,7 @@ function muatPo(paksa){
       api("GET", "/po_batal_ringkas?select=*&batal_sebagian=is.true").catch(function(){ return []; })
     ])
     .then(function(r){
-      if (g !== ALUR.genPo) return null;   /* #52 */
+      if (g !== ALUR.genPo) return ALUR.janjiPo;   /* #52: kalah oleh tarikan yang lebih baru → tunggu hasil itu */
       ALUR.poBatal = {};
       (r[5] || []).forEach(function(x){ ALUR.poBatal[x.po_id] = x; });
       var ring = {};
@@ -4286,12 +4313,14 @@ function muatPo(paksa){
           api("GET", PO_KOLOM + "&id=in.(" + ids.join(",") + ")&order=tanggal.desc,id.desc"),
           api("GET", "/po_ringkas?select=*" + dalam)
         ])).then(function(bb){
-          if (g !== ALUR.genPo) return;   /* #52 */
+          if (g !== ALUR.genPo) return ALUR.janjiPo;   /* #52 */
           var b = bb.slice(susulan.length);
           (b[1] || []).forEach(function(x){ ring[x.po_id] = x; });
           ALUR.poBelum = (b[0] || []).map(function(p){ p.ringkas = ring[p.id] || null; return p; });
         });
     });
+  ALUR.janjiPo = janji;
+  return janji;
 }
 var SP_KOLOM = "/sales_orders?select=*,sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,harga_list,ehc_item,jenis,batal,batal_alasan,qty_batal,batal_oleh,batal_pada)";   /* #18: batal baris (+qty_batal: batal sebagian) */
 function muatSp(paksa){
@@ -4328,7 +4357,7 @@ function muatSp(paksa){
   q += "&order=tanggal.desc,id.desc";
   if (cari) q += "&limit=" + (ALUR.spBatasCari + 1);
 
-  return Promise.all([
+  var janji = Promise.all([
       kosongkan ? Promise.resolve([]) : api("GET", q),
       repAlur(),
       /* Angka "menunggu GM" dibaca lepas dari jendela DAN dari saringan
@@ -4343,31 +4372,36 @@ function muatSp(paksa){
       api("GET", "/sp_menunggu_po?select=*&order=umur_hari.desc&limit=200")
     ])
     .then(function(r){
-      if (g !== ALUR.genSp) return null;   /* #52 */
+      if (g !== ALUR.genSp) return ALUR.janjiSp;   /* #52: kalah oleh tarikan yang lebih baru → tunggu hasil itu */
       var baris = r[0] || [];
-      ALUR.spCariTerpotong = !!cari && baris.length > ALUR.spBatasCari;
-      if (ALUR.spCariTerpotong) baris = baris.slice(0, ALUR.spBatasCari);
-      ALUR.sp = baris;
-      /* Satu lebih banyak dari batas sengaja diminta: kalau yang kembali
-         melebihi batas, angkanya ditulis dengan "+" — bukan dibulatkan ke
-         bawah seolah itu jumlah sebenarnya. */
-      var mg = r[2] || [];
-      ALUR.spMenungguLebih = mg.length > ALUR.spBatasCari;
-      ALUR.spMenunggu = ALUR.spMenungguLebih ? ALUR.spBatasCari : mg.length;
-      ALUR.spTanpaPo = r[3] || [];
-      ALUR.dimuatSp = true;
-      if (!baris.length) return null;
+      var terpotong = !!cari && baris.length > ALUR.spBatasCari;
+      if (terpotong) baris = baris.slice(0, ALUR.spBatasCari);
       /* Ringkasannya diambil per id, bukan seluruh so_ringkas. Menarik
          seluruh view tiap kali panel dibuka berarti bebannya tumbuh
-         seumur perusahaan, bukan seukuran yang sedang dilihat. */
+         seumur perusahaan, bukan seukuran yang sedang dilihat.
+         #52: semua ditulis SEKALIGUS sesudah ringkasan datang — tarikan yang gagal di tengah tidak
+         meninggalkan daftar tanpa ringkasan. */
       var ids = baris.map(function(o){ return o.id; });
-      return api("GET", "/so_ringkas?select=*&so_id=in.(" + ids.join(",") + ")")
+      return (ids.length ? api("GET", "/so_ringkas?select=*&so_id=in.(" + ids.join(",") + ")") : Promise.resolve([]))
         .then(function(x){
+          if (g !== ALUR.genSp) return ALUR.janjiSp;   /* #52 */
           var ring = {};
           (x || []).forEach(function(y){ ring[y.so_id] = y; });
-          baris.forEach(function(o){ o.ringkas = ring[o.id] || null; });   /* #52: baris tarikan ini sendiri */
+          baris.forEach(function(o){ o.ringkas = ring[o.id] || null; });
+          ALUR.spCariTerpotong = terpotong;
+          ALUR.sp = baris;
+          /* Satu lebih banyak dari batas sengaja diminta: kalau yang kembali
+             melebihi batas, angkanya ditulis dengan "+" — bukan dibulatkan ke
+             bawah seolah itu jumlah sebenarnya. */
+          var mg = r[2] || [];
+          ALUR.spMenungguLebih = mg.length > ALUR.spBatasCari;
+          ALUR.spMenunggu = ALUR.spMenungguLebih ? ALUR.spBatasCari : mg.length;
+          ALUR.spTanpaPo = r[3] || [];
+          ALUR.dimuatSp = true;
         });
     });
+  ALUR.janjiSp = janji;
+  return janji;
 }
 
 /* ── pencarian pelanggan: 5.395 baris, jadi disaring di server ─────────
@@ -5674,11 +5708,18 @@ function bolehUbahLangsung(){ return ["owner","gm"].indexOf(saya.peran) > -1; }
 function muatUsul(paksa){
   if (ALUR.dimuatUsul && !paksa) return Promise.resolve();
   var g = ALUR.genUsul = (ALUR.genUsul || 0) + 1;   /* #52 */
-  return api("GET", "/usul_ubah?select=id,jenis,ref_id,alasan,diajukan_pada"
+  var janji = api("GET", "/usul_ubah?select=id,jenis,ref_id,alasan,diajukan_pada"
                     + "&status=eq.menunggu&order=diajukan_pada.desc&limit=500")
-    .then(function(r){ if (g === ALUR.genUsul) { ALUR.usul = r || []; ALUR.dimuatUsul = true; } })
-    /* #52: gagal saat muat ulang → daftar lama tetap (bukan dikosongkan) */
-    .catch(function(){ if (g === ALUR.genUsul) { if (!ALUR.dimuatUsul) ALUR.usul = []; ALUR.dimuatUsul = true; } });
+    .then(function(r){
+      if (g !== ALUR.genUsul) return ALUR.janjiUsul;   /* #52: tunggu tarikan yang lebih baru */
+      ALUR.usul = r || []; ALUR.dimuatUsul = true;
+    }, function(){
+      if (g !== ALUR.genUsul) return ALUR.janjiUsul;
+      if (!ALUR.dimuatUsul) ALUR.usul = [];   /* #52: gagal saat muat ulang → daftar lama tetap */
+      ALUR.dimuatUsul = true;
+    });
+  ALUR.janjiUsul = janji;
+  return janji;
 }
 function usulMenunggu(jenis, ref){
   return (ALUR.usul || []).filter(function(u){
@@ -8313,7 +8354,7 @@ function muatPelanggan(){
     janji.push(apiHalaman("/customers?select=id&blacklist=is.true", 0, 0));
   }
   return Promise.all(janji).then(function(r){
-    if (awal && !P.dimuat) { P.memuat = false; return muatPelanggan(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+    if (awal && !P.dimuat) { P.memuat = false; SEGAR.dibatalkan++; return muatPelanggan(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     P.baris = r[0].baris; P.total = r[0].total;
     if (r.length > 1) P.ringkas = { semua:r[1].total, pipeline:r[2].total, master:r[3].total, hitam:r[4].total };
     P.dimuat = true; P.memuat = false;
@@ -8902,7 +8943,7 @@ function muatPenawaran(){
     apiSemua("/spesifikasi_sales?select=product_id,sales_rep_id,spesifikasi&order=product_id,sales_rep_id").catch(function(){ return []; })
   ])
     .then(function(h){
-      if (awal && !P.dimuat) { P.memuat = false; return muatPenawaran(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+      if (awal && !P.dimuat) { P.memuat = false; SEGAR.dibatalkan++; return muatPenawaran(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
       P.baris = h[0] || [];
       P.spek = {};
       (h[2] || []).forEach(function(x){ P.spek[x.product_id + "|" + x.sales_rep_id] = x.spesifikasi; });
@@ -10146,9 +10187,10 @@ function muatPerforma(){
         + syarat + "&limit=5000"),
     repAlur()
   ]).then(function(r){
-    if (awal && !P.dimuat) { P.memuat = false; return muatPerforma(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+    if (awal && !P.dimuat) { P.memuat = false; SEGAR.dibatalkan++; return muatPerforma(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     P.lead = r[0] || [];
     return ringkasSoUntuk(r[1] || []).then(function(sp){
+      if (awal && !P.dimuat) { P.memuat = false; SEGAR.dibatalkan++; return muatPerforma(); }   /* #52 */
       P.sp = sp; P.dimuat = true; P.memuat = false;
     });
   }).catch(function(e){ P.memuat = false; throw e; });
@@ -10659,7 +10701,7 @@ function muatHalaman(H, path, syaratTetap, urut){
   if (H.rep) q += "&sales_rep_id=eq." + encodeURIComponent(H.rep);
   q += "&order=" + (urut || (H.tglKol + ".desc.nullslast"));
   return apiHalaman(q, 0, BATAS_TARIK - 1).then(function(r){
-    if (awal && !H.dimuat) { H.memuat = false; return muatHalaman(H, path, syaratTetap, urut); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+    if (awal && !H.dimuat) { H.memuat = false; SEGAR.dibatalkan++; return muatHalaman(H, path, syaratTetap, urut); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     H.total = r.total;
     H.dipotong = (H.total !== null && H.total > r.baris.length);
     H.baris = r.baris || []; H.dimuat = true; H.memuat = false;
@@ -10757,7 +10799,7 @@ function muatVonnyCek(){
     repAlur().catch(function(){ return []; })   /* nama sales di kolom Sales (dulu tampil "—" di tab ini) */
   ])
     .then(function(x){
-      if (awal && !V.dimuat) { V.memuat = false; return muatVonnyCek(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+      if (awal && !V.dimuat) { V.memuat = false; SEGAR.dibatalkan++; return muatVonnyCek(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
       V.baris = x[0]; V.riwayat = x[1] || []; V.dimuat = true; V.memuat = false;
     })
     .catch(function(e){ V.memuat = false; throw e; });
@@ -11473,10 +11515,11 @@ function muatLunas(){
   q += "&order=" + L.tglKol + ".desc.nullslast,id.desc";
   return Promise.all([ apiHalaman(q, 0, BATAS_TARIK - 1), repAlur(), muatRepCash() ])   /* #22 */
     .then(function(r){
-      if (awal && !L.dimuat) { L.memuat = false; return muatLunas(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+      if (awal && !L.dimuat) { L.memuat = false; SEGAR.dibatalkan++; return muatLunas(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
       L.total = r[0].total;
       L.dipotong = (L.total !== null && L.total > r[0].baris.length);
       return ringkasSoUntuk(r[0].baris || []).then(function(d){
+        if (awal && !L.dimuat) { L.memuat = false; SEGAR.dibatalkan++; return muatLunas(); }   /* #52 */
         L.baris = d; L.dimuat = true; L.memuat = false;
       });
     }).catch(function(e){ L.memuat = false; throw e; });
@@ -11880,6 +11923,7 @@ function muatEhc(){
   var E = LANJUT.ehc;
   if (E.memuat) return Promise.resolve();
   E.memuat = true;
+  var awal = E.dimuat;   /* #52 */
   return Promise.all([
     api("GET", "/ehc_belum_klaim?select=*&bisa_klaim=is.true&total_ehc=gt.0"
              + "&order=tgl_lunas.desc,so_id.desc&limit=200"),
@@ -11891,6 +11935,7 @@ function muatEhc(){
     api("GET", "/ehc_belum_klaim?select=so_id&bisa_klaim=is.true&total_ehc=eq.0&limit=200")
       .catch(function(){ return null; })
   ]).then(function(r){
+    if (awal && !E.dimuat) { E.memuat = false; SEGAR.dibatalkan++; return muatEhc(); }   /* #52 */
     E.siap = r[0] || [];
     E.tanpaEhc = r[2] === null ? null : (r[2] || []).length;
     E.dimuat = true; E.memuat = false;
@@ -12598,11 +12643,13 @@ function muatKomisi(){
   var K = LANJUT.komisi;
   if (K.memuat) return Promise.resolve();
   K.memuat = true;
+  var awal = K.dimuat;   /* #52 */
   return Promise.all([
     api("GET", "/komisi_belum_klaim?select=*&bisa_klaim=is.true&order=tgl_lunas.desc,so_id.desc&limit=200"),
     api("GET", "/sales_rep_rekening?select=sales_rep_id,bank,no_rekening,atas_nama,diubah_pada"),
     repAlur()
   ]).then(function(r){
+    if (awal && !K.dimuat) { K.memuat = false; SEGAR.dibatalkan++; return muatKomisi(); }   /* #52 */
     K.siap = r[0] || [];
     K.rek  = {};
     (r[1] || []).forEach(function(x){ K.rek[x.sales_rep_id] = x; });
@@ -13671,6 +13718,7 @@ function muatGm(){
   var G = LANJUT.gm;
   if (G.memuat) return Promise.resolve();
   G.memuat = true;
+  var awal = G.dimuat;   /* #52 */
   /* Usulan item ikut ditarik di sini. Ia TIDAK ada di view antrean_gm —
      tabelnya lain (usulan_produk) dan keputusannya lain (dua tombol, bukan
      satu) — tapi ia menunggu orang yang sama, jadi ia dimuat bersamaan
@@ -13679,8 +13727,10 @@ function muatGm(){
     api("GET", "/antrean_gm?select=*&order=tanggal.desc"),
     repAlur(),
     muatUsulan()
-  ]).then(function(r){ G.baris = r[0] || []; G.dimuat = true; G.memuat = false; })
-    .catch(function(e){ G.memuat = false; throw e; });
+  ]).then(function(r){
+    if (awal && !G.dimuat) { G.memuat = false; SEGAR.dibatalkan++; return muatGm(); }   /* #52 */
+    G.baris = r[0] || []; G.dimuat = true; G.memuat = false;
+  }).catch(function(e){ G.memuat = false; throw e; });
 }
 
 function panelGmAntre(){
@@ -14213,7 +14263,7 @@ function muatKhusus(){
     return { id: st, q: "/harga_khusus_lengkap?select=id&status=eq." + st }; }))
     .then(function(c){ K.cacahStatus = c; }).catch(function(){ K.cacahStatus = null; });
   return Promise.all([apiHalaman(q, 0, BATAS_TARIK - 1), cacah]).then(function(rr){
-    if (awal && !K.dimuat) { K.memuat = false; return muatKhusus(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+    if (awal && !K.dimuat) { K.memuat = false; SEGAR.dibatalkan++; return muatKhusus(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     var r = rr[0];
     K.total = r.total;
     K.dipotong = (K.total !== null && K.total > r.baris.length);
@@ -16383,7 +16433,7 @@ function tutupLaci(){
   $("tirai").hidden = true; $("laci").hidden = true;
   $("laci-form").innerHTML = ""; $("laci-kaki").innerHTML = "";
   document.body.style.overflow = "";
-  setTimeout(jalankanTundaSegar, 0);   /* #52 */
+  setTimeout(jalankanTundaSegar, 250);   /* #52 */
 }
 $("tirai").addEventListener("click", tutupLaci);
 $("laci-tutup").addEventListener("click", tutupLaci);
@@ -17689,7 +17739,7 @@ function muatUsulan(){
   USULAN.memuat = true;
   return api("GET", "/usulan_produk?select=*&order=dibuat_pada.desc")
     .then(function(r){ USULAN.baris = r || []; USULAN.dimuat = true; USULAN.memuat = false; })
-    .catch(function(){ USULAN.memuat = false; USULAN.dimuat = true; USULAN.baris = []; });
+    .catch(function(){ USULAN.memuat = false; if (!USULAN.dimuat) USULAN.baris = []; USULAN.dimuat = true; });   /* #52: gagal muat ulang → daftar lama tetap */
 }
 
 function blokUsulanProduk(){

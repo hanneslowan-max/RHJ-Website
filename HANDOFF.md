@@ -102,6 +102,15 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 - `muatSemua(diam)`: `true` = tanpa layar "Memuat data…" (dipakai `segarkanUsulan`). Produk & price list juga disegarkan
   di latar tiap ≥ 5 menit saat pindah tab.
 - Kait uji `window.__segar` hanya di localhost/file:.
+- Review adversarial #52 (workflow 4 reviewer + verifikator per temuan): 26 temuan terkonfirmasi (±13 unik) — semua
+  diperbaiki: nomor gen PO/SP/usul kini mengembalikan janji tarikan terbaru (dulu bisa ping-pong tanpa akhir & panel
+  macet "Memuat PO…"), PO/SP tidak lagi berbagi kunci, form PO kosong tidak menahan gambar ulang (qty bawaan 1),
+  gambar ulang ditunda selama mouse/jari menekan & dilanjutkan 250 ms sesudah blur, gambar ulang yang dipicu tindakan
+  pengguna (simpan/cari) tetap jalan sambil mengembalikan fokus kotak cari, rantai muat dibersihkan walau menggambar
+  galat, tombol Muat ulang mencoba lagi bila tarikan terakhir gagal, muatSp menulis sekaligus sesudah ringkasan,
+  muatLunas/muatPerforma diperiksa lagi sesudah ringkasan, segarkanUsulan kembali ke muatSemua biasa, pengaman yang
+  sama di muatGm/muatEhc/muatKomisi (2 baris) & muatUsulan tidak mengosongkan daftar saat gagal, tombol di HP pindah
+  ke pojok kanan atas. Uji layar: 14/14 (temuan) + 31/31 (#52) + 31/31 (#56 #59) + 36/36 (119).
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
