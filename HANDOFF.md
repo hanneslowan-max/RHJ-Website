@@ -2,6 +2,62 @@
 
 Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Hannes memutuskan).
 
+## Sesi EHC & komisi (branch `claude/bold-bardeen-5r2fg8`, mulai 6 Okt 2026) — SEDANG BERJALAN
+
+### Koordinasi dengan sesi lain (disetujui Hannes 6 Okt)
+- Sesi "Lanjut revisi 50–61" (branch `claude/gracious-carson-f61fhq`) mengerjakan 50–53 dan 55–60.
+  **#54 dan #61 dipindah ke sesi EHC & komisi.**
+- Nomor migrasi: sesi 50–61 memakai **db/120–139**; sesi EHC & komisi memakai **db/140 ke atas**.
+  DEV sudah menjalankan s.d. 119 (118 Ahen→Hendri, 119 pelanggan sales nonaktif + Office tanpa komisi —
+  keduanya dari sesi 50–61). Draf `db/118-perbaikan-audit-keamanan.sql` di branch `claude/epic-maxwell-61a99g`
+  belum dijalankan dan nomornya sudah terpakai — beri nomor baru bila dipakai.
+- Sebelum `create or replace` fungsi apa pun, bandingkan dulu dengan definisi terbaru di DEV
+  (`pg_get_functiondef`) — sesi lain mungkin sudah mengubahnya. Bangun di atas versi DEV, jangan menimpa.
+- Objek yang dipegang sesi EHC & komisi: tabel `ehc_klaim*`, `komisi_klaim*`, `ehc_cepat_log`,
+  `transfer_pengajuan*`, `transfer_batch`, view `ehc_belum_klaim`, `kas_sales`, `ehc_cepat_siap`, RPC klaim
+  EHC/komisi/cepat/transfer, policy storage `rhj_ehc_bukti_*`/`rhj_komisi_bukti_*`; untuk #54 juga
+  `jaga_baris_sp_terkunci`, `sp_vonny_gugur_baris` (ehc_item), usul ubah/`putuskan_ubah`, `gm_konteks_keputusan`.
+  Rumus komisi (`so_baris_hitung`, `komisi_tier`, `komisi_hitung`) **tidak** diubah.
+
+### Keputusan Hannes — struktur EHC (6 Okt)
+- EHC = budget entertain customer yang disisihkan di SP; akun terpisah dari penjualan.
+- **Untuk apa:** (1) transfer langsung ke customer, (2) entertain (makan, ngopi, parcel, dll.), (3) ongkos bongkar
+  muat di gudang customer. **Cara bayar:** (1) transfer langsung ke customer, (2) kartu kredit perusahaan,
+  (3) sales bayar dulu → reimburse.
+- **EHC per SP = saldo.** Boleh dipakai berkali-kali lintas bulan selama komisi SP itu belum diklaim. Satu transaksi
+  boleh memotong beberapa SP (tiap SP maksimal sisa saldonya). Begitu komisi SP diklaim, EHC-nya tertutup dan sisa
+  saldo otomatis masuk **kas sales**. Sebelum klaim komisi, sales diberi peringatan sisa EHC yang akan pindah.
+- Setiap pemakaian menunjuk SP asal; penerimanya customer SP itu. **Untuk customer lain wajib persetujuan GM.**
+- Sales menyetor pemakaian kapan saja (dicicil): nominal, untuk apa, cara bayar, SP, **lampiran wajib** (bill /
+  bukti transfer) — mengubah ATURAN B "klaim EHC tidak memerlukan lampiran".
+- **Periode EHC:** setoran tgl 19 bulan lalu s/d tgl 18 bulan ini (WIB) = periode bulan ini; sesudah tgl 18 →
+  bulan berikutnya. Sesudah cutoff 18 **GM memeriksa dulu**, baru finance memproses **tgl 20**.
+- Entertain boleh sebelum customer bayar, tetapi **reimburse dan transfer ke customer baru diproses sesudah SP lunas**.
+- **Kartu kredit perusahaan:** finance (peran `finance`, akun orangnya belum ada di DEV) memasukkan baris statement
+  (tanggal, merchant, nominal); sales menunjuk SP + untuk apa + lampiran bill. Tidak menunggu SP lunas.
+- Setoran ditolak GM → kartu kredit: **dipotong dari komisi** sales itu yang berikutnya (kurang → terbawa ke
+  bulan berikutnya, tercatat sebagai utang sales); reimburse: tidak diganti, saldo SP kembali.
+  Saldo SP kurang: transfer/reimburse ditolak sistem (tambah SP); kartu kredit → kekurangannya dipotong dari komisi.
+- **EHC cepat + EHC dini digabung jadi satu fitur "EHC cepat" (darurat):** cair segera di luar jadwal, boleh
+  sebelum SP lunas, wajib alasan + lampiran + persetujuan GM per transaksi.
+- Data klaim EHC lama di DEV hanya latihan; migrasi tetap memindahkannya ke format baru (tidak dihapus).
+
+### Keputusan Hannes — struktur komisi (6 Okt)
+- Alur sama dengan EHC, tetapi uangnya ke rekening sales sendiri (rekening diisi finance).
+- **Periode komisi:** tgl 24 s/d **cutoff tgl 23**, GM memeriksa, finance transfer **tgl 25**.
+- Nominal tetap **dihitung sistem** (tier price list, flat 1% Riksa/Michael, >120 hari persen GM, Office 0% dari
+  berkas 119). Satu SP satu klaim, sesudah lunas. **Tanpa lampiran.**
+- **Transfer terpisah:** EHC (reimburse) tgl 20; komisi tgl 25 dikurangi potongan kartu kredit.
+- #61: sebelum cutoff, pemakaian EHC masih bisa diubah dan klaim komisi bisa diubah/cancel.
+- #54: sales boleh minta tambah/ubah EHC di SP di tahap mana pun selama komisi SP belum diklaim; lewat approval
+  GM, dan GM memilih persen komisi diubah atau tetap.
+
+### Rencana tahap
+1. Pemakaian EHC (multi per SP, alokasi ke beberapa SP, untuk apa, cara bayar, lampiran wajib, customer lain → GM,
+   saldo per SP). 2. Kartu kredit (input statement finance, potongan komisi). 3. Periode & pemeriksaan GM EHC
+   (cutoff 18, proses 20, tunggu lunas, EHC cepat). 4. Komisi (cutoff 23, transfer 25, potongan, tutup EHC → kas
+   sales, #61). 5. #54 edit EHC di SP. 6. Laporan finance.
+
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
 - **Revisi 29–49 selesai dikerjakan** di branch `claude/nice-cray-21r8g4` (belum di-merge, belum ada PR).
