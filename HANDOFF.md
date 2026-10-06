@@ -71,6 +71,11 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
      Skrip uji (scratchpad `uji/uji1.py` → `uji1.sql`, ±45 skenario per peran) juga sudah bebas DELETE.
   2. Sejak ±sore konektor Supabase menjawab `FGA Authentication Error. Unauthorized` untuk semua perintah —
      perlu Hannes menyambungkan ulang konektor Supabase.
+- **Saat merge dengan branch 50–61 (#52 muat ulang diam-diam):** di sana `muatEhc`/`muatKomisi`/`muatGm` diberi
+  pola `var awal = X.dimuat;` + di awal `.then` `if (awal && !X.dimuat) { X.memuat = false; SEGAR.dibatalkan++;
+  return muatX(); }`, dan registry `MUAT_DIAM` punya entri ehc/komisi/gm (ehc memanggil muatEhc + muatEhcHal +
+  cacah — nama fungsi itu tetap ada di versi baru). `muatEhc` versi sesi ini ditulis ulang → pasang ulang pola itu
+  saat merge; kas & laporan belum terdaftar di MUAT_DIAM (lihat HANDOFF branch itu, "Catatan #52 untuk sesi lain").
 - Langkah berikut begitu konektor pulih: jalankan `uji1.sql` (rollback) → perbaiki bila ada yang gagal →
   `apply_migration` 140 ke DEV → Hannes menjalankan 140b di SQL Editor DEV → uji multi-klaim per SP & reimburse →
   hapus tanda DRAF → commit.
