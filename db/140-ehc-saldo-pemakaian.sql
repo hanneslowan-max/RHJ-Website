@@ -743,9 +743,9 @@ begin
     v_cust := (p_data->>'customer_id')::bigint;
   exception when others then v_cust := null; end;
 
-  for a in select x.so_id, x.nominal, x.ord
-             from jsonb_to_recordset(v_alok) with ordinality as x(so_id bigint, nominal numeric, ord bigint)
-            order by x.ord loop
+  for a in select (e.v->>'so_id')::bigint as so_id, (e.v->>'nominal')::numeric as nominal, e.ord
+             from jsonb_array_elements(v_alok) with ordinality as e(v, ord)
+            order by e.ord loop
     select so.id, so.no_sp, so.batal, so.sales_rep_id, so.customer_id
       into s from public.sales_orders so where so.id = a.so_id;
     if not found then raise exception 'SP #% tidak ditemukan.', a.so_id using errcode = 'P0002'; end if;
@@ -908,9 +908,9 @@ begin
   end if;
 
   insert into public.ehc_klaim_alokasi (klaim_id, so_id, nominal)
-  select v_id, x.so_id, x.nominal
-    from jsonb_to_recordset(v_alok) with ordinality as x(so_id bigint, nominal numeric, ord bigint)
-   order by x.ord
+  select v_id, (e.v->>'so_id')::bigint, (e.v->>'nominal')::numeric
+    from jsonb_array_elements(v_alok) with ordinality as e(v, ord)
+   order by e.ord
   on conflict (klaim_id, so_id) do update set nominal = excluded.nominal;
 
   insert into public.ehc_klaim_berkas (klaim_id, nama_berkas, path, ukuran, mime, dibuat_oleh)
