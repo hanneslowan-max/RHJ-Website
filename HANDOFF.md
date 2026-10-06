@@ -76,6 +76,12 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 `batalkan_baris_sp`/`pulihkan_baris_sp`, `jaga_rekening_pic`, `laporan_komisi`. Rumus komisi (`so_baris_hitung`,
 `komisi_tier`, `komisi_hitung`) tidak diubah sesi itu.
 
+- **DEV sudah menjalankan `140_ehc_saldo_pemakaian` dari sesi EHC/komisi** (6 Okt, bukan dari branch ini). Versi 140
+  kini berlaku untuk `batalkan_baris_sp`, `pulihkan_baris_sp`, `jaga_rekening_pic`, `jaga_gerbang_klaim`,
+  `minta_klaim_cepat`, `ajukan_transfer`, `laporan_komisi`, `klaim_ehc_saya`, view `kas_sales` & `ehc_cepat_siap`, plus
+  trigger baru `sol_jaga_saldo_ehc` (sales_order_lines), `so_jaga_saldo_ehc` & `so_jaga_hapus_ehc` (sales_orders).
+  Migrasi 120–139 yang menyentuh objek itu WAJIB dibangun dari `pg_get_functiondef` di DEV, bukan dari berkas lama.
+
 | # | Ringkas | Status |
 |---|---|---|
 | 50 | Cek Vonny: layar memanggil `lengkapi_pelanggan_sp` dulu; bila ditolak (HP kosong/format/bentrok, nama milik sales lain) `putuskan_vonny_cek` tak pernah dipanggil → SP tetap di Double Check (log DEV 2 Okt) | tanya: lolos tanpa tautan utk kasus HP; HP wajib di form SP |
