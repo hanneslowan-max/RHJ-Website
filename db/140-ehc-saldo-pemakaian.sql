@@ -147,9 +147,10 @@ comment on table public.ehc_klaim_alokasi is
   'Bagian satu klaim EHC yang memotong saldo EHC tiap SP (berkas 140). Diisi hanya lewat simpan_klaim_ehc().';
 
 alter table public.ehc_klaim_alokasi enable row level security;
-revoke all on public.ehc_klaim_alokasi from public, anon;
+-- tulis hanya lewat fungsi definer: authenticated cukup SELECT (RLS tetap menyaring)
+revoke all on public.ehc_klaim_alokasi from public, anon, authenticated;
 grant select on public.ehc_klaim_alokasi to authenticated;
-revoke all on sequence public.ehc_klaim_alokasi_id_seq from public, anon;
+revoke all on sequence public.ehc_klaim_alokasi_id_seq from public, anon, authenticated;
 
 -- ── 4. hak sales atas klaim = sales pemilik klaim ────────────────────────
 -- Dulu juga "pemegang SP saat ini": begitu SP dipindah, dua sales sama-sama
@@ -193,9 +194,9 @@ create table if not exists public.ehc_klaim_log (
 );
 create index if not exists ekl_klaim_idx on public.ehc_klaim_log (klaim_id, id desc);
 alter table public.ehc_klaim_log enable row level security;
-revoke all on public.ehc_klaim_log from public, anon;
+revoke all on public.ehc_klaim_log from public, anon, authenticated;
 grant select on public.ehc_klaim_log to authenticated;
-revoke all on sequence public.ehc_klaim_log_id_seq from public, anon;
+revoke all on sequence public.ehc_klaim_log_id_seq from public, anon, authenticated;
 do $$ begin
   if not exists (select 1 from pg_policies where schemaname = 'public'
                   and tablename = 'ehc_klaim_log' and policyname = 'ekl_baca') then
@@ -293,7 +294,7 @@ select s.id                                   as so_id,
    and ((select public.boleh_lihat_nilai_klaim())
         or ((select public.peran_saya()) = 'sales'
             and s.sales_rep_id = (select public.sales_rep_saya())));
-revoke all on public.ehc_saldo_sp from public, anon;
+revoke all on public.ehc_saldo_sp from public, anon, authenticated;
 grant select on public.ehc_saldo_sp to authenticated;
 
 -- Kas sales = sisa EHC dari SP yang komisinya sudah diklaim. Kolom lama
@@ -896,9 +897,9 @@ begin
      where id = v_id;
     update public.ehc_klaim_nilai set nominal = v_total, kas = 0 where klaim_id = v_id;
     -- SP yang tidak dipakai lagi: nominalnya 0 (barisnya tetap sebagai riwayat).
-    update public.ehc_klaim_alokasi a set nominal = 0
-     where a.klaim_id = v_id
-       and a.so_id not in (select x.so_id from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric));
+    update public.ehc_klaim_alokasi al set nominal = 0
+     where al.klaim_id = v_id
+       and al.so_id not in (select x.so_id from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric));
     if jsonb_typeof(p_data->'berkas_hapus') = 'array' then
       update public.ehc_klaim_berkas f
          set dibuang_pada = now(), dibuang_oleh = auth.uid()
