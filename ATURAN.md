@@ -22,6 +22,8 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - Penawaran untuk pelanggan yang sudah bertuan **selalu** atas nama sales pemegangnya — berlaku untuk semua peran, termasuk owner/GM/staff/Vonny (#48). Bila memang perlu, pelanggannya dipindah dulu di tab Pelanggan.
 - Vonny: membuat penawaran mewakili sales (wajib pilih sales), input PO & usul produk baru, membuat & mengubah **produk**, melihat order impor (tidak mengubah), cek SP. Hapus produk hanya owner. Pembayaran supplier tertutup bagi Vonny.
 - Lenni: melihat PO & SP (baca saja).
+- Pelanggan milik sales **nonaktif** dianggap belum bertuan (berkas 119): dilepas otomatis saat sales-nya dinonaktifkan, dan sales lama dicatat sebagai riwayat (diisi sistem; sales tidak bisa mengubahnya). Sales aktif pertama yang membuat PO untuknya menjadi pemegangnya. Mengaktifkan lagi sales tidak mengembalikan pelanggannya.
+- Pelanggan **Office** milik GM (berkas 119): SP-nya **hanya dibuat GM atau owner**. Peran lain ditolak membuat SP — atau mengalihkan SP — ke sales Office maupun ke pelanggan yang dipegang Office (dijaga DB). Pekerjaan lain atas SP Office yang sudah ada (cek Vonny, surat jalan, invoice, pelunasan) tetap berjalan seperti biasa. Pelanggan Office tetap tertutup bagi sales.
 
 ### Penawaran
 - Masa berlaku default kosong (tanpa batas).
@@ -60,6 +62,7 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 
 ### Komisi & pembayaran
 - Riksa & Michael: wajib cash (tidak bisa tempo lewat jalur apa pun), komisi flat 1% semua penjualan.
+- SP Office tanpa komisi (komisi flat 0%, berkas 119). Akibatnya harga di bawah price list pada SP Office tidak masuk antrean keputusan GM — pembuatnya memang GM/owner.
 - Approval GM menampilkan harga nett SP, EHC, HPP, dan margin sebelum/sesudah EHC.
 - Klaim EHC tidak memerlukan lampiran bukti.
 

@@ -85,3 +85,10 @@ Bandingkan jumlah pelanggar **sebelum dan sesudah** migrasi — tidak boleh bert
 - `mcp__Supabase__apply_migration` ke DEV dengan nama sama dengan berkas `db/NNN-...`.
 - `mcp__Supabase__get_advisors` (security & performance) — tidak boleh ada peringatan baru dari migrasi ini.
 - Catat di laporan: skenario apa saja yang diuji, per peran, dan hasilnya.
+
+## Jebakan alat MCP Supabase
+
+`DROP …` (mis. `drop trigger if exists`) lewat `execute_sql`/`apply_migration` menunggu konfirmasi
+"perintah destruktif" yang tidak muncul di sesi cloud → timeout 60 detik, transaksi batal, tidak ada yang
+berubah. Hindari DROP di migrasi bila ada pengganti: `create or replace trigger` (PG 17),
+`create or replace function/view`. Bila DROP memang perlu, minta Hannes menjalankannya di SQL Editor.

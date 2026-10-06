@@ -3906,8 +3906,12 @@ function kotakSalesDok(id, f){
             : '<option value="">— akun belum ditautkan ke nama sales —</option>')
       + '</select>');
   }
+  /* Berkas 119: sales Office (sp_hanya_gm) tidak ditawarkan di form SP selain untuk GM/owner. */
+  var daftar = repPilihan(ALUR.rep, f.sales_rep_id);
+  if (id === "sp-rep" && !setaraOwner())
+    daftar = daftar.filter(function(r){ return !r.sp_hanya_gm || String(r.id) === String(f.sales_rep_id); });
   return medanAlur("Sales", '<select id="' + id + '"><option value="">— pilih sales —</option>'
-    + repPilihan(ALUR.rep, f.sales_rep_id).map(function(r){
+    + daftar.map(function(r){
         return '<option value="' + r.id + '"' + (String(r.id) === String(f.sales_rep_id) ? " selected" : "") + '>'
              + esc(labelRep(r)) + '</option>'; }).join("")
     + '</select>');
@@ -3960,6 +3964,15 @@ function repCashOnly(id){
   var r = repAlurById(id);
   if (r && r.cash_only !== undefined) return r.cash_only === true;
   return (ALUR.repCash || []).some(function(x){ return String(x) === String(id); });
+}
+/* Berkas 119: SP untuk pelanggan Office (sales_reps.sp_hanya_gm) hanya dibuat GM atau owner,
+   tanpa komisi. Yang menolak trigger so_y_hanya_gm; layar ini hanya memberi tahu lebih dulu. */
+function repSpHanyaGm(id){
+  var r = (id === null || id === undefined || id === "") ? null : repAlurById(id);
+  return !!(r && r.sp_hanya_gm);
+}
+function spKhususGmTerkunci(f){
+  return !setaraOwner() && (repSpHanyaGm(f.sales_rep_id) || repSpHanyaGm(f.customer_rep));
 }
 function labelKomisiFlat(id){
   var r = repAlurById(id);
@@ -6700,6 +6713,13 @@ function panelSp(){
             + 'Kalau justru PO-nya yang salah, perbaiki PO-nya dulu — jangan SP-nya.'
             + '</div></div>';
         }
+        /* Berkas 119: di sini, bukan di kotak Sales, supaya mode "Dari PO" (PO milik Office)
+           juga menjelaskan kenapa tombolnya mati. */
+        if (spKhususGmTerkunci(f)) {
+          h += '<div class="flag merah" id="sp-office" style="margin-top:12px"><span class="f-ico">!</span><div>'
+            + '<b>SP untuk pelanggan Office hanya dibuat GM atau owner</b> (pelanggan kantor, '
+            + 'tanpa komisi). Minta GM yang membuatkan SP-nya.</div></div>';
+        }
         /* Tombol merah hanya muncul kalau memang ada yang bisa diminta.
            Tombol yang selalu ada tapi kadang tidak melakukan apa-apa
            mengajari orang untuk menekannya asal-asalan. */
@@ -6716,7 +6736,7 @@ function panelSp(){
         /* Dua-duanya dimatikan, bukan cuma "Simpan": tombol merah juga
            menyimpan SP-nya lebih dulu, jadi kalau ia dibiarkan hidup,
            angka yang salah tetap masuk lewat pintu sebelah. */
-        var kunci = (beda !== null && beda !== 0) ? ' disabled' : '';
+        var kunci = ((beda !== null && beda !== 0) || spKhususGmTerkunci(f)) ? ' disabled' : '';
         h += '<div class="aksi-baris">'
           + '<button class="btn utama" id="sp-simpan" type="button"'+kunci+'>Simpan &amp; buat SP</button>'
           + (perlu.length
@@ -7088,6 +7108,7 @@ function pasangSpMenyusul(f){
   });
   pasangCariPelanggan("sp-cust", "sp-cust-hasil", function(c){
     f.customer_id = c ? c.id : null;
+    f.customer_rep = c ? c.sales_rep_id : null;   /* berkas 119: pelanggan Office */
     f.kepada = c ? c.nama : ($("sp-cust") ? $("sp-cust").value : "");
     if (c && c.lokasi && !f.alamat) f.alamat = c.lokasi;
     /* Satu pelanggan satu sales, dan itu tercatat di master — sama seperti
@@ -8040,13 +8061,18 @@ var URUT_PELANGGAN = {
 
 var KOLOM_URUT_PELANGGAN = { nama:["nama_urut"], hp:["hp"], pic:["pic"], cabang:["cabang"],
   industri:["industri"], sumber:["urut_sumber"], status:["blacklist","perlu_konfirmasi"] };   /* #24 */
+/* Berkas 119: kolom sales_rep_lama_id baru ada sesudah db/119 dijalankan, dan layar biasa
+   diunggah lebih dulu. Kalau kolomnya ditolak, daftar dimuat ulang tanpa kolom itu — yang
+   hilang hanya keterangan "sales lama (nonaktif)", bukan seluruh tab Pelanggan. */
+var PEL_SALES_LAMA = true;
 function muatPelanggan(){
   var P = LANJUT.pelanggan;
   if (P.memuat) return Promise.resolve();
   P.memuat = true;
   var kol = "id,nama,hp,telp,pic,lokasi,industri,cabang,salesman_teks,sumber,"
           + "blacklist,alasan_blacklist,perlu_konfirmasi,alasan_konfirmasi,sales_rep_id,"
-          + "industri_lama,nama_lama";   /* #25 / #20 */
+          + "industri_lama,nama_lama"   /* #25 / #20 */
+          + (PEL_SALES_LAMA ? ",sales_rep_lama_id" : "");
   var syarat = plKunci();
   var u = URUT_PELANGGAN[P.urut] || URUT_PELANGGAN.master;
   var q = u.q;
@@ -8067,7 +8093,14 @@ function muatPelanggan(){
     P.baris = r[0].baris; P.total = r[0].total;
     if (r.length > 1) P.ringkas = { semua:r[1].total, pipeline:r[2].total, master:r[3].total, hitam:r[4].total };
     P.dimuat = true; P.memuat = false;
-  }).catch(function(e){ P.memuat = false; throw e; });
+  }).catch(function(e){
+    P.memuat = false;
+    if (PEL_SALES_LAMA && String((e && e.message) || "").indexOf("sales_rep_lama_id") > -1) {
+      PEL_SALES_LAMA = false;
+      return muatPelanggan();
+    }
+    throw e;
+  });
 }
 
 /* ── pagination ───────────────────────────────────────────────────────
@@ -8299,6 +8332,9 @@ function panelPelangganTab(){
                 seperti sudah beres. */
              + '<td class="l">' + (c.sales_rep_id
                  ? esc(namaRepAlur(c.sales_rep_id) || "—")
+                 : c.sales_rep_lama_id   /* berkas 119: dilepas karena sales-nya nonaktif */
+                 ? '<span class="muted" title="Sales lama sudah nonaktif — pelanggan ini belum bertuan">'
+                   + esc(namaRepAlur(c.sales_rep_lama_id) || "sales lama") + ' <i>(nonaktif)</i></span>'
                  : (c.salesman_teks
                      ? '<span class="muted" title="dari sheet lama, belum ditautkan">'
                        + esc(c.salesman_teks) + ' <i>(sheet)</i></span>'
@@ -8461,11 +8497,16 @@ function formPelangganTab(c){
               pilihan: [{v:"",l:"— belum ada —"}].concat(
                 repPilihan(ALUR.rep, c.sales_rep_id).map(function(r){
                   return { v:String(r.id), l:labelRep(r) }; })),
-              bantu: bolehPindahSales(c)
+              bantu: (bolehPindahSales(c)
                 ? "Satu pelanggan dipegang satu sales. Sales yang tertulis di sini yang terisi otomatis saat PO perusahaan ini masuk."
                 : (c.sales_rep_id
                     ? "Pelanggan ini sudah ada pemiliknya. Pemindahan diputuskan owner, GM, atau staff."
-                    : "Hanya owner, GM, atau staff yang menetapkan sales penanggung jawab.") })
+                    : "Hanya owner, GM, atau staff yang menetapkan sales penanggung jawab."))
+                /* berkas 119: riwayat sales lama yang sudah nonaktif */
+                + (c.sales_rep_lama_id
+                    ? " Sales sebelumnya: <b>" + esc(namaRepAlur(c.sales_rep_lama_id) || "sales lama")
+                      + "</b> (nonaktif)" + (c.sales_rep_id ? "." : " — sales aktif pertama yang membuat PO untuk pelanggan ini menjadi pemegangnya.")
+                    : "") })
     + field({ nama:"plc_lokasi", label:"Alamat", nilai:c.lokasi, jenis:"textarea", mati:kunci })
     + '<h3 class="sec">Status pelanggan</h3>'
     /* Tiga tingkat, bukan dua. "Daftar hitam" itu tombol mati — PO-nya
