@@ -67,6 +67,56 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   penawaran dan SP tanpa PO tidak mengklaim. Ini berlaku juga untuk ±2.470 pelanggan lain yang belum bertuan.
   Bila "memakai" juga berarti membuat penawaran, perlu revisi terpisah.
 
+## Revisi 50–61 (sedang dikerjakan)
+Uji tabrakan sudah dijalankan untuk semua (workflow 12 penyelidik + 12 pemeriksa skeptis, read-only, 6 Okt).
+Nomor migrasi sesi ini: **db/120–139**. Sesi lain "Revisi klaim EHC dan komisi" (branch `claude/bold-bardeen-5r2fg8`)
+memakai **db/140+** dan mengusulkan mengambil **#54 & #61** — menunggu konfirmasi Hannes di sesi ini. Sesi itu minta
+kabar (send_message ke session_01AWPMAWgbLCoULbHsRgrHzj) sebelum objek berikut di-create-or-replace: klaim EHC/komisi &
+transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_konteks_keputusan`,
+`batalkan_baris_sp`/`pulihkan_baris_sp`, `jaga_rekening_pic`, `laporan_komisi`. Rumus komisi (`so_baris_hitung`,
+`komisi_tier`, `komisi_hitung`) tidak diubah sesi itu.
+
+| # | Ringkas | Status |
+|---|---|---|
+| 50 | Cek Vonny: layar memanggil `lengkapi_pelanggan_sp` dulu; bila ditolak (HP kosong/format/bentrok, nama milik sales lain) `putuskan_vonny_cek` tak pernah dipanggil → SP tetap di Double Check (log DEV 2 Okt) | tanya: lolos tanpa tautan utk kasus HP; HP wajib di form SP |
+| 51 | Form SP tidak menampilkan komisi; sales baru lihat di tab Komisi › Belum bisa klaim. Bug: `gm_pct` utk baris di bawah list diabaikan bila SP tidak telat (SP 007/010/011/015-IX: komisi 0) | tanya: maksud "tampilkan"? perbaiki gm_pct? |
+| 52 | Cache per tab tidak pernah dimuat ulang (pindahTab hanya menggambar ulang) | dikerjakan (tanpa polling) |
+| 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
+| 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
+| 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
+| 56 | Spesifikasi sudah ada di form; di dokumen hanya teks kecil di bawah kode, input 1 baris | dikerjakan |
+| 57 | Set dipecah per pcs di SP sesuai ATURAN; usul tampilan berkelompok + kolom penanda set | tanya: "set (sudah diubah)" & kunci qty |
+| 58 | Indo Kida (Iwan, 2604) vs Garuda Metalindo (Hendri, 2354) — menabrak #48 | tanya: opsi A ganti nama / B induk / C gabung |
+| 59 | DB sudah dukung usulan produk dari penawaran; form tidak menampilkan "+ item baru" | inti dikerjakan; tanya: "Buang" usulan |
+| 60 | UP, e-mail, diskon, TOP belum ada | tanya: bentuk diskon/TOP/UP |
+| 61 | → sesi EHC/komisi (menunggu konfirmasi) | — |
+
+## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
+Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
+1. **Komisi terbaca lewat REST oleh peran yang layarnya menyembunyikan**: Vonny membaca `so_ringkas.komisi` 54 SP
+   (Rp 18.550.689,70) dan `komisi_belum_klaim` 51 baris; kemungkinan juga Lie Sian/Ichi/Lenni.
+2. **Nama pelanggan ganda**: sales bisa PATCH nama pelanggannya jadi persis nama pelanggan sales lain, dan POST
+   `/customers` dengan nama ganda lolos (hanya `buat_pelanggan_baru` yang menolak). Uji: Iwan → "PT Garuda Metalindo".
+3. **View `usulan_produk`** (milik postgres, bukan security_invoker): semua sales membaca seluruh usulan, pembuatnya,
+   dan customer PO sales lain.
+4. **`quote_lines` tanpa penjaga baris**: INSERT teks bebas (tanpa product/set) lewat REST lolos — `jaga_jenis_baris`
+   tidak terpasang (butuh fungsi baru; quote_lines tidak punya kolom jenis).
+5. **Total SP lunas bisa naik**: GM bisa PATCH `sales_order_lines.ehc_item` SP tanpa PO yang sudah ber-invoice/lunas
+   (SP 150: 1.640.000 → 1.740.000) — `periksa_total_sp` keluar bila SP tanpa PO. (Area #54 — sesi EHC.)
+6. **Klaim EHC/komisi** (area #61 — sesi EHC): owner/GM/staff/finance bisa ubah nominal lewat REST
+   (`ekn_ubah`/`kkn_ubah`) tanpa hitung ulang kas; owner bisa hapus klaim yang sudah diajukan/ber-batch (langsung
+   atau cascade hapus SP); klaim tidak ikut berubah bila EHC SP diubah (SP 007-IX: klaim 20.000, EHC jadi 5.000).
+7. **Daftar hitam terlewati** pada SP tanpa PO tanpa pelanggan (`jaga_blacklist_po` hanya di PO) — makin sering bila
+   #50 meloloskan SP tanpa tautan.
+
+Bug/data non-keamanan yang dicatat:
+- `putuskan_ubah` (Minta ubah SP) menghapus & membuat ulang semua baris → gagal pada SP yang sudah punya surat jalan
+  bertahap / qty batal (SP 159). (Area #54.)
+- Jalur cek Vonny di laci Pengiriman (`formKirim`, ±index.html:10979) memanggil `lengkapi_pelanggan_sp` tanpa kotak
+  HP/alamat — praktis tak terjangkau.
+- Data DEV: pelanggan 5413 "BP. Nanang" (Alfred) ber-HP 622134567 = nomor isian Vonny; PT Shidachi Indo Jaya
+  (Hendri) dijual Menik di SP 017/MCE/X.
+
 ## Langkah berikut
 1. Hannes mencoba di DEV. Setelah Hannes mengetik "revisi selesai" → jalankan verifikator.
 2. PR ke `main` hanya bila Hannes meminta. Migrasi 109–114 belum pernah dijalankan di PROD.
