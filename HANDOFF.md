@@ -80,7 +80,7 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 |---|---|---|
 | 50 | Cek Vonny: layar memanggil `lengkapi_pelanggan_sp` dulu; bila ditolak (HP kosong/format/bentrok, nama milik sales lain) `putuskan_vonny_cek` tak pernah dipanggil → SP tetap di Double Check (log DEV 2 Okt) | tanya: lolos tanpa tautan utk kasus HP; HP wajib di form SP |
 | 51 | Form SP tidak menampilkan komisi; sales baru lihat di tab Komisi › Belum bisa klaim. Bug: `gm_pct` utk baris di bawah list diabaikan bila SP tidak telat (SP 007/010/011/015-IX: komisi 0) | tanya: maksud "tampilkan"? perbaiki gm_pct? |
-| 52 | Cache per tab tidak pernah dimuat ulang (pindahTab hanya menggambar ulang) | dikerjakan (tanpa polling) |
+| 52 | Muat ulang diam-diam saat pindah tab, klik tab yang sama, jendela kembali dilihat (visibilitychange/focus/pageshow), dan tombol **Muat ulang** di header. Data lama tetap tampil; gambar ulang ditunda saat mengetik / laci terbuka / form PO-SP-penawaran terisi | **selesai (FE)**, lihat catatan #52 |
 | 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
 | 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 | 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
@@ -90,6 +90,18 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 | 59 | Form penawaran menawarkan "+ Pakai … sebagai item baru"; item diusulkan (`usulkan_produk`) saat penawaran disimpan, lalu disahkan owner/GM/staff; dokumen tanpa "(usulan)" | **inti selesai (FE)**; tanya: tombol "Buang" usulan yang tak jadi order |
 | 60 | UP, e-mail, diskon, TOP belum ada | tanya: bentuk diskon/TOP/UP |
 | 61 | → sesi EHC/komisi (menunggu konfirmasi) | — |
+
+### Catatan #52 untuk sesi lain (mekanisme muat ulang)
+- Daftarkan tab di `MUAT_DIAM[tab] = { muat, gambar, boleh?, kunci?, kunciJalan?, jeda?, tunda? }` (index.html, blok
+  "#52 · MUAT ULANG DIAM-DIAM" sesudah `pindahTab`). `muatUlangDiam(opsi)` dipanggil otomatis; `tandaiBasi(tab)` memaksa
+  tarikan berikutnya; `gambarDiam(tab)` menggambar ulang dengan penundaan aman. Jeda bawaan 20 dtk (`SEGAR.jedaBawaan`).
+- Sudah terdaftar: crm, pelanggan, khusus, penawaran, po, sp, performa, vonnycek, kirim, lunas, ehc, komisi, gm, dan grup
+  muatSemua (ringkas/order/bayar/tindak/harga/produk/sinkron/pengguna/riwayat → `muatSemuaDiam`). **Belum**: kas, laporan,
+  report (tombol Muat ulang disembunyikan di sana). Sesi EHC/komisi: saat merombak layar EHC/Komisi/Kas/Laporan, daftarkan
+  ulang entrinya; loader dengan pengaman `memuat` sebaiknya memakai pola `var awal = X.dimuat; … if (awal && !X.dimuat) { X.memuat = false; return muatX(); }`.
+- `muatSemua(diam)`: `true` = tanpa layar "Memuat data…" (dipakai `segarkanUsulan`). Produk & price list juga disegarkan
+  di latar tiap ≥ 5 menit saat pindah tab.
+- Kait uji `window.__segar` hanya di localhost/file:.
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):

@@ -295,6 +295,10 @@
   .head-name{font-size:19px;font-weight:650;letter-spacing:-.02em;line-height:1.25}
   .head-name span{display:block;font-size:12.5px;font-weight:400;color:var(--ink-2);letter-spacing:0}
   .head-aksi{margin-left:auto;display:flex;gap:9px;flex-wrap:wrap}
+  /* #52: tombol muat ulang data halaman */
+  .head-segar{margin-left:9px;flex:none}
+  .head-segar.putar svg{animation:segar-putar .9s linear infinite}
+  @keyframes segar-putar{to{transform:rotate(360deg)}}
   main{flex:1 1 auto;padding:0 clamp(16px,2.4vw,30px) 72px}
   .panel{max-width:1420px;margin:0 auto}
 
@@ -615,6 +619,7 @@
     :root{--rail-w:58px}
     .head-in{padding:13px 0}
     .head-name{font-size:17px}
+    .head-segar-teks{display:none}   /* #52: di HP cukup ikon */
     td,th{padding:11px 12px}
     td{font-size:12.5px}
     .tile b{font-size:22px}
@@ -822,6 +827,11 @@
     <div class="head-in">
       <div class="head-name" id="judul-halaman">—<span id="judul-sub"></span></div>
       <div class="head-aksi" id="head-aksi"></div>
+      <button class="btn kecil head-segar" id="btn-muat-ulang" type="button" hidden
+              title="Muat ulang data halaman ini" aria-label="Muat ulang data halaman ini">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        <span class="head-segar-teks">Muat ulang</span>
+      </button>
     </div>
   </header>
 
@@ -1396,12 +1406,14 @@ function muatCrm(paksa){
   if (CRM.memuat) return Promise.resolve();
   if (CRM.dimuat && !paksa) return Promise.resolve();
   CRM.memuat = true;
+  var awal = CRM.dimuat;   /* #52 */
   var dari = mulaiDari();
   var q = "/leads?select=*,customers(id,nama,hp,lokasi,pic),lead_nilai(nilai,nilai_ok)"
         + (dari ? "&tanggal=gte." + dari : "") + "&order=tanggal.desc,id.desc";
   var janji = [ api("GET", q) ];
   if (!CRM.rep.length) janji.push(api("GET", "/sales_reps?select=*&order=nama"));
   return Promise.all(janji).then(function(r){
+    if (awal && !CRM.dimuat) { CRM.memuat = false; return muatCrm(true); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     CRM.lead = r[0] || [];
     if (r[1]) CRM.rep = r[1] || [];
     CRM.dimuat = true; CRM.memuat = false;
@@ -3027,8 +3039,38 @@ function apiSemua(jalur){
   return ambilDari(0);
 }
 
-function muatSemua(){
+/* #52: muatSemua dipecah — ambilSemua() menarik, terapkanSemuaBila() memasang — supaya muat ulang
+   diam-diam (muatSemuaDiam) memakai jalur yang sama tanpa penghalang layar. Nomor gen menjaga agar
+   hasil tarikan yang lebih tua tidak menimpa yang lebih baru. */
+var MUAT_SEMUA = { gen: 0, terapan: 0, jalan: null, terakhir: 0 };
+function muatSemua(diam){
+  if (diam) return muatSemuaDiam();   /* segarkanUsulan: muatSemua(true) = tanpa penghalang layar */
   sibuk(true, "Memuat data…");
+  var g = ++MUAT_SEMUA.gen;
+  return ambilSemua().then(function(d){
+    terapkanSemuaBila(g, d);
+    sibuk(false);
+  }).catch(function(e){ sibuk(false); toast(e.message, true); throw e; });
+}
+function muatSemuaDiam(){
+  if (MUAT_SEMUA.jalan) return MUAT_SEMUA.jalan;
+  var g = ++MUAT_SEMUA.gen;
+  MUAT_SEMUA.jalan = ambilSemua().then(function(d){ terapkanSemuaBila(g, d); })
+    .then(function(){ MUAT_SEMUA.jalan = null; }, function(e){ MUAT_SEMUA.jalan = null; throw e; });
+  return MUAT_SEMUA.jalan;
+}
+function terapkanSemuaBila(g, d){
+  MUAT_SEMUA.terakhir = Date.now();
+  if (g < MUAT_SEMUA.terapan) return;
+  MUAT_SEMUA.terapan = g;
+  PRODUK = d.produk || []; HARGA = d.harga || [];
+  ORDER  = d.order  || []; BAYAR = d.bayar || [];
+  KODEPABRIK = d.kp || []; SUPPLIER = d.supplier || []; DOKUMEN = d.dok || []; BARIS = d.baris || [];
+  HPPMAN = d.hpp || []; PROFIL = d.profil || []; AUDIT = d.audit || [];
+  SUMBER = d.sumber || []; SYNCLOG = d.sinklog || [];
+  hitungTurunan(); hitungProduk();
+}
+function ambilSemua(){
   var kunci = [], janji = [];
   function minta(nama, jalur){   /* #33/#46: utuh, tidak terpotong 1.000 — kecuali yang memang dibatasi (limit=) */
     kunci.push(nama); janji.push(/[?&]limit=/.test(jalur) ? api("GET", jalur) : apiSemua(jalur));
@@ -3077,14 +3119,8 @@ function muatSemua(){
   }
   return Promise.all(janji).then(function(h){
     var d = {}; kunci.forEach(function(k,i){ d[k] = h[i] || []; });
-    PRODUK = d.produk || []; HARGA = d.harga || [];
-    ORDER  = d.order  || []; BAYAR = d.bayar || [];
-    KODEPABRIK = d.kp || []; SUPPLIER = d.supplier || []; DOKUMEN = d.dok || []; BARIS = d.baris || [];
-    HPPMAN = d.hpp || []; PROFIL = d.profil || []; AUDIT = d.audit || [];
-    SUMBER = d.sumber || []; SYNCLOG = d.sinklog || [];
-    hitungTurunan(); hitungProduk();
-    sibuk(false);
-  }).catch(function(e){ sibuk(false); toast(e.message, true); throw e; });
+    return d;
+  });
 }
 
 /* Harga & HPP yang berlaku = baris terbaru yang tanggalnya sudah lewat.
@@ -3591,7 +3627,10 @@ function bangunTabs(){
      tidak punya data-p, jadi menekannya memanggil pindahTab(undefined)
      yang menyembunyikan seluruh panel. */
   Array.prototype.forEach.call($("tabs").querySelectorAll("button.tab"), function(b){
-    b.addEventListener("click", function(){ pindahTab(b.dataset.p); });
+    b.addEventListener("click", function(){
+      if (b.dataset.p === tabAktif) tandaiBasi(tabAktif);   /* #52: klik tab yang sama = minta data terbaru */
+      pindahTab(b.dataset.p);
+    });
   });
   Array.prototype.forEach.call($("tabs").querySelectorAll("button.tab-grup"), function(b){
     b.addEventListener("click", function(){
@@ -3630,6 +3669,180 @@ function pindahTab(nama){
     });
   gambar();
   window.scrollTo(0,0);
+  tombolMuatUlang();   /* #52 */
+  muatUlangDiam();     /* #52: tarik data tab ini lagi di belakang layar */
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   #52 · MUAT ULANG DIAM-DIAM
+
+   Setiap kali tab dibuka (pindahTab), jendela kembali dilihat, atau tombol
+   "Muat ulang" ditekan, data tab itu ditarik lagi DI BELAKANG LAYAR:
+     · data lama tetap tampil sampai yang baru datang (tanpa kotak "Memuat…"),
+     · penanda dimuat/saringan/halaman/isian form tidak disentuh,
+     · gambar ulang DITUNDA selama orang mengetik, laci terbuka, atau form
+       PO/SP/penawaran sedang diisi — datanya tetap segar di cache,
+     · gagal = diam, data lama tetap (tombol Muat ulang memberi tahu galatnya).
+   Jeda per tab mencegah tarikan beruntun saat orang bolak-balik tab.
+
+   Tab baru cukup didaftarkan di MUAT_DIAM:
+     { muat: fn→Promise, gambar: fn, boleh?: fn→bool (data sudah ada & tidak sedang dimuat terlihat),
+       kunci?: fn→teks (saringan yang menentukan hasil), kunciJalan?: teks (tarikan bersama),
+       jeda?: ms, tunda?: fn→bool (jangan gambar ulang sekarang) }
+   Tanpa entri (kas, laporan, report) tab tetap memakai perilaku lama.
+   ═══════════════════════════════════════════════════════════════════════ */
+var SEGAR = { siap: false, jalan: {}, terakhir: {}, basi: {}, tunda: null, jedaBawaan: 20000,
+              jedaSemuaLatar: 300000 };
+var GRUP_SEMUA = ["ringkas","order","bayar","tindak","harga","produk","sinkron","pengguna","riwayat"];
+function tandaiBasi(tab){
+  if (!tab) return;
+  if (GRUP_SEMUA.indexOf(tab) > -1) { GRUP_SEMUA.forEach(function(t){ SEGAR.basi[t] = true; }); return; }
+  SEGAR.basi[tab] = true;
+}
+function isiTeks(v){ return String(v === null || v === undefined ? "" : v).trim() !== ""; }
+function barisDiisi(b){
+  return !!(b && (b.kode || b.set_id || b.setInline || b.usulanTeks || isiTeks(b.ketikan)
+                  || isiTeks(b.qty) || Number(b.harga) > 0));
+}
+var MUAT_DIAM = {
+  crm: { boleh: function(){ return CRM.dimuat && !CRM.memuat; }, kunci: function(){ return String(CRM.hari); },
+         muat: function(){ return muatCrm(true); }, gambar: function(){ panelCrm(); }, jeda: 60000 },
+  pelanggan: { boleh: function(){ var P = LANJUT.pelanggan; return P.dimuat && !P.memuat && !P.lihatLain; },
+               kunci: function(){ var P = LANJUT.pelanggan; return plKunci() + "|" + P.hal + "|" + P.per + "|" + P.urut + "|" + JSON.stringify(P.urutKol || null); },
+               muat: function(){ return muatPelanggan(); }, gambar: function(){ panelPelangganTab(); }, jeda: 30000 },
+  khusus: { boleh: function(){ var K = LANJUT.khusus; return K.dimuat && !K.memuat; },
+            kunci: function(){ return String(LANJUT.khusus.status || ""); },
+            muat: function(){ return muatKhusus(); }, gambar: function(){ panelKhusus(); } },
+  penawaran: { boleh: function(){ var P = LANJUT.penawaran; return P.dimuat && !P.memuat; },
+               muat: function(){ return muatPenawaran(); }, gambar: function(){ panelPenawaran(); },
+               tunda: function(){ var f = LANJUT.penawaran.form;
+                 return !!f && !!(f.customer_id || f.baru || isiTeks(f.kepada) || isiTeks(f.catatan)
+                                  || (f.baris || []).some(barisDiisi)); } },
+  po: { kunciJalan: "alur", boleh: function(){ return ALUR.dimuatPo && ALUR.dimuatUsul; },
+        muat: function(){ return Promise.all([muatPo(true), muatUsul(true)]); }, gambar: function(){ panelPo(); },
+        tunda: function(){ var f = ALUR.poForm;
+          return !!f && !!(isiTeks(f.no_po) || f.customer_id || isiTeks(f.nama_customer) || isiTeks(f.hp)
+                           || isiTeks(f.alamat) || isiTeks(f.catatan) || f.lampiranBerkas
+                           || (f.baris || []).some(barisDiisi)); } },
+  sp: { kunciJalan: "alur", boleh: function(){ return ALUR.dimuatSp && ALUR.dimuatPo && ALUR.dimuatUsul; },
+        muat: function(){ return Promise.all([muatSp(true), muatPo(true), muatUsul(true)]); }, gambar: function(){ panelSp(); },
+        tunda: function(){ var f = ALUR.spForm;
+          return !!f && !!(f.po_id || f.customer_id || isiTeks(f.kepada) || (f.baris || []).length); } },
+  performa: { boleh: function(){ var P = LANJUT.performa; return P.dimuat && !P.memuat; },
+              kunci: function(){ var P = LANJUT.performa; return [P.periode, P.dari, P.sampai].join("|"); },
+              muat: function(){ return muatPerforma(); }, gambar: function(){ panelPerforma(); }, jeda: 120000 },
+  vonnycek: { boleh: function(){ var V = LANJUT.vonnycek; return V.dimuat && !V.memuat; },
+              muat: function(){ return muatVonnyCek(); }, gambar: function(){ panelVonnyCek(); } },
+  kirim: { boleh: function(){ var K = LANJUT.kirim, H = kirimHal(K.hal); return K.dimuat && H.dimuat && !H.memuat; },
+           kunci: function(){ var K = LANJUT.kirim, H = kirimHal(K.hal); return [K.hal, H.rep, H.tglKol, H.periode, H.dari, H.sampai].join("|"); },
+           muat: function(){
+             var K = LANJUT.kirim;
+             /* halaman lain dimuat ulang saat dibuka — supaya tidak menampilkan data lama sebagai kebenaran */
+             KIRIM_HAL.forEach(function(d){ if (d.id !== K.hal && K.hlm[d.id]) K.hlm[d.id].dimuat = false; });
+             return Promise.all([muatKirim(),
+               cacahHalaman(KIRIM_HAL).then(function(c){ if (c) K.cacah = c; }),
+               cacahHalaman(KIRIM_TILE).then(function(c){ if (c) K.cacahTile = c; })]); },
+           gambar: function(){ panelKirim(); } },
+  lunas: { boleh: function(){ var L = LANJUT.lunas; return L.dimuat && !L.memuat; },
+           kunci: function(){ var L = LANJUT.lunas; return [L.saring, L.rep, L.tglKol, L.periode, L.dari, L.sampai].join("|"); },
+           muat: function(){ return muatLunas(); }, gambar: function(){ panelLunas(); } },
+  /* ehc / komisi / gm: hanya memanggil loader yang sudah ada — layarnya sedang dirombak sesi EHC & komisi */
+  ehc: { boleh: function(){ var E = LANJUT.ehc, H = ehcHal(E.hal); return E.dimuat && !E.memuat && H.dimuat && !H.memuat; },
+         kunci: function(){ var E = LANJUT.ehc, H = ehcHal(E.hal); return [E.hal, H.rep, H.tglKol, H.periode, H.dari, H.sampai].join("|"); },
+         muat: function(){ var E = LANJUT.ehc;
+           EHC_HAL.forEach(function(d){ if (d.id !== E.hal && E.hlm[d.id]) E.hlm[d.id].dimuat = false; });
+           return Promise.all([muatEhc(), muatEhcHal(), cacahHalaman(ehcHalCacah()).then(function(c){ if (c) E.cacah = c; })]); },
+         gambar: function(){ panelEhc(); } },
+  komisi: { boleh: function(){ var K = LANJUT.komisi, H = komisiHal(K.hal); return K.dimuat && !K.memuat && H.dimuat && !H.memuat; },
+            kunci: function(){ var K = LANJUT.komisi, H = komisiHal(K.hal); return [K.hal, H.rep, H.tglKol, H.periode, H.dari, H.sampai].join("|"); },
+            muat: function(){ var K = LANJUT.komisi;
+              KOMISI_HAL.forEach(function(d){ if (d.id !== K.hal && K.hlm[d.id]) K.hlm[d.id].dimuat = false; });
+              return Promise.all([muatKomisi(), muatKomisiHal(), cacahHalaman(KOMISI_HAL).then(function(c){ if (c) K.cacah = c; })]); },
+            gambar: function(){ panelKomisi(); } },
+  gm: { boleh: function(){ var G = LANJUT.gm; return G.dimuat && !G.memuat; },
+        muat: function(){ return muatGm(); }, gambar: function(){ panelGmAntre(); } }
+};
+/* Tab yang datanya dari muatSemua: satu tarikan bersama, jeda lebih panjang (produk + price list ± 2.000 baris). */
+GRUP_SEMUA.forEach(function(t){
+  MUAT_DIAM[t] = { kunciJalan: "_semua", jeda: 120000, muat: function(){ return muatSemuaDiam(); }, gambar: function(){ gambar(); } };
+});
+
+/* opsi.manual: dari tombol "Muat ulang" — jeda dilewati dan galat dikatakan. */
+function muatUlangDiam(opsi){
+  opsi = opsi || {};
+  var tab = tabAktif, def = MUAT_DIAM[tab], kini = Date.now();
+  if (!def || !SEGAR.siap || !sesi || !saya || $("app").hidden || document.hidden) return Promise.resolve();
+  if (!$("sibuk").hidden || peringatanTampil()) return Promise.resolve();
+  /* Produk & price list juga dipakai pencarian barang di form PO/SP/penawaran: disegarkan diam-diam
+     paling sering tiap 5 menit, tanpa menggambar ulang tab yang bukan miliknya. */
+  if (GRUP_SEMUA.indexOf(tab) < 0 && !MUAT_SEMUA.jalan && kini - MUAT_SEMUA.terakhir > SEGAR.jedaSemuaLatar)
+    muatSemuaDiam().catch(function(){});
+  var kj = def.kunciJalan || tab;
+  if (SEGAR.jalan[kj]) return SEGAR.jalan[kj];
+  var jeda = def.jeda || SEGAR.jedaBawaan;
+  /* muatSemua() biasa (login, sesudah simpan) juga menyegarkan grup _semua */
+  var terakhir = Math.max(SEGAR.terakhir[kj] || 0, kj === "_semua" ? MUAT_SEMUA.terakhir : 0);
+  if (!opsi.manual && !SEGAR.basi[tab] && kini - terakhir < jeda) return Promise.resolve();
+  /* Data belum pernah dimuat / sedang dimuat terlihat oleh panelnya sendiri → biarkan jalur itu. */
+  if (def.boleh && !def.boleh()) { SEGAR.terakhir[kj] = kini; return Promise.resolve(); }
+  /* tarikan bersama (grup _semua, po+sp) menyegarkan semua tab anggotanya */
+  Object.keys(MUAT_DIAM).forEach(function(t){ if ((MUAT_DIAM[t].kunciJalan || t) === kj) SEGAR.basi[t] = false; });
+  var k = def.kunci ? def.kunci() : "";
+  var p = (sedangSegar || Promise.resolve())
+    .then(function(){ return def.muat(); })
+    .then(function(){ if (def.kunci && def.kunci() !== k) return def.muat(); })   /* saringan berganti di tengah jalan */
+    .then(function(){
+      SEGAR.terakhir[kj] = Date.now();
+      if (tabAktif === tab) gambarDiam(tab);
+    }, function(e){
+      SEGAR.basi[tab] = true;
+      if (opsi.manual) toast(e && e.message ? e.message : "Gagal memuat ulang.", true);
+    })
+    .then(function(){ SEGAR.jalan[kj] = null; });
+  SEGAR.jalan[kj] = p;
+  return p;
+}
+function gambarDiam(tab){
+  var def = MUAT_DIAM[tab], panel = $("p-" + tab), a = document.activeElement;
+  if (!def || !panel || panel.hidden || tabAktif !== tab) return;
+  var ketik = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && (panel.contains(a) || $("head-aksi").contains(a));
+  if (!$("laci").hidden || ketik || panel.querySelector(".cari-hasil:not([hidden])") || (def.tunda && def.tunda())) {
+    SEGAR.tunda = tab; return;
+  }
+  SEGAR.tunda = null;
+  var gulir = Array.prototype.map.call(panel.querySelectorAll(".tw[id]"), function(t){ return [t.id, t.scrollTop, t.scrollLeft]; });
+  var y = window.scrollY;
+  gambarUlangAman(function(){
+    if (tabAktif !== tab) return;
+    def.gambar();
+    gulir.forEach(function(x){ var t = $(x[0]); if (t) { t.scrollTop = x[1]; t.scrollLeft = x[2]; } });
+    window.scrollTo(window.scrollX, y);
+  });
+}
+/* Gambar ulang yang tertunda dijalankan begitu orang selesai mengetik / laci ditutup. */
+function jalankanTundaSegar(){
+  if (SEGAR.tunda && SEGAR.tunda === tabAktif) gambarDiam(SEGAR.tunda);
+}
+function tombolMuatUlang(){
+  var b = $("btn-muat-ulang");
+  if (b) b.hidden = !MUAT_DIAM[tabAktif];
+}
+function pasangMuatUlangDiam(){
+  if (pasangMuatUlangDiam.sudah) return;
+  pasangMuatUlangDiam.sudah = true;
+  document.addEventListener("visibilitychange", function(){
+    if (document.visibilityState === "visible") setTimeout(function(){ muatUlangDiam(); }, 300);   /* sesudah periksaSesi */
+  });
+  window.addEventListener("focus", function(){ muatUlangDiam(); });
+  window.addEventListener("pageshow", function(e){ if (e.persisted) muatUlangDiam(); });
+  document.addEventListener("focusout", function(){ setTimeout(jalankanTundaSegar, 0); });
+  var b = $("btn-muat-ulang");
+  if (b) b.addEventListener("click", function(){
+    if (b.classList.contains("putar")) return;
+    tandaiBasi(tabAktif);
+    b.classList.add("putar");
+    muatUlangDiam({ manual: true }).then(function(){ b.classList.remove("putar"); });
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -4004,6 +4217,7 @@ var PO_KOLOM = "/purchase_orders?select=*,po_lines(id,urut,product_id,deskripsi,
 function poBatalInfo(poId){ return (ALUR.poBatal && ALUR.poBatal[poId]) || null; }
 function muatPo(paksa){
   if (ALUR.dimuatPo && !paksa) return Promise.resolve();
+  var g = ALUR.genPo = (ALUR.genPo || 0) + 1;   /* #52: hanya tarikan terakhir yang boleh menulis */
   /* Mode cari SENGAJA mengabaikan jendela waktu. Gunanya pencarian ini
      justru menemukan PO lama tanpa harus memuat semuanya — kalau ia ikut
      disaring 2 hari, ia cuma menyaring yang sudah kelihatan. */
@@ -4037,6 +4251,7 @@ function muatPo(paksa){
       api("GET", "/po_batal_ringkas?select=*&batal_sebagian=is.true").catch(function(){ return []; })
     ])
     .then(function(r){
+      if (g !== ALUR.genPo) return null;   /* #52 */
       ALUR.poBatal = {};
       (r[5] || []).forEach(function(x){ ALUR.poBatal[x.po_id] = x; });
       var ring = {};
@@ -4071,6 +4286,7 @@ function muatPo(paksa){
           api("GET", PO_KOLOM + "&id=in.(" + ids.join(",") + ")&order=tanggal.desc,id.desc"),
           api("GET", "/po_ringkas?select=*" + dalam)
         ])).then(function(bb){
+          if (g !== ALUR.genPo) return;   /* #52 */
           var b = bb.slice(susulan.length);
           (b[1] || []).forEach(function(x){ ring[x.po_id] = x; });
           ALUR.poBelum = (b[0] || []).map(function(p){ p.ringkas = ring[p.id] || null; return p; });
@@ -4080,6 +4296,7 @@ function muatPo(paksa){
 var SP_KOLOM = "/sales_orders?select=*,sales_order_lines(id,urut,product_id,deskripsi,qty,harga_nett,harga_list,ehc_item,jenis,batal,batal_alasan,qty_batal,batal_oleh,batal_pada)";   /* #18: batal baris (+qty_batal: batal sebagian) */
 function muatSp(paksa){
   if (ALUR.dimuatSp && !paksa) return Promise.resolve();
+  var g = ALUR.genSp = (ALUR.genSp || 0) + 1;   /* #52: hanya tarikan terakhir yang boleh menulis */
   /* Sama seperti di PO: mencari SENGAJA melewati jendela waktu. Kotak cari
      yang cuma menyaring 2 hari terakhir tidak menjawab pertanyaan yang
      membuat orang mengetik di situ — "SP nomor sekian itu yang mana". */
@@ -4126,6 +4343,7 @@ function muatSp(paksa){
       api("GET", "/sp_menunggu_po?select=*&order=umur_hari.desc&limit=200")
     ])
     .then(function(r){
+      if (g !== ALUR.genSp) return null;   /* #52 */
       var baris = r[0] || [];
       ALUR.spCariTerpotong = !!cari && baris.length > ALUR.spBatasCari;
       if (ALUR.spCariTerpotong) baris = baris.slice(0, ALUR.spBatasCari);
@@ -4147,7 +4365,7 @@ function muatSp(paksa){
         .then(function(x){
           var ring = {};
           (x || []).forEach(function(y){ ring[y.so_id] = y; });
-          ALUR.sp.forEach(function(o){ o.ringkas = ring[o.id] || null; });
+          baris.forEach(function(o){ o.ringkas = ring[o.id] || null; });   /* #52: baris tarikan ini sendiri */
         });
     });
 }
@@ -5455,10 +5673,12 @@ function bolehUbahLangsung(){ return ["owner","gm"].indexOf(saya.peran) > -1; }
 
 function muatUsul(paksa){
   if (ALUR.dimuatUsul && !paksa) return Promise.resolve();
+  var g = ALUR.genUsul = (ALUR.genUsul || 0) + 1;   /* #52 */
   return api("GET", "/usul_ubah?select=id,jenis,ref_id,alasan,diajukan_pada"
                     + "&status=eq.menunggu&order=diajukan_pada.desc&limit=500")
-    .then(function(r){ ALUR.usul = r || []; ALUR.dimuatUsul = true; })
-    .catch(function(){ ALUR.usul = []; ALUR.dimuatUsul = true; });
+    .then(function(r){ if (g === ALUR.genUsul) { ALUR.usul = r || []; ALUR.dimuatUsul = true; } })
+    /* #52: gagal saat muat ulang → daftar lama tetap (bukan dikosongkan) */
+    .catch(function(){ if (g === ALUR.genUsul) { if (!ALUR.dimuatUsul) ALUR.usul = []; ALUR.dimuatUsul = true; } });
 }
 function usulMenunggu(jenis, ref){
   return (ALUR.usul || []).filter(function(u){
@@ -8071,6 +8291,7 @@ function muatPelanggan(){
   var P = LANJUT.pelanggan;
   if (P.memuat) return Promise.resolve();
   P.memuat = true;
+  var awal = P.dimuat;   /* #52 */
   var kol = "id,nama,hp,telp,pic,lokasi,industri,cabang,salesman_teks,sumber,"
           + "blacklist,alasan_blacklist,perlu_konfirmasi,alasan_konfirmasi,sales_rep_id,"
           + "industri_lama,nama_lama"   /* #25 / #20 */
@@ -8092,6 +8313,7 @@ function muatPelanggan(){
     janji.push(apiHalaman("/customers?select=id&blacklist=is.true", 0, 0));
   }
   return Promise.all(janji).then(function(r){
+    if (awal && !P.dimuat) { P.memuat = false; return muatPelanggan(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     P.baris = r[0].baris; P.total = r[0].total;
     if (r.length > 1) P.ringkas = { semua:r[1].total, pipeline:r[2].total, master:r[3].total, hitam:r[4].total };
     P.dimuat = true; P.memuat = false;
@@ -8670,6 +8892,7 @@ function muatPenawaran(){
   var P = LANJUT.penawaran;
   if (P.memuat) return Promise.resolve();
   P.memuat = true;
+  var awal = P.dimuat;   /* #52 */
   /* #3: spesifikasi & urut ikut dimuat untuk laci detail. #11: sales_rep_id
      + daftar sales (nama di daftar & pilihan "mewakili sales"). #1: set_id.
      #40: spesifikasi terakhir tiap sales per produk (RLS: sales hanya miliknya). */
@@ -8679,6 +8902,7 @@ function muatPenawaran(){
     apiSemua("/spesifikasi_sales?select=product_id,sales_rep_id,spesifikasi&order=product_id,sales_rep_id").catch(function(){ return []; })
   ])
     .then(function(h){
+      if (awal && !P.dimuat) { P.memuat = false; return muatPenawaran(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
       P.baris = h[0] || [];
       P.spek = {};
       (h[2] || []).forEach(function(x){ P.spek[x.product_id + "|" + x.sales_rep_id] = x.spesifikasi; });
@@ -9912,6 +10136,7 @@ function muatPerforma(){
   var P = LANJUT.performa;
   if (P.memuat) return Promise.resolve();
   P.memuat = true;
+  var awal = P.dimuat;   /* #52 */
   var r0 = rentangPerforma(P);
   var syarat = (r0.dari   ? "&tanggal=gte." + r0.dari   : "")
              + (r0.sampai ? "&tanggal=lte." + r0.sampai : "");
@@ -9921,6 +10146,7 @@ function muatPerforma(){
         + syarat + "&limit=5000"),
     repAlur()
   ]).then(function(r){
+    if (awal && !P.dimuat) { P.memuat = false; return muatPerforma(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     P.lead = r[0] || [];
     return ringkasSoUntuk(r[1] || []).then(function(sp){
       P.sp = sp; P.dimuat = true; P.memuat = false;
@@ -10426,12 +10652,14 @@ function pasangAlatHalaman(H, awalan, gambar, kunciTambahan, kunciLokal){
 function muatHalaman(H, path, syaratTetap, urut){
   if (H.memuat) return Promise.resolve();
   H.memuat = true;
+  var awal = H.dimuat;   /* #52 */
   var q = path + (syaratTetap ? "&" + syaratTetap : "");
   var per = syaratPeriode(H.tglKol, H.periode, H.dari, H.sampai);
   if (per) q += "&" + per;
   if (H.rep) q += "&sales_rep_id=eq." + encodeURIComponent(H.rep);
   q += "&order=" + (urut || (H.tglKol + ".desc.nullslast"));
   return apiHalaman(q, 0, BATAS_TARIK - 1).then(function(r){
+    if (awal && !H.dimuat) { H.memuat = false; return muatHalaman(H, path, syaratTetap, urut); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     H.total = r.total;
     H.dipotong = (H.total !== null && H.total > r.baris.length);
     H.baris = r.baris || []; H.dimuat = true; H.memuat = false;
@@ -10517,6 +10745,7 @@ function muatVonnyCek(){
   var V = LANJUT.vonnycek;
   if (V.memuat) return Promise.resolve();
   V.memuat = true;
+  var awal = V.dimuat;   /* #52 */
   var sejak = new Date(Date.now() - VONNY_RIWAYAT_HARI * 86400000).toISOString();
   return Promise.all([
     api("GET", VONNY_KOLOM + "&batal=is.false&status=eq." + encodeURIComponent("menunggu vonny")
@@ -10527,7 +10756,10 @@ function muatVonnyCek(){
              + "&order=vonny_pada.desc,id.desc&limit=50").catch(function(){ return []; }),
     repAlur().catch(function(){ return []; })   /* nama sales di kolom Sales (dulu tampil "—" di tab ini) */
   ])
-    .then(function(x){ V.baris = x[0]; V.riwayat = x[1] || []; V.dimuat = true; V.memuat = false; })
+    .then(function(x){
+      if (awal && !V.dimuat) { V.memuat = false; return muatVonnyCek(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
+      V.baris = x[0]; V.riwayat = x[1] || []; V.dimuat = true; V.memuat = false;
+    })
     .catch(function(e){ V.memuat = false; throw e; });
 }
 function panelVonnyCek(){
@@ -10760,8 +10992,12 @@ function muatKirim(){
      sampai Vonny meloloskannya (baru lalu masuk pengiriman). */
   return muatHalaman(H, "/sales_orders?select=" + kolomSp() + "&batal=is.false&status=neq." + encodeURIComponent("menunggu vonny"),
                      d.syarat, H.tglKol + ".desc.nullslast,id.desc")
-    .then(function(){ return ringkasSoUntuk(H.baris); })
-    .then(function(x){ H.baris = x; });
+    .then(function(){
+      /* #52: dua tarikan bisa bertumpuk (diam-diam + tindakan pengguna). Ringkasan hanya menimpa baris
+         yang ia ringkas; kalau baris sudah diganti tarikan lain, tarikan itulah yang meringkasnya. */
+      var b = H.baris;
+      return ringkasSoUntuk(b).then(function(x){ if (H.baris === b) H.baris = x; });
+    });
 }
 
 function panelKirim(){
@@ -11227,6 +11463,7 @@ function muatLunas(){
   var L = LANJUT.lunas;
   if (L.memuat) return Promise.resolve();
   L.memuat = true;
+  var awal = L.dimuat;   /* #52 */
   var q = "/sales_orders?select=" + kolomSp() + "&batal=is.false&no_invoice=not.is.null";
   var per = syaratPeriode(L.tglKol, L.periode, L.dari, L.sampai);
   if (per) q += "&" + per;
@@ -11236,6 +11473,7 @@ function muatLunas(){
   q += "&order=" + L.tglKol + ".desc.nullslast,id.desc";
   return Promise.all([ apiHalaman(q, 0, BATAS_TARIK - 1), repAlur(), muatRepCash() ])   /* #22 */
     .then(function(r){
+      if (awal && !L.dimuat) { L.memuat = false; return muatLunas(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
       L.total = r[0].total;
       L.dipotong = (L.total !== null && L.total > r[0].baris.length);
       return ringkasSoUntuk(r[0].baris || []).then(function(d){
@@ -13965,6 +14203,7 @@ function muatKhusus(){
   var K = LANJUT.khusus;
   if (K.memuat) return Promise.resolve();
   K.memuat = true;
+  var awal = K.dimuat;   /* #52 */
   var q = "/harga_khusus_lengkap?select=*";
   if (K.status) q += "&status=eq." + encodeURIComponent(K.status);
   q += "&order=status.asc,customer.asc,kode_produk.asc";
@@ -13974,6 +14213,7 @@ function muatKhusus(){
     return { id: st, q: "/harga_khusus_lengkap?select=id&status=eq." + st }; }))
     .then(function(c){ K.cacahStatus = c; }).catch(function(){ K.cacahStatus = null; });
   return Promise.all([apiHalaman(q, 0, BATAS_TARIK - 1), cacah]).then(function(rr){
+    if (awal && !K.dimuat) { K.memuat = false; return muatKhusus(); }   /* #52: ditandai ulang (dimuat=false) selagi menarik → tarik lagi, jangan kunci data lama */
     var r = rr[0];
     K.total = r.total;
     K.dipotong = (K.total !== null && K.total > r.baris.length);
@@ -16143,6 +16383,7 @@ function tutupLaci(){
   $("tirai").hidden = true; $("laci").hidden = true;
   $("laci-form").innerHTML = ""; $("laci-kaki").innerHTML = "";
   document.body.style.overflow = "";
+  setTimeout(jalankanTundaSegar, 0);   /* #52 */
 }
 $("tirai").addEventListener("click", tutupLaci);
 $("laci-tutup").addEventListener("click", tutupLaci);
@@ -19240,7 +19481,7 @@ function mulai(){
        tab pertama yang diizinkan bila tab tersimpan tidak boleh untuk peran ini. */
     var _tabSimpan = ambil("rhj_tab"); if (_tabSimpan) tabAktif = _tabSimpan;
     bangunTabs();
-    return muatSemua().then(function(){ pindahTab(tabAktif); });
+    return muatSemua().then(function(){ SEGAR.siap = true; pasangMuatUlangDiam(); pindahTab(tabAktif); });   /* #52 */
   }).catch(function(e){
     sibuk(false);
     buang("rhj_sesi"); sesi = null;
@@ -19255,6 +19496,13 @@ function mulai(){
    aplikasi ke siapa pun yang membuka console. */
 if (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:") {
 window.__ujiPeriksaBocor = periksaBocor;
+/* #52: kait uji muat ulang diam-diam (gate yang sama: hanya localhost / file:). */
+window.__segar = {
+  SEGAR: SEGAR, MUAT_DIAM: MUAT_DIAM, LANJUT: LANJUT, ALUR: ALUR,
+  pindahTab: function(t){ pindahTab(t); }, tandaiBasi: function(t){ tandaiBasi(t); },
+  muatUlangDiam: function(o){ return muatUlangDiam(o); },
+  panel: function(t){ var f = PANEL_LANJUT[t]; if (f) f(); else gambar(); }
+};
 /* Kait sesi — gate yang sama: hanya localhost / file:. Tidak membuka apa
    pun yang tidak bisa dilihat dari console; gunanya supaya penjaga sesi
    bisa diuji tanpa menunggu satu jam sungguhan. */
