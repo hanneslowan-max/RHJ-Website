@@ -48,6 +48,16 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
 - Insiden kecil DEV: versi pertama trigger `sinkron_mode_ppn` (114) menggagalkan insert PO beberapa menit
   (PL/pgSQL tidak memotong AND pada `new.po_id`). Diperbaiki di 114b; tidak ada data yang berubah/hilang.
 
+## Sesudah revisi 49 (data & perbaikan)
+| Isi | Migrasi |
+|---|---|
+| Tab Pelanggan timeout — RLS fungsi peran dihitung sekali per query + indeks urut | 116, 116b |
+| Pelanggan Hendri (id 15) dipindah ke akun sales id 1 (orang yang sama) | 117 |
+| Sales id 1 "Ahen" diganti nama jadi **"Hendri"** (akun Hendri Pratomo; login, 432 pelanggan, 3 PO, 3 SP, 16 lead tetap); sales lama id 15 jadi "Hendri (lama)"; tautan sheet 15 → 1 | 118 |
+
+- Draf pelanggan sales nonaktif + Office (branch `claude/pelanggan-nonaktif-office`) memakai nomor 118 →
+  saat dikerjakan menjadi **119**. Belum diuji/diterapkan.
+
 ## Langkah berikut
 1. Hannes mencoba di DEV. Setelah Hannes mengetik "revisi selesai" → jalankan verifikator.
 2. PR ke `main` hanya bila Hannes meminta. Migrasi 109–114 belum pernah dijalankan di PROD.
