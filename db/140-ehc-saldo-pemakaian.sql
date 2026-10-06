@@ -1,4 +1,4 @@
--- DRAF — BELUM diuji, BELUM dijalankan di DEV (sedang diuji rancangannya). Jangan dijalankan.
+-- DRAF — BELUM dijalankan di DEV (sedang diuji dalam transaksi yang dibatalkan). Jangan dijalankan.
 -- ═══════════════════════════════════════════════════════════════════════
 -- 140 · EHC tahap 1 — klaim EHC jadi PEMAKAIAN SALDO per SP
 --       (alokasi ke banyak SP, untuk apa, cara bayar, lampiran wajib,
@@ -14,28 +14,37 @@
 --     reimburse; kartu kredit perusahaan menyusul di tahap 2 lewat statement
 --     finance), customer penerima, LAMPIRAN WAJIB (mengubah ATURAN B "klaim EHC
 --     tidak memerlukan lampiran").
---   · Customer penerima ≠ customer SP → wajib persetujuan GM (ditandai
---     lintas_customer; diputus di tahap 3).
+--   · Customer penerima ≠ customer SP → wajib persetujuan GM. Sampai GM bisa
+--     memutus per klaim (tahap 3), klaim lintas customer TIDAK ikut dibayar.
 --   · Periode EHC: tgl 19 bulan lalu s.d. tgl 18 bulan ini (WIB). Sebelum
---     cutoff klaim masih bisa diubah/dibatalkan (#61); sesudahnya GM memeriksa,
---     finance memproses tgl 20 (tahap 3).
+--     cutoff klaim masih bisa diubah/dibatalkan sales (#61); sesudahnya GM
+--     memeriksa, finance memproses tgl 20.
 --   · Klaim boleh dibuat sebelum SP lunas; uangnya (transfer/reimburse) baru
 --     keluar sesudah SEMUA SP alokasinya lunas.
 --
 -- Bentuk: ehc_klaim tetap jadi tabel klaim (id lama tetap → transfer_pengajuan,
 -- transfer_batch, ehc_cepat_log, audit tetap sah); alokasi per SP di tabel baru
 -- ehc_klaim_alokasi. Saldo per SP = view ehc_saldo_sp; kas sales dihitung
--- ulang dari SP yang tertutup.
+-- ulang dari SP yang tertutup. Hak sales atas klaim = sales pemilik klaim
+-- (ehc_klaim.sales_rep_id, beku sejak dibuat), bukan pemegang SP saat ini.
+--
+-- Uji rancangan (4 sudut + pembantah) memperbaiki: pembatalan SP tidak boleh
+-- buntu (hanya klaim yang BELUM dibayar yang menahan, owner/GM bisa
+-- membatalkannya kapan saja), batal/pulihkan sisa qty tidak lagi terkunci
+-- klaim EHC (cukup penjaga saldo), klaim yang SP-nya lunas belakangan ikut
+-- periode berikutnya, nominal tidak bocor ke peran yang tidak berhak, klaim
+-- tidak bisa dihapus lewat REST, PIC terkunci tidak bisa dipindah customer.
 --
 -- Yang butuh DROP (indeks unik 1 klaim per SP, CHECK cara bayar lama) ada di
 -- 140b — DROP lewat MCP Supabase macet, jadi 140b dijalankan manual di SQL
--- Editor. Sebelum 140b jalan, DB hanya lebih ketat (klaim kedua per SP ditolak).
+-- Editor SEBELUM index.html baru dipakai. Sebelum 140b, DB hanya lebih ketat.
 --
 -- Data yang diubah: ehc_klaim lama diisi keperluan='uang_customer',
 --   customer_id = customer SP, periode = bulan tanggal klaim, status
---   ('disetujui' bila sudah ber-batch, selain itu 'diajukan'); satu baris
---   alokasi per klaim lama bernominal > 0. DEV: klaim #6 (SP 41, Rp 5.000) dan
---   #7 (SP 35, Rp 20.000). Kolom ehc_klaim_nilai.kas tidak diubah (tidak dibaca
+--   ('disetujui' bila sudah ber-batch; 'batal' bila belum ber-batch dan SP-nya
+--   sudah batal; selain itu 'diajukan'); satu baris alokasi per klaim lama
+--   bernominal > 0. DEV: klaim #6 (SP 41, Rp 5.000) dan #7 (SP 35, Rp 20.000),
+--   keduanya 'diajukan'. Kolom ehc_klaim_nilai.kas tidak diubah (tidak dibaca
 --   lagi). Angka EHC per SP tidak berubah.
 -- ═══════════════════════════════════════════════════════════════════════
 
@@ -82,15 +91,19 @@ alter table public.ehc_klaim
 
 comment on column public.ehc_klaim.so_id is
   'SP utama = SP alokasi pertama (berkas 140). Rincian per SP ada di ehc_klaim_alokasi.';
+comment on column public.ehc_klaim.sales_rep_id is
+  'Sales pemilik klaim — beku sejak klaim dibuat (berkas 140). Penerima reimburse.';
 comment on column public.ehc_klaim.tanggal is 'Tanggal transaksi (diisi sales, ≤ hari ini WIB).';
 comment on column public.ehc_klaim.keperluan is
   'Untuk apa: uang_customer (transfer ke customer) / entertain / bongkar_muat (berkas 140).';
 comment on column public.ehc_klaim.customer_id is
-  'Customer penerima / yang di-entertain. Beda dengan customer SP alokasi → lintas_customer (butuh GM).';
+  'Customer penerima / yang di-entertain. Beda dengan customer SP alokasi → lintas customer (butuh GM).';
 comment on column public.ehc_klaim.periode is
   'Periode EHC YYYY-MM dari tanggal klaim dibuat (WIB, cutoff tgl 18). Diisi sistem, tidak berubah saat diedit.';
 comment on column public.ehc_klaim.status is
   'diajukan / disetujui / ditolak / batal. Batal & ditolak tidak memakai saldo SP.';
+comment on column public.ehc_klaim.lintas_customer is
+  'Penanda saat disimpan (untuk layar). Jalur bayar menghitung ulang dari customer SP saat itu.';
 
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'ehck_keperluan_sah') then
@@ -105,7 +118,7 @@ do $$ begin
     alter table public.ehc_klaim add constraint ehck_periode_sah
       check (periode is null or periode ~ '^\d{4}-\d{2}$');
   end if;
-  -- Cara bayar baru. CHECK lama (transfer|tunai) di-DROP di 140b; sampai saat
+  -- Cara bayar baru. CHECK lama (transfer|tunai) dibuang di 140b; sampai saat
   -- itu keduanya berlaku dan 'reimburse' masih ditolak.
   if not exists (select 1 from pg_constraint where conname = 'ehck_cara_bayar_sah2') then
     alter table public.ehc_klaim add constraint ehck_cara_bayar_sah2
@@ -136,14 +149,37 @@ revoke all on public.ehc_klaim_alokasi from public, anon;
 grant select on public.ehc_klaim_alokasi to authenticated;
 revoke all on sequence public.ehc_klaim_alokasi_id_seq from public, anon;
 
-create policy ekal_baca on public.ehc_klaim_alokasi for select to authenticated
-  using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(klaim_id));
+-- ── 4. hak sales atas klaim = sales pemilik klaim ────────────────────────
+-- Dulu juga "pemegang SP saat ini": begitu SP dipindah, dua sales sama-sama
+-- berhak, dan sales baru bisa mengubah klaim reimburse milik sales lama.
+create or replace function public.klaim_ehc_saya(p_klaim bigint)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.peran_saya() = 'sales'
+     and public.sales_rep_saya() is not null
+     and exists (select 1 from public.ehc_klaim k
+                  where k.id = p_klaim and k.sales_rep_id = public.sales_rep_saya())
+$$;
+
+alter policy ehck_baca on public.ehc_klaim
+  using (public.boleh_lihat_semua_jual()
+         or (public.peran_saya() = 'sales' and public.sales_rep_saya() is not null
+             and sales_rep_id = public.sales_rep_saya()));
+
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public'
+                  and tablename = 'ehc_klaim_alokasi' and policyname = 'ekal_baca') then
+    create policy ekal_baca on public.ehc_klaim_alokasi for select to authenticated
+      using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(klaim_id));
+  end if;
+end $$;
 
 create or replace trigger zz_audit_ehc_klaim_alokasi
   after insert or update or delete on public.ehc_klaim_alokasi
   for each row execute function public.catat_perubahan();
 
--- ── 4. riwayat klaim (ajukan / ubah / batal) ─────────────────────────────
+-- ── 5. riwayat klaim (ajukan / ubah / batal) ─────────────────────────────
+-- Snapshot 'ubah' memuat nominal & alokasi → hanya peran yang boleh melihat
+-- nominal klaim (bukan Liesian/Ichi/Vonny).
 create table if not exists public.ehc_klaim_log (
   id       bigserial primary key,
   klaim_id bigint not null references public.ehc_klaim(id) on delete cascade,
@@ -158,28 +194,50 @@ alter table public.ehc_klaim_log enable row level security;
 revoke all on public.ehc_klaim_log from public, anon;
 grant select on public.ehc_klaim_log to authenticated;
 revoke all on sequence public.ehc_klaim_log_id_seq from public, anon;
-create policy ekl_baca on public.ehc_klaim_log for select to authenticated
-  using (public.boleh_lihat_semua_jual() or public.klaim_ehc_saya(klaim_id));
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public'
+                  and tablename = 'ehc_klaim_log' and policyname = 'ekl_baca') then
+    create policy ekl_baca on public.ehc_klaim_log for select to authenticated
+      using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(klaim_id));
+  end if;
+end $$;
 
--- ── 5. lampiran: satu berkas hanya untuk satu klaim; diaudit ─────────────
+-- ── 6. lampiran: satu berkas satu klaim, diaudit, dibaca peran yang berhak ─
 create unique index if not exists ekb_path_uniq on public.ehc_klaim_berkas (path);
 create or replace trigger zz_audit_ehc_klaim_berkas
   after insert or update or delete on public.ehc_klaim_berkas
   for each row execute function public.catat_perubahan();
 
--- ── 6. nominal hanya lewat RPC ───────────────────────────────────────────
--- Dulu staff/finance/GM/owner bisa PATCH ehc_klaim_nilai lewat REST; dengan
--- alokasi, nominal yang diubah sendirian tidak lagi sama dengan jumlah
--- alokasinya. Fungsi SECURITY DEFINER tetap bisa menulis (RLS tidak dipaksa).
-alter policy ekn_ubah   on public.ehc_klaim_nilai using (false) with check (false);
-alter policy ekn_tambah on public.ehc_klaim_nilai with check (false);
+alter policy ekb_baca on public.ehc_klaim_berkas
+  using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(klaim_id));
+alter policy rhj_ehc_bukti_baca on storage.objects
+  using (bucket_id = 'dokumen' and name like 'ehc/%'
+         and exists (select 1 from public.ehc_klaim_berkas f
+                      where f.path = objects.name
+                        and (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(f.klaim_id))));
 
--- ── 7. konversi klaim lama ───────────────────────────────────────────────
+-- ── 7. nominal & klaim hanya lewat RPC; tidak ada hapus lewat REST ───────
+-- Nominal yang diubah sendirian tidak lagi sama dengan jumlah alokasinya;
+-- klaim yang dihapus mengembalikan saldo tanpa jejak di layar. Pembatalan
+-- lewat status 'batal' (batalkan_klaim_ehc). Fungsi SECURITY DEFINER tetap
+-- bisa menulis (RLS tidak dipaksa untuk pemilik tabel).
+alter policy ekn_ubah   on public.ehc_klaim_nilai  using (false) with check (false);
+alter policy ekn_tambah on public.ehc_klaim_nilai  with check (false);
+alter policy ekn_hapus  on public.ehc_klaim_nilai  using (false);
+alter policy ehck_hapus on public.ehc_klaim        using (false);
+alter policy ekb_hapus  on public.ehc_klaim_berkas using (false);
+
+-- ── 8. konversi klaim lama ───────────────────────────────────────────────
 update public.ehc_klaim k
-   set keperluan   = 'uang_customer',
-       customer_id = s.customer_id,
-       periode     = to_char(k.tanggal, 'YYYY-MM'),
-       status      = case when k.transfer_batch_id is not null then 'disetujui' else 'diajukan' end
+   set keperluan    = 'uang_customer',
+       customer_id  = s.customer_id,
+       periode      = to_char(k.tanggal, 'YYYY-MM'),
+       status       = case when k.transfer_batch_id is not null then 'disetujui'
+                           when s.batal then 'batal'
+                           else 'diajukan' end,
+       batal_alasan = case when k.transfer_batch_id is null and s.batal
+                           then 'SP sudah batal sebelum berkas 140' end,
+       batal_pada   = case when k.transfer_batch_id is null and s.batal then now() end
   from public.sales_orders s
  where s.id = k.so_id and k.keperluan is null;
 
@@ -194,10 +252,12 @@ select k.id, k.so_id, n.nominal
 alter table public.ehc_klaim alter column keperluan set not null;
 alter table public.ehc_klaim alter column periode   set not null;
 
--- ── 8. saldo EHC per SP ──────────────────────────────────────────────────
+-- ── 9. saldo EHC per SP ──────────────────────────────────────────────────
 -- total_ehc = EHC SP dalam DPP (so_ringkas; mode include ÷ 1,11), DIPOTONG ke
 -- sen di bawahnya — saldo tidak pernah dibulatkan ke atas. Terpakai = alokasi
 -- dari klaim yang diajukan/disetujui. Tertutup = komisi SP sudah diklaim.
+-- Barisnya hanya untuk peran yang boleh melihat nominal klaim, atau sales
+-- pemegang SP — peran lain akan melihat "terpakai 0" yang menyesatkan.
 create or replace view public.ehc_saldo_sp with (security_invoker = on) as
 select s.id                                   as so_id,
        s.no_sp,
@@ -222,7 +282,10 @@ select s.id                                   as so_id,
       join public.ehc_klaim k on k.id = x.klaim_id
      where x.so_id = s.id and k.status in ('diajukan','disetujui')
   ) a on true
- where not s.batal;
+ where not s.batal
+   and ((select public.boleh_lihat_nilai_klaim())
+        or ((select public.peran_saya()) = 'sales'
+            and s.sales_rep_id = (select public.sales_rep_saya())));
 revoke all on public.ehc_saldo_sp from public, anon;
 grant select on public.ehc_saldo_sp to authenticated;
 
@@ -239,10 +302,10 @@ select v.sales_rep_id,
  group by v.sales_rep_id, r.nama;
 revoke all on public.kas_sales from anon;
 
--- ── 9. gerbang insert klaim ──────────────────────────────────────────────
--- Syarat "SP lunas atau dini disetujui GM" DIHAPUS: klaim boleh dibuat sebelum
--- lunas (entertain bisa lebih dulu). Uang baru keluar sesudah SP lunas —
--- dijaga di jalur pembayaran (ajukan_transfer di bawah, lalu tahap 3).
+-- ── 10. gerbang insert klaim ─────────────────────────────────────────────
+-- Syarat "SP lunas atau dini disetujui GM" dibuang: klaim boleh dibuat
+-- sebelum lunas (entertain bisa lebih dulu). Uang baru keluar sesudah SP
+-- lunas — dijaga di jalur pembayaran.
 create or replace function public.jaga_gerbang_klaim()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare s public.sales_orders;
@@ -254,41 +317,64 @@ begin
   return new;
 end $$;
 
--- ── 10. saldo EHC SP tidak boleh minus ───────────────────────────────────
--- Dicek saat COMMIT (constraint trigger tertunda), sehingga perubahan banyak
--- baris dalam satu transaksi dinilai hasil akhirnya.
-create or replace function public.jaga_saldo_ehc_sp()
-returns trigger language plpgsql security definer set search_path = public as $$
-declare v_so bigint; v_terpakai numeric; v_total numeric; v_batal boolean; v_no text;
+-- ── 11. saldo EHC SP tidak boleh minus ───────────────────────────────────
+-- Dicek saat COMMIT (constraint trigger tertunda): perubahan banyak baris
+-- dalam satu transaksi dinilai hasil akhirnya.
+--   · SP dibatalkan: hanya klaim yang uangnya BELUM keluar yang menahan
+--     (batalkan dulu — owner/GM bisa kapan saja). Klaim yang sudah dibayar
+--     tidak menahan: SP salah input harus selalu bisa dibatalkan (berkas 21).
+--   · EHC SP turun (batal qty, ubah baris, mode PPN): tidak boleh di bawah
+--     yang sudah terpakai klaim aktif.
+create or replace function public.periksa_saldo_ehc_sp(p_so bigint)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_terpakai numeric; v_belum numeric; v_total numeric; v_batal boolean; v_no text;
 begin
-  if TG_TABLE_NAME = 'sales_order_lines' then
-    v_so := case when TG_OP = 'DELETE' then old.so_id else new.so_id end;
-  else
-    v_so := new.id;
-  end if;
-  select coalesce(sum(a.nominal), 0) into v_terpakai
+  if p_so is null then return; end if;
+  select coalesce(sum(a.nominal), 0),
+         coalesce(sum(a.nominal) filter (where k.transfer_batch_id is null
+                                           and not (k.cepat_minta and coalesce(k.cepat_ok, false))), 0)
+    into v_terpakai, v_belum
     from public.ehc_klaim_alokasi a join public.ehc_klaim k on k.id = a.klaim_id
-   where a.so_id = v_so and k.status in ('diajukan','disetujui');
-  if v_terpakai = 0 then return null; end if;
+   where a.so_id = p_so and k.status in ('diajukan','disetujui');
+  if v_terpakai = 0 then return; end if;
 
-  select s.batal, s.no_sp into v_batal, v_no from public.sales_orders s where s.id = v_so;
-  if not found then return null; end if;
+  select s.batal, s.no_sp into v_batal, v_no from public.sales_orders s where s.id = p_so;
+  if not found then return; end if;
   if v_batal then
-    raise exception 'SP % tidak bisa dibatalkan: EHC-nya sudah dipakai % lewat klaim EHC yang masih aktif. '
-                    'Batalkan klaim EHC-nya dulu (sebelum cutoff) atau minta GM menolaknya.',
-                    v_no, public.rp_teks(v_terpakai) using errcode = '23514';
+    if v_belum > 0 then
+      raise exception 'SP % tidak bisa dibatalkan: saldo EHC-nya masih dipakai klaim EHC yang belum dibayar (%). '
+                      'Batalkan klaim EHC-nya dulu — sales sebelum cutoff, owner/GM kapan saja.',
+                      v_no, public.rp_teks(v_belum) using errcode = '23514';
+    end if;
+    return;
   end if;
-  select trunc(coalesce(r.total_ehc, 0), 2) into v_total from public.so_ringkas r where r.so_id = v_so;
+  select trunc(coalesce(r.total_ehc, 0), 2) into v_total from public.so_ringkas r where r.so_id = p_so;
   if coalesce(v_total, 0) < v_terpakai then
     raise exception 'EHC SP % tinggal % sesudah perubahan ini, padahal klaim EHC aktif atas SP ini sudah %. '
                     'Ubah atau batalkan klaim EHC-nya dulu.',
                     v_no, public.rp_teks(coalesce(v_total, 0)), public.rp_teks(v_terpakai)
       using errcode = '23514';
   end if;
+end $$;
+revoke all on function public.periksa_saldo_ehc_sp(bigint) from public, anon, authenticated;
+
+create or replace function public.jaga_saldo_ehc_sp()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if TG_TABLE_NAME = 'sales_order_lines' then
+    if TG_OP in ('UPDATE','DELETE') then perform public.periksa_saldo_ehc_sp(old.so_id); end if;
+    if TG_OP = 'INSERT' or (TG_OP = 'UPDATE' and new.so_id is distinct from old.so_id) then
+      perform public.periksa_saldo_ehc_sp(new.so_id);
+    end if;
+  else
+    perform public.periksa_saldo_ehc_sp(new.id);
+  end if;
   return null;
 end $$;
 revoke all on function public.jaga_saldo_ehc_sp() from public, anon, authenticated;
 
+-- WHEN dinilai pada baris akhir (sesudah BEFORE trigger seperti
+-- sinkron_mode_ppn), jadi perubahan mode PPN dari trigger lain ikut tertangkap.
 do $$ begin
   if not exists (select 1 from pg_trigger where tgname = 'sol_jaga_saldo_ehc') then
     create constraint trigger sol_jaga_saldo_ehc
@@ -298,21 +384,25 @@ do $$ begin
   end if;
   if not exists (select 1 from pg_trigger where tgname = 'so_jaga_saldo_ehc') then
     create constraint trigger so_jaga_saldo_ehc
-      after update of batal, mode_ppn, ppn_kena on public.sales_orders
+      after update on public.sales_orders
       deferrable initially deferred
-      for each row execute function public.jaga_saldo_ehc_sp();
+      for each row
+      when (old.batal is distinct from new.batal
+            or old.mode_ppn is distinct from new.mode_ppn
+            or old.ppn_kena is distinct from new.ppn_kena)
+      execute function public.jaga_saldo_ehc_sp();
   end if;
 end $$;
 
--- SP yang pernah dipakai klaim EHC tidak dihapus diam-diam: FK ehc_klaim.so_id
--- (CASCADE, lama) akan ikut menghapus klaim beserta alokasinya ke SP lain.
+-- SP yang pernah dipakai klaim EHC tidak dihapus: FK ehc_klaim.so_id (CASCADE,
+-- lama) akan ikut menghapus klaim beserta alokasinya ke SP lain.
 create or replace function public.jaga_hapus_sp_ehc()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if exists (select 1 from public.ehc_klaim_alokasi where so_id = old.id)
      or exists (select 1 from public.ehc_klaim where so_id = old.id) then
     raise exception 'SP % tidak bisa dihapus: sudah ada klaim EHC atas SP ini. Batalkan SP-nya saja '
-                    '(setelah klaim EHC-nya dibatalkan) supaya riwayat klaimnya tetap ada.', old.no_sp
+                    'supaya riwayat klaimnya tetap ada.', old.no_sp
       using errcode = '23503';
   end if;
   return old;
@@ -322,7 +412,194 @@ create or replace trigger so_jaga_hapus_ehc
   before delete on public.sales_orders
   for each row execute function public.jaga_hapus_sp_ehc();
 
--- ── 11. simpan klaim EHC (baru atau ubah) ────────────────────────────────
+-- ── 12. batal / pulihkan sisa qty: klaim EHC tidak lagi mengunci SP ──────
+-- Dulu "ada klaim EHC = SP terkunci" (klaim baru ada sesudah lunas). Kini
+-- klaim boleh sebelum kirim, dan klaim yang batal tetap tercatat — SP-nya akan
+-- terkunci selamanya. Saldo dijaga penjaga di atas; pemulihan hanya menaikkan
+-- EHC. Cek klaim komisi tetap. Selebihnya sama persis dengan definisi DEV.
+create or replace function public.batalkan_baris_sp(p_line bigint, p_alasan text, p_qty numeric default null::numeric)
+returns text language plpgsql security definer set search_path = public as $function$
+declare v_so bigint; l record; s record; v_kirim numeric; v_sisa numeric; v_q numeric; v_fin text; v_catat text;
+        v_po record; v_po_batal boolean := false;
+begin
+  if not (public.boleh_alur_jual() or public.peran_saya() = 'vonny') then
+    raise exception 'Anda tidak berhak membatalkan baris Surat Pesanan.' using errcode='42501'; end if;
+  if coalesce(btrim(p_alasan), '') = '' then
+    raise exception 'Pembatalan wajib beralasan.' using errcode='22023'; end if;
+  select so_id into v_so from public.sales_order_lines where id = p_line;
+  if v_so is null then raise exception 'Baris tidak ditemukan.' using errcode='P0002'; end if;
+  -- urutan kunci: SP lalu baris (sama dengan tambah_surat_jalan)
+  select * into s from public.sales_orders where id = v_so for update;
+  select * into l from public.sales_order_lines where id = p_line for update;
+  if not (public.setara_owner() or public.peran_saya() in ('staff','vonny')
+          or s.sales_rep_id = public.sales_rep_saya()) then
+    raise exception 'Surat Pesanan % milik sales lain.', s.no_sp using errcode='42501'; end if;
+  if s.batal then raise exception 'Surat Pesanan % sudah dibatalkan.', s.no_sp using errcode='23514'; end if;
+  if s.no_invoice is not null then
+    raise exception 'Invoice Surat Pesanan % sudah terbit — pembatalan lewat retur, bukan di sini.', s.no_sp
+      using errcode='23514'; end if;
+  if s.no_surat_jalan is not null then
+    raise exception 'Surat Pesanan % sudah terkirim semua (surat jalan %) — tidak ada sisa yang bisa dibatalkan; lewat retur.',
+      s.no_sp, s.no_surat_jalan using errcode='23514'; end if;
+  -- berkas 140: hanya klaim komisi yang mengunci; EHC dijaga penjaga saldo.
+  if exists (select 1 from public.komisi_klaim k where k.so_id = s.id) then
+    raise exception 'Klaim komisi Surat Pesanan % sudah diajukan — batalkan klaimnya dulu.', s.no_sp
+      using errcode='23514'; end if;
+  if l.jenis = 'biaya' then
+    if coalesce(l.batal, false) then return 'Baris sudah dibatalkan.'; end if;
+    v_kirim := 0;
+  else
+    select coalesce(sum(kb.qty), 0) into v_kirim from public.so_kirim_baris kb where kb.so_line_id = p_line;
+  end if;
+  v_sisa := l.qty - l.qty_batal - v_kirim;
+  if v_sisa <= 0 then
+    raise exception 'Tidak ada sisa yang bisa dibatalkan (pesan %, terkirim %, sudah batal %).',
+      l.qty, v_kirim, l.qty_batal using errcode='23514'; end if;
+  v_q := coalesce(p_qty, v_sisa);
+  if v_q <= 0 then raise exception 'Qty batal harus lebih dari 0.' using errcode='22023'; end if;
+  if v_q > v_sisa then
+    raise exception 'Qty batal (%) melebihi sisa yang belum terkirim (%). Qty yang sudah terkirim (%) tidak bisa dibatalkan — lewat retur.',
+      v_q, v_sisa, v_kirim using errcode='23514'; end if;
+
+  if not exists (select 1 from public.sales_order_lines x
+                  where x.so_id = v_so and x.jenis = 'barang'
+                    and x.qty - x.qty_batal - case when x.id = p_line then v_q else 0 end > 0) then
+    if not public.boleh_alur_jual() then
+      raise exception 'Pembatalan ini menghabiskan seluruh barang Surat Pesanan % — artinya SP-nya batal. '
+                      'Minta sales pemegang, staff, atau GM menekan "Batalkan SP".', s.no_sp using errcode='42501'; end if;
+    perform public.batalkan_sp(v_so, 'Semua barang dibatalkan: ' || btrim(p_alasan));
+    -- #18 berkas 100: penanda SP batal karena barang → PO mencerminkan pembatalan, tidak kembali ke antrean.
+    update public.sales_orders set batal_karena_barang = true where id = v_so;
+    if s.po_id is not null then
+      select * into v_po from public.purchase_orders where id = s.po_id for update;
+      if v_po.id is not null and not v_po.batal
+         and not exists (select 1 from public.sales_orders o where o.po_id = s.po_id and not o.batal) then
+        update public.purchase_orders
+           set batal = true,
+               alasan_batal = 'Semua barang dibatalkan customer (SP ' || s.no_sp || '): ' || btrim(p_alasan),
+               dibatalkan_pada = now(), dibatalkan_oleh = auth.uid(),
+               diubah_pada = now(), diubah_oleh = auth.uid()
+         where id = s.po_id;
+        v_po_batal := true;
+      end if;
+    end if;
+    return 'Semua barang Surat Pesanan ' || s.no_sp || ' dibatalkan — SP ikut dibatalkan'
+           || case when v_po_batal then ', PO ' || v_po.no_po || ' ikut ditandai batal.'
+                   when s.po_id is not null then '; PO masih punya SP lain yang berlaku — nilai SP ini tampil sebagai batal di PO.'
+                   else '.' end;
+  end if;
+
+  v_catat := to_char(now() at time zone 'Asia/Jakarta', 'DD/MM/YYYY') || ' batal ' || v_q::text || ': ' || btrim(p_alasan);
+  perform set_config('rhj.usul', 'on', true);
+  perform set_config('rhj.batal_baris', '1', true);
+  update public.sales_order_lines
+     set qty_batal    = qty_batal + v_q,
+         batal_alasan = case when batal_alasan is null then v_catat else batal_alasan || E'\n' || v_catat end,
+         batal_oleh   = auth.uid(),
+         batal_pada   = now()
+   where id = p_line;
+  perform set_config('rhj.batal_baris', '', true);
+  perform set_config('rhj.usul', '', true);
+
+  v_fin := public.finalisasi_kirim_sp(v_so);
+  return 'Qty ' || v_q::text || ' dibatalkan.' ||
+         case when v_fin = 'lengkap'
+              then ' Semua sisa sudah terkirim/dibatalkan — surat jalan terakhir menjadi penyelesai, invoice boleh diterbitkan.'
+              else ' Nilai SP, komisi, dan EHC menyesuaikan.' end;
+end $function$;
+
+create or replace function public.pulihkan_baris_sp(p_line bigint, p_qty numeric default null::numeric)
+returns text language plpgsql security definer set search_path = public as $function$
+declare v_so bigint; l record; s record; v_q numeric; v_fin text; v_catat text;
+begin
+  if not (public.boleh_alur_jual() or public.peran_saya() = 'vonny') then
+    raise exception 'Anda tidak berhak memulihkan baris Surat Pesanan.' using errcode='42501'; end if;
+  select so_id into v_so from public.sales_order_lines where id = p_line;
+  if v_so is null then raise exception 'Baris tidak ditemukan.' using errcode='P0002'; end if;
+  select * into s from public.sales_orders where id = v_so for update;
+  select * into l from public.sales_order_lines where id = p_line for update;
+  if not (public.setara_owner() or public.peran_saya() in ('staff','vonny')
+          or s.sales_rep_id = public.sales_rep_saya()) then
+    raise exception 'Surat Pesanan % milik sales lain.', s.no_sp using errcode='42501'; end if;
+  if s.batal then raise exception 'Surat Pesanan % sudah dibatalkan.', s.no_sp using errcode='23514'; end if;
+  if s.no_invoice is not null then
+    raise exception 'Invoice Surat Pesanan % sudah terbit — baris tidak bisa dipulihkan.', s.no_sp using errcode='23514'; end if;
+  if s.no_surat_jalan is not null and not exists (select 1 from public.so_kirim k where k.so_id = v_so) then
+    raise exception 'Surat Pesanan % sudah dikirim sekaligus (surat jalan %) — baris tidak bisa dipulihkan.',
+      s.no_sp, s.no_surat_jalan using errcode='23514'; end if;
+  -- berkas 140: hanya klaim komisi yang mengunci; pemulihan hanya menaikkan EHC.
+  if exists (select 1 from public.komisi_klaim k where k.so_id = s.id) then
+    raise exception 'Klaim komisi Surat Pesanan % sudah diajukan — batalkan klaimnya dulu.', s.no_sp
+      using errcode='23514'; end if;
+  if l.qty_batal <= 0 then return 'Baris tidak dalam keadaan batal.'; end if;
+  v_q := coalesce(p_qty, l.qty_batal);
+  if v_q <= 0 then raise exception 'Qty pulih harus lebih dari 0.' using errcode='22023'; end if;
+  if v_q > l.qty_batal then
+    raise exception 'Qty pulih (%) melebihi qty yang dibatalkan (%).', v_q, l.qty_batal using errcode='23514'; end if;
+
+  v_catat := to_char(now() at time zone 'Asia/Jakarta', 'DD/MM/YYYY') || ' pulih ' || v_q::text;
+  perform set_config('rhj.usul', 'on', true);
+  perform set_config('rhj.batal_baris', '1', true);
+  if v_q = l.qty_batal then
+    update public.sales_order_lines
+       set qty_batal = 0, batal_alasan = null, batal_oleh = null, batal_pada = null
+     where id = p_line;
+  else
+    update public.sales_order_lines
+       set qty_batal = qty_batal - v_q,
+           batal_alasan = case when batal_alasan is null then v_catat else batal_alasan || E'\n' || v_catat end
+     where id = p_line;
+  end if;
+  perform set_config('rhj.batal_baris', '', true);
+  perform set_config('rhj.usul', '', true);
+
+  v_fin := public.finalisasi_kirim_sp(v_so);
+  return 'Qty ' || v_q::text || ' dipulihkan ke SP.' ||
+         case when v_fin = 'dibuka'
+              then ' Surat jalan penyelesai dilepas — sisa perlu dikirim lagi sebelum invoice.'
+              else '' end;
+end $function$;
+
+-- ── 13. PIC yang rekeningnya terkunci tidak bisa dipindah customer ───────
+-- Tanpa ini, PIC terkunci milik customer lain bisa dipindah ke customer
+-- sendiri lalu dipakai sebagai tujuan transfer EHC. Selebihnya sama dengan DEV.
+create or replace function public.jaga_rekening_pic()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' then
+    new.terkunci := coalesce(btrim(new.no_rekening), '') <> '';
+    new.dibuat_oleh := auth.uid();
+    return new;
+  end if;
+  if old.terkunci
+     and (new.bank is distinct from old.bank
+       or new.no_rekening is distinct from old.no_rekening
+       or new.atas_nama is distinct from old.atas_nama
+       or new.customer_id is distinct from old.customer_id)     -- berkas 140
+     -- coalesce penting: current_setting mengembalikan NULL kalau belum
+     -- pernah diset, dan NULL <> 'on' itu NULL, bukan true — tanpa ini
+     -- seluruh syaratnya jadi NULL dan penguncinya tidak pernah menggigit.
+     and coalesce(current_setting('rhj.ubah_rekening', true), 'off') <> 'on' then
+    raise exception 'Rekening % sudah terkunci (termasuk customer pemiliknya). Ajukan perubahan lewat approval GM.', old.nama;
+  end if;
+  if not old.terkunci and coalesce(btrim(new.no_rekening), '') <> '' then
+    new.terkunci := true;                 -- pengisian pertama langsung mengunci
+  end if;
+  return new;
+end $$;
+
+-- ── 14. lintas customer dihitung dari keadaan SP saat ini ────────────────
+create or replace function public.klaim_ehc_lintas(p_klaim bigint)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.ehc_klaim k
+                   join public.ehc_klaim_alokasi a on a.klaim_id = k.id
+                   join public.sales_orders s on s.id = a.so_id
+                  where k.id = p_klaim and s.customer_id is distinct from k.customer_id)
+$$;
+revoke all on function public.klaim_ehc_lintas(bigint) from public, anon;
+grant execute on function public.klaim_ehc_lintas(bigint) to authenticated;
+
+-- ── 15. simpan klaim EHC (baru atau ubah) ────────────────────────────────
 create or replace function public.simpan_klaim_ehc(p_klaim bigint, p_data jsonb)
 returns bigint language plpgsql security definer set search_path = public as $$
 declare
@@ -336,20 +613,25 @@ declare
   v_tgl   date;
   v_cust  bigint;
   v_pic   public.customer_pics;
+  v_rek   public.sales_rep_rekening;
   v_ket   text := nullif(btrim(coalesce(p_data->>'keterangan', '')), '');
   v_alas  text := nullif(btrim(coalesce(p_data->>'cepat_alasan', '')), '');
+  v_alok  jsonb := p_data->'alokasi';
+  v_berk  jsonb := coalesce(p_data->'berkas', '[]'::jsonb);
   v_rep   bigint;
   v_utama bigint;
   v_total numeric(14,2) := 0;
   v_lintas boolean := false;
   v_n     integer;
   v_sisa  numeric;
+  v_lama  numeric;
+  v_cust_sp boolean := false;
   a       record;
   s       record;
   b       jsonb;
   v_path  text;
 begin
-  -- 1 · peran
+  -- 1 · peran & bentuk data
   if not public.boleh_alur_jual() then
     raise exception 'Anda tidak berhak mengajukan atau mengubah klaim EHC.' using errcode = '42501';
   end if;
@@ -357,7 +639,7 @@ begin
     raise exception 'Isi klaim tidak terbaca.' using errcode = '22023';
   end if;
 
-  -- 2 · klaim lama (ubah)
+  -- 2 · klaim lama (ubah, #61)
   if not v_baru then
     select * into k from public.ehc_klaim where id = p_klaim for update;
     if not found then raise exception 'Klaim EHC #% tidak ada.', p_klaim using errcode = 'P0002'; end if;
@@ -378,8 +660,12 @@ begin
                       'kalau masih menunggu GM.' using errcode = '22023';
     end if;
     if v_hari > public.cutoff_ehc(k.periode) then
-      raise exception 'Periode % sudah lewat cutoff (%). Klaim ini sudah terkunci untuk diperiksa GM.',
+      raise exception 'Periode % sudah lewat cutoff (%). Klaim ini terkunci untuk diperiksa GM.',
                       k.periode, to_char(public.cutoff_ehc(k.periode), 'DD-MM-YYYY') using errcode = '22023';
+    end if;
+    if v_alas is not null then
+      raise exception 'EHC cepat untuk klaim yang sudah ada diminta lewat tombol "Minta EHC cepat".'
+        using errcode = '22023';
     end if;
   end if;
 
@@ -408,62 +694,75 @@ begin
     raise exception 'Tanggal transaksi tidak boleh di masa depan.' using errcode = '22023';
   end if;
 
-  -- 5 · customer penerima
-  begin
-    v_cust := (p_data->>'customer_id')::bigint;
-  exception when others then v_cust := null; end;
-  if v_cust is null or not exists (select 1 from public.customers where id = v_cust) then
-    raise exception 'Pilih customer penerima / yang di-entertain.' using errcode = '22023';
-  end if;
-  if not public.pic_pelanggan_saya(v_cust) then
-    raise exception 'Customer itu dipegang sales lain. EHC tidak bisa dipakai untuk pelanggan sales lain.'
-      using errcode = '42501';
-  end if;
-
-  -- 6 · alokasi
-  if jsonb_typeof(p_data->'alokasi') is distinct from 'array' or jsonb_array_length(p_data->'alokasi') = 0 then
+  -- 5 · bentuk alokasi
+  if jsonb_typeof(v_alok) is distinct from 'array' or jsonb_array_length(v_alok) = 0 then
     raise exception 'Pilih minimal satu SP yang saldo EHC-nya dipakai.' using errcode = '22023';
   end if;
-  create temp table if not exists _ehc_alok (urut int, so_id bigint, nominal numeric) on commit drop;
-  delete from _ehc_alok;
+  if jsonb_array_length(v_alok) > 20 then
+    raise exception 'Satu klaim paling banyak memakai 20 SP.' using errcode = '22023';
+  end if;
   begin
-    insert into _ehc_alok (urut, so_id, nominal)
-    select x.ord::int, (x.v->>'so_id')::bigint, (x.v->>'nominal')::numeric
-      from jsonb_array_elements(p_data->'alokasi') with ordinality as x(v, ord);
+    perform 1 from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric);
   exception when others then
     raise exception 'Daftar SP dan nominal tidak terbaca.' using errcode = '22023';
   end;
-  if exists (select 1 from _ehc_alok where so_id is null or nominal is null) then
+  if exists (select 1 from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric)
+              where x.so_id is null or x.nominal is null) then
     raise exception 'Setiap SP wajib punya nominal.' using errcode = '22023';
   end if;
-  if exists (select 1 from _ehc_alok where nominal <= 0 or nominal <> trunc(nominal, 2)) then
+  if exists (select 1 from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric)
+              where x.nominal <= 0 or x.nominal <> trunc(x.nominal, 2)) then
     raise exception 'Nominal per SP harus lebih dari nol dan paling banyak dua angka di belakang koma (sen).'
       using errcode = '22023';
   end if;
-  if (select count(*) from _ehc_alok) <> (select count(distinct so_id) from _ehc_alok) then
+  if (select count(*) from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric))
+     <> (select count(distinct x.so_id) from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric)) then
     raise exception 'SP yang sama dipilih dua kali.' using errcode = '22023';
   end if;
 
+  -- 6 · kepemilikan SP dulu (pesan tanpa nomor SP orang lain), baru dikunci
+  for a in select x.so_id from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric) loop
+    if not public.boleh_lihat_sp(a.so_id) then
+      raise exception 'Ada SP yang bukan milik Anda. Saldo EHC hanya bisa dipakai dari SP yang Anda pegang.'
+        using errcode = '42501';
+    end if;
+  end loop;
   -- kunci SP (urut id) supaya dua klaim bersamaan tidak sama-sama lolos cek saldo
-  perform 1 from public.sales_orders where id in (select so_id from _ehc_alok) order by id for update;
+  perform 1 from public.sales_orders
+   where id in (select x.so_id from jsonb_to_recordset(v_alok) as x(so_id bigint, nominal numeric))
+   order by id for update;
 
-  for a in select * from _ehc_alok order by urut loop
+  begin
+    v_cust := (p_data->>'customer_id')::bigint;
+  exception when others then v_cust := null; end;
+
+  for a in select x.so_id, x.nominal, x.ord
+             from jsonb_to_recordset(v_alok) with ordinality as x(so_id bigint, nominal numeric, ord bigint)
+            order by x.ord loop
     select so.id, so.no_sp, so.batal, so.sales_rep_id, so.customer_id
       into s from public.sales_orders so where so.id = a.so_id;
     if not found then raise exception 'SP #% tidak ditemukan.', a.so_id using errcode = 'P0002'; end if;
-    if not public.boleh_lihat_sp(a.so_id) then
-      raise exception 'SP % bukan milik Anda. Saldo EHC hanya bisa dipakai dari SP yang Anda pegang.', s.no_sp
-        using errcode = '42501';
-    end if;
     if s.batal then raise exception 'SP % sudah dibatalkan.', s.no_sp using errcode = '22023'; end if;
     if s.sales_rep_id is null then
       raise exception 'SP % belum punya sales.', s.no_sp using errcode = '22023';
     end if;
-    if v_rep is null then v_rep := s.sales_rep_id; v_utama := s.id;
-    elsif v_rep <> s.sales_rep_id then
-      raise exception 'Semua SP dalam satu klaim EHC harus milik sales yang sama.' using errcode = '22023';
+    if s.customer_id is null then
+      raise exception 'SP % belum ditautkan ke data pelanggan. Minta Vonny/GM melengkapi pelanggan SP itu dulu.',
+                      s.no_sp using errcode = '22023';
     end if;
-    if exists (select 1 from public.komisi_klaim kk where kk.so_id = a.so_id) then
+    -- pemilik klaim: dari SP saat klaim dibuat; beku sesudahnya
+    if v_rep is null then
+      v_rep := case when v_baru then s.sales_rep_id else k.sales_rep_id end;
+      v_utama := s.id;
+    end if;
+    if s.sales_rep_id <> v_rep then
+      raise exception 'Semua SP dalam satu klaim EHC harus milik sales yang sama dengan pemilik klaim.'
+        using errcode = '22023';
+    end if;
+    -- saldo yang dipakai klaim ini sebelumnya (ubah)
+    v_lama := coalesce((select x.nominal from public.ehc_klaim_alokasi x
+                         where x.klaim_id = p_klaim and x.so_id = a.so_id), 0);
+    if exists (select 1 from public.komisi_klaim kk where kk.so_id = a.so_id) and a.nominal > v_lama then
       raise exception 'Komisi SP % sudah diklaim — EHC-nya sudah tertutup dan sisanya masuk kas sales.', s.no_sp
         using errcode = '22023';
     end if;
@@ -480,9 +779,20 @@ begin
                       s.no_sp, public.rp_teks(greatest(coalesce(v_sisa, 0), 0)), public.rp_teks(a.nominal)
         using errcode = '22023';
     end if;
+    if s.customer_id = v_cust then v_cust_sp := true; end if;
     if s.customer_id is distinct from v_cust then v_lintas := true; end if;
     v_total := v_total + a.nominal;
   end loop;
+
+  -- 7 · customer penerima: customer SP sendiri selalu boleh; customer lain harus
+  --     milik sales itu atau belum bertuan (dan klaimnya jadi lintas → GM)
+  if v_cust is null or not exists (select 1 from public.customers where id = v_cust) then
+    raise exception 'Pilih customer penerima / yang di-entertain.' using errcode = '22023';
+  end if;
+  if not v_cust_sp and not public.pic_pelanggan_saya(v_cust) then
+    raise exception 'Customer itu dipegang sales lain. EHC tidak bisa dipakai untuk pelanggan sales lain.'
+      using errcode = '42501';
+  end if;
 
   -- 8 · rekening tujuan
   if v_cara = 'transfer' then
@@ -501,13 +811,25 @@ begin
     if coalesce(btrim(v_pic.bank), '') = '' or coalesce(btrim(v_pic.no_rekening), '') = '' then
       raise exception 'PIC % belum punya rekening. Isi rekeningnya dulu.', v_pic.nama using errcode = '22023';
     end if;
+    -- transfer "ke customer" yang ternyata ke rekening sales
+    if exists (select 1 from public.sales_rep_rekening r
+                where regexp_replace(r.no_rekening, '\D', '', 'g') = regexp_replace(v_pic.no_rekening, '\D', '', 'g')) then
+      raise exception 'Rekening PIC % sama dengan rekening sales. Transfer ke customer harus ke rekening customer.',
+                      v_pic.nama using errcode = '42501';
+    end if;
+  else
+    -- reimburse: rekening sales pemilik klaim (diisi finance) disalin bila sudah ada
+    select * into v_rek from public.sales_rep_rekening where sales_rep_id = v_rep;
   end if;
 
   -- 9 · lampiran
-  if p_data ? 'berkas' and jsonb_typeof(p_data->'berkas') <> 'array' then
+  if jsonb_typeof(v_berk) <> 'array' then
     raise exception 'Daftar lampiran tidak berbentuk daftar.' using errcode = '22023';
   end if;
-  for b in select * from jsonb_array_elements(coalesce(p_data->'berkas', '[]'::jsonb)) loop
+  if jsonb_array_length(v_berk) > 10 then
+    raise exception 'Paling banyak 10 lampiran sekali simpan.' using errcode = '22023';
+  end if;
+  for b in select * from jsonb_array_elements(v_berk) loop
     v_path := btrim(coalesce(b->>'path', ''));
     if coalesce(btrim(b->>'nama_berkas'), '') = '' or v_path = '' then
       raise exception 'Ada lampiran yang tidak punya nama berkas atau alamat penyimpanan.' using errcode = '22023';
@@ -525,7 +847,7 @@ begin
       raise exception 'Lampiran % sudah dipakai klaim lain.', b->>'nama_berkas' using errcode = '22023';
     end if;
   end loop;
-  if jsonb_typeof(p_data->'berkas_hapus') = 'array' and v_baru then
+  if v_baru and jsonb_typeof(p_data->'berkas_hapus') = 'array' and jsonb_array_length(p_data->'berkas_hapus') > 0 then
     raise exception 'Klaim baru tidak punya lampiran untuk dibuang.' using errcode = '22023';
   end if;
 
@@ -537,9 +859,9 @@ begin
                                   sales_rep_id)
     values (v_utama,
             case when v_cara = 'transfer' then v_pic.id end,
-            case when v_cara = 'transfer' then v_pic.bank end,
-            case when v_cara = 'transfer' then v_pic.no_rekening end,
-            case when v_cara = 'transfer' then v_pic.atas_nama end,
+            case when v_cara = 'transfer' then v_pic.bank        else v_rek.bank end,
+            case when v_cara = 'transfer' then v_pic.no_rekening else v_rek.no_rekening end,
+            case when v_cara = 'transfer' then v_pic.atas_nama   else v_rek.atas_nama end,
             false, v_tgl, v_cara, v_kep, v_cust, v_ket, public.periode_ehc(v_hari), 'diajukan', v_lintas,
             v_rep)
     returning id into v_id;
@@ -558,11 +880,11 @@ begin
     update public.ehc_klaim
        set so_id = v_utama,
            pic_id      = case when v_cara = 'transfer' then v_pic.id end,
-           bank        = case when v_cara = 'transfer' then v_pic.bank end,
-           no_rekening = case when v_cara = 'transfer' then v_pic.no_rekening end,
-           atas_nama   = case when v_cara = 'transfer' then v_pic.atas_nama end,
+           bank        = case when v_cara = 'transfer' then v_pic.bank        else v_rek.bank end,
+           no_rekening = case when v_cara = 'transfer' then v_pic.no_rekening else v_rek.no_rekening end,
+           atas_nama   = case when v_cara = 'transfer' then v_pic.atas_nama   else v_rek.atas_nama end,
            tanggal = v_tgl, cara_bayar = v_cara, keperluan = v_kep, customer_id = v_cust,
-           keterangan = v_ket, lintas_customer = v_lintas, sales_rep_id = v_rep,
+           keterangan = v_ket, lintas_customer = v_lintas,
            diubah_oleh = auth.uid(), diubah_pada = now()
      where id = v_id;
     update public.ehc_klaim_nilai set nominal = v_total, kas = 0 where klaim_id = v_id;
@@ -570,17 +892,23 @@ begin
     if jsonb_typeof(p_data->'berkas_hapus') = 'array' then
       delete from public.ehc_klaim_berkas f
        where f.klaim_id = v_id
-         and f.id in (select (x)::bigint from jsonb_array_elements_text(p_data->'berkas_hapus') x);
+         and f.id in (select x::bigint from jsonb_array_elements_text(p_data->'berkas_hapus') x);
     end if;
   end if;
 
   insert into public.ehc_klaim_alokasi (klaim_id, so_id, nominal)
-  select v_id, so_id, nominal from _ehc_alok order by urut;
+  select v_id, x.so_id, x.nominal
+    from jsonb_to_recordset(v_alok) with ordinality as x(so_id bigint, nominal numeric, ord bigint)
+   order by x.ord;
 
   insert into public.ehc_klaim_berkas (klaim_id, nama_berkas, path, ukuran, mime, dibuat_oleh)
   select v_id, btrim(x->>'nama_berkas'), btrim(x->>'path'),
-         nullif(x->>'ukuran', '')::bigint, nullif(btrim(x->>'mime'), ''), auth.uid()
-    from jsonb_array_elements(coalesce(p_data->'berkas', '[]'::jsonb)) x;
+         (select (o.metadata->>'size')::bigint from storage.objects o
+           where o.bucket_id = 'dokumen' and o.name = btrim(x->>'path')),
+         (select o.metadata->>'mimetype' from storage.objects o
+           where o.bucket_id = 'dokumen' and o.name = btrim(x->>'path')),
+         auth.uid()
+    from jsonb_array_elements(v_berk) x;
 
   select count(*) into v_n from public.ehc_klaim_berkas where klaim_id = v_id;
   if v_n = 0 then
@@ -598,10 +926,13 @@ end $$;
 revoke all on function public.simpan_klaim_ehc(bigint, jsonb) from public, anon;
 grant execute on function public.simpan_klaim_ehc(bigint, jsonb) to authenticated;
 
--- ── 12. batalkan klaim EHC sebelum cutoff (#61) ──────────────────────────
+-- ── 16. batalkan klaim EHC (#61) ─────────────────────────────────────────
+-- Sales: sampai cutoff periode. Owner/GM: kapan saja selama uangnya belum
+-- keluar (jalan keluar bila SP-nya harus dibatalkan).
 create or replace function public.batalkan_klaim_ehc(p_klaim bigint, p_alasan text)
 returns text language plpgsql security definer set search_path = public as $$
 declare k public.ehc_klaim; v_alasan text := nullif(btrim(coalesce(p_alasan, '')), '');
+        v_lewat boolean;
 begin
   if not public.boleh_alur_jual() then
     raise exception 'Anda tidak berhak membatalkan klaim EHC.' using errcode = '42501';
@@ -611,21 +942,23 @@ begin
   if not (public.klaim_ehc_saya(p_klaim) or public.peran_saya() in ('owner','gm','staff')) then
     raise exception 'Klaim EHC ini bukan milik Anda.' using errcode = '42501';
   end if;
-  if k.status <> 'diajukan' then
+  if k.status not in ('diajukan','disetujui') then
     raise exception 'Klaim EHC ini berstatus %, tidak bisa dibatalkan.', k.status using errcode = '22023';
   end if;
   if k.transfer_batch_id is not null then
-    raise exception 'Klaim EHC ini sudah ditransfer (batch #%).', k.transfer_batch_id using errcode = '22023';
+    raise exception 'Klaim EHC ini sudah ditransfer (batch #%) — uangnya sudah keluar.', k.transfer_batch_id
+      using errcode = '22023';
   end if;
   if public.klaim_ehc_terkunci_pengajuan(p_klaim) is not null then
-    raise exception 'Klaim EHC ini sudah masuk pengajuan transfer, tidak bisa dibatalkan.' using errcode = '22023';
+    raise exception 'Klaim EHC ini sudah masuk pengajuan transfer. Tarik dulu pengajuannya.' using errcode = '22023';
   end if;
   if k.cepat_minta and k.cepat_ok is distinct from false then
     raise exception 'Klaim ini sedang/sudah diajukan sebagai EHC cepat. Tarik permintaan cepatnya dulu '
                     'kalau masih menunggu GM.' using errcode = '22023';
   end if;
-  if public.hari_ini_wib() > public.cutoff_ehc(k.periode) then
-    raise exception 'Periode % sudah lewat cutoff (%). Klaim ini menunggu pemeriksaan GM.',
+  v_lewat := public.hari_ini_wib() > public.cutoff_ehc(k.periode);
+  if (v_lewat or k.status = 'disetujui') and not public.boleh_approve() then
+    raise exception 'Periode % sudah lewat cutoff (%). Pembatalan sekarang hanya oleh GM/owner.',
                     k.periode, to_char(public.cutoff_ehc(k.periode), 'DD-MM-YYYY') using errcode = '22023';
   end if;
   if v_alasan is null then
@@ -634,15 +967,17 @@ begin
   update public.ehc_klaim
      set status = 'batal', batal_alasan = v_alasan, batal_oleh = auth.uid(), batal_pada = now()
    where id = p_klaim;
-  insert into public.ehc_klaim_log (klaim_id, aksi, catatan, oleh) values (p_klaim, 'batal', v_alasan, auth.uid());
+  insert into public.ehc_klaim_log (klaim_id, aksi, catatan, oleh)
+  values (p_klaim, 'batal',
+          v_alasan || case when v_lewat then ' (dibatalkan GM/owner sesudah cutoff)' else '' end, auth.uid());
   return 'Klaim EHC dibatalkan. Saldo EHC SP-nya kembali dan bisa dipakai lagi.';
 end $$;
 revoke all on function public.batalkan_klaim_ehc(bigint, text) from public, anon;
 grant execute on function public.batalkan_klaim_ehc(bigint, text) to authenticated;
 
--- ── 13. jalur lama dipensiunkan ──────────────────────────────────────────
--- Tidak di-DROP (macet lewat MCP) — badannya diganti penolakan, supaya tidak
--- ada jalan memintas lampiran wajib & cek saldo.
+-- ── 17. jalur lama dipensiunkan ──────────────────────────────────────────
+-- Badannya diganti penolakan, supaya tidak ada jalan memintas lampiran wajib
+-- & cek saldo.
 create or replace function public.ajukan_klaim_ehc(p_so bigint, p_pic bigint, p_nominal numeric,
                                                    p_tanggal date, p_berkas jsonb, p_cara_bayar text)
 returns bigint language plpgsql security definer set search_path = public as $$
@@ -659,14 +994,17 @@ begin
                   'mendesak). Muat ulang halaman.' using errcode = '0A000';
 end $$;
 
--- ── 14. EHC cepat: hanya klaim yang masih diajukan ───────────────────────
+-- ── 18. EHC cepat (darurat) ──────────────────────────────────────────────
+-- Hanya klaim yang masih diajukan, berlampiran, punya rekening tujuan, dan
+-- BUKAN lintas customer (yang terakhir menunggu pemeriksaan GM per klaim di
+-- tahap 3 — layar GM untuk EHC cepat belum menampilkan customer klaim).
 create or replace function public.minta_klaim_cepat(p_klaim bigint, p_alasan text)
 returns text language plpgsql security definer set search_path = public as $$
 declare k public.ehc_klaim; v_alasan text; v_pj bigint; v_sp text;
 begin
   v_alasan := nullif(btrim(coalesce(p_alasan, '')), '');
 
-  select * into k from public.ehc_klaim where id = p_klaim;
+  select * into k from public.ehc_klaim where id = p_klaim for update;
   if not found then
     raise exception 'Klaim EHC #% tidak ada.', p_klaim using errcode = 'P0002';
   end if;
@@ -674,10 +1012,21 @@ begin
     raise exception 'Anda tidak berhak mengajukan pencairan cepat untuk klaim ini.'
       using errcode = '42501';
   end if;
-  -- berkas 140: klaim yang batal/ditolak/sudah disetujui tidak bisa dipercepat.
   if k.status <> 'diajukan' then
     raise exception 'Klaim EHC ini berstatus % — hanya klaim yang masih diajukan yang bisa dipercepat.',
                     k.status using errcode = '22023';
+  end if;
+  if not exists (select 1 from public.ehc_klaim_berkas f where f.klaim_id = p_klaim) then
+    raise exception 'Klaim ini belum punya lampiran. Ubah klaimnya dan lampirkan bukti dulu.' using errcode = '22023';
+  end if;
+  if public.klaim_ehc_lintas(p_klaim) then
+    raise exception 'Klaim ini memakai SP dari customer lain, jadi menunggu pemeriksaan GM per periode — '
+                    'belum bisa dicairkan cepat.' using errcode = '22023';
+  end if;
+  if k.cara_bayar in ('transfer','reimburse') and coalesce(btrim(k.no_rekening), '') = '' then
+    raise exception 'Klaim ini belum punya rekening tujuan%.',
+                    case when k.cara_bayar = 'reimburse' then ' (rekening sales belum diisi finance)' else '' end
+      using errcode = '22023';
   end if;
 
   if v_alasan is null then
@@ -725,8 +1074,8 @@ begin
   values (p_klaim, 'minta', v_alasan, auth.uid());
 
   select no_sp into v_sp from public.sales_orders where id = k.so_id;
-  return 'Klaim EHC ' || coalesce(v_sp, '#' || p_klaim) || ' diajukan sebagai KLAIM CEPAT dan '
-      || 'masuk antrean GM. Selama menunggu, klaim ini tidak ikut rekap bulanan.';
+  return 'Klaim EHC ' || coalesce(v_sp, '#' || p_klaim) || ' diajukan sebagai EHC CEPAT dan '
+      || 'masuk antrean GM. Selama menunggu, klaim ini tidak ikut pengajuan bulanan.';
 end $$;
 
 create or replace view public.ehc_cepat_siap with (security_invoker = on) as
@@ -754,10 +1103,12 @@ select k.id AS klaim_id,
      left join public.ehc_klaim_nilai n on n.klaim_id = k.id
   where k.cepat_minta and k.cepat_ok and k.transfer_batch_id is null and k.status <> 'batal';
 
--- ── 15. pengajuan transfer EHC (SEMENTARA, sampai tahap 3) ───────────────
--- Cabang 'ehc': periode (bukan bulan tanggal klaim), hanya sesudah cutoff,
--- hanya klaim aktif yang bukan klaim cepat, dan hanya bila SEMUA SP
--- alokasinya sudah lunas. Cabang komisi tidak berubah.
+-- ── 19. pengajuan transfer EHC (SEMENTARA, sampai tahap 3) ───────────────
+-- Cabang 'ehc': hanya sesudah cutoff periode p_bulan; mengambil klaim periode
+-- itu DAN periode sebelumnya yang tertunda (SP-nya baru lunas belakangan);
+-- hanya klaim aktif yang bukan klaim cepat, bukan lintas customer (menunggu
+-- GM per klaim, tahap 3), punya rekening tujuan, dan SEMUA SP alokasinya
+-- sudah lunas & tidak batal. Cabang komisi tidak berubah.
 create or replace function public.ajukan_transfer(p_jenis text, p_bulan text, p_catatan text default null::text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_id bigint; v_n integer; v_total numeric(14,2); v_lama public.transfer_pengajuan;
@@ -800,13 +1151,16 @@ begin
     select v_id, k.id from public.ehc_klaim k
      where k.transfer_batch_id is null
        and k.status in ('diajukan','disetujui')
-       and k.periode = p_bulan
+       and k.periode <= p_bulan
        and k.cara_bayar in ('transfer','reimburse','tunai')
+       and (k.cara_bayar = 'tunai' or coalesce(btrim(k.no_rekening), '') <> '')
        and not (k.cepat_minta and k.cepat_ok is distinct from false)
+       and not public.klaim_ehc_lintas(k.id)
+       and public.klaim_ehc_terkunci_pengajuan(k.id) is null
        and exists (select 1 from public.ehc_klaim_alokasi a where a.klaim_id = k.id)
        and not exists (select 1 from public.ehc_klaim_alokasi a
                          join public.sales_orders s on s.id = a.so_id
-                        where a.klaim_id = k.id and not s.lunas);
+                        where a.klaim_id = k.id and (not s.lunas or s.batal));
     select count(*), coalesce(sum(n.nominal), 0) into v_n, v_total
       from public.transfer_pengajuan_baris b
       join public.ehc_klaim_nilai n on n.klaim_id = b.klaim_id
@@ -838,3 +1192,87 @@ begin
           || '. Daftarnya sudah dikunci — klaim yang masuk sesudah ini menunggu '
           || 'pengajuan berikutnya.');
 end $$;
+
+-- ── 20. laporan "Komisi & EHC per sales": EHC dari alokasi ───────────────
+-- EHC diklaim/ditransfer = Σ alokasi klaim aktif atas SP periode itu (dulu:
+-- semua klaim termasuk yang batal, seluruhnya ke SP utama). Jadi kas = sisa
+-- SP tertutup (dulu kolom kas klaim, kini selalu 0). Bagian komisi tetap.
+create or replace function public.laporan_komisi(p_dari date default null::date, p_sampai date default null::date)
+returns table(sales text, sales_rep_id bigint, jumlah_sp bigint, nilai_barang numeric, komisi_terhitung numeric,
+              komisi_diklaim numeric, komisi_ditransfer numeric, ehc_terhitung numeric, ehc_diklaim numeric,
+              ehc_ditransfer numeric, ehc_jadi_kas numeric)
+language plpgsql stable security definer set search_path = public as $function$
+begin
+  if not (public.boleh_lihat_nilai_klaim() or public.peran_saya() = 'sales') then
+    raise exception 'Anda tidak berwenang melihat nominal komisi dan EHC.'
+      using errcode = '42501';
+  end if;
+  return query
+  with saring as (select public.laporan_rep_saring() as rep),
+       sp as (
+         select s.id, s.sales_rep_id,
+                coalesce(r.total_barang, 0) as total_barang,
+                coalesce(r.komisi, 0)       as komisi,
+                coalesce(r.total_ehc, 0)    as ehc
+           from public.sales_orders s
+           cross join saring
+           left join public.so_ringkas r on r.so_id = s.id
+          where not s.batal
+            and s.lunas
+            and s.tgl_lunas is not null
+            and (p_dari   is null or s.tgl_lunas >= p_dari)
+            and (p_sampai is null or s.tgl_lunas <= p_sampai)
+            and (saring.rep is null or s.sales_rep_id = saring.rep)
+       ),
+       -- Klaim dihitung dari SP yang sama, supaya tiga angkanya benar-benar
+       -- sebanding. Klaim atas SP di luar periode sengaja tidak ikut.
+       kk as (
+         select k.sales_rep_id,
+                sum(coalesce(n.nominal, 0))                                   as diklaim,
+                sum(case when k.transfer_batch_id is not null
+                         then coalesce(n.nominal, 0) else 0 end)              as ditransfer
+           from public.komisi_klaim k
+           join sp on sp.id = k.so_id
+           left join public.komisi_klaim_nilai n on n.klaim_id = k.id
+          group by k.sales_rep_id
+       ),
+       ek as (
+         select sp.sales_rep_id,
+                sum(a.nominal)                                                as diklaim,
+                sum(case when k.transfer_batch_id is not null
+                         then a.nominal else 0 end)                           as ditransfer
+           from public.ehc_klaim_alokasi a
+           join public.ehc_klaim k on k.id = a.klaim_id and k.status in ('diajukan','disetujui')
+           join sp on sp.id = a.so_id
+          group by sp.sales_rep_id
+       ),
+       ekas as (
+         select sp.sales_rep_id,
+                sum(greatest(trunc(sp.ehc, 2)
+                             - coalesce((select sum(a.nominal) from public.ehc_klaim_alokasi a
+                                           join public.ehc_klaim k on k.id = a.klaim_id
+                                          where a.so_id = sp.id
+                                            and k.status in ('diajukan','disetujui')), 0), 0)) as kas
+           from sp
+          where exists (select 1 from public.komisi_klaim kk2 where kk2.so_id = sp.id)
+          group by sp.sales_rep_id
+       )
+  select coalesce(r.nama, '(tanpa sales)')  as sales,
+         sp.sales_rep_id,
+         count(*)                            as jumlah_sp,
+         sum(sp.total_barang)                as nilai_barang,
+         sum(sp.komisi)                      as komisi_terhitung,
+         coalesce(max(kk.diklaim), 0)        as komisi_diklaim,
+         coalesce(max(kk.ditransfer), 0)     as komisi_ditransfer,
+         sum(sp.ehc)                         as ehc_terhitung,
+         coalesce(max(ek.diklaim), 0)        as ehc_diklaim,
+         coalesce(max(ek.ditransfer), 0)     as ehc_ditransfer,
+         coalesce(max(ekas.kas), 0)          as ehc_jadi_kas
+    from sp
+    left join public.sales_reps r on r.id = sp.sales_rep_id
+    left join kk on kk.sales_rep_id = sp.sales_rep_id
+    left join ek on ek.sales_rep_id = sp.sales_rep_id
+    left join ekas on ekas.sales_rep_id = sp.sales_rep_id
+   group by r.nama, sp.sales_rep_id
+   order by 5 desc;
+end $function$;

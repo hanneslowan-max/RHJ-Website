@@ -1283,12 +1283,22 @@ var PESAN_CHECK = {
   po_lines_diskon_sen: "Diskon baris PO harus habis dalam sen: diskon Rp paling banyak 2 angka di belakang koma, "
                      + "dan diskon % tidak boleh menghasilkan potongan di bawah sen.",
   po_lines_set_qty_bulat: "Jumlah set di baris PO harus bilangan bulat.",
-  po_lines_set_bukan_produk: "Baris set di PO tidak boleh sekaligus menunjuk produk."
+  po_lines_set_bukan_produk: "Baris set di PO tidak boleh sekaligus menunjuk produk.",
+  /* berkas 140: dua batas lama EHC yang dibuang manual lewat db/140b */
+  ehck_cara_bayar_sah: "Database belum menerima cara bayar baru (reimburse). Owner perlu menjalankan "
+                     + "db/140b-ehc-buang-batas-lama.sql di Supabase → SQL Editor."
+};
+/* Pelanggaran indeks unik yang artinya "migrasi belum lengkap", bukan
+   kesalahan isian. */
+var PESAN_UNIK = {
+  ehck_so_uniq: "Database masih memakai batas lama \"satu SP satu klaim EHC\". Owner perlu menjalankan "
+              + "db/140b-ehc-buang-batas-lama.sql di Supabase → SQL Editor."
 };
 function pesanGalat(j, res){
   if (j && j.message) {
     var cek = /violates check constraint "([a-z0-9_]+)"/.exec(j.message);
-    return (cek && PESAN_CHECK[cek[1]]) || j.message;
+    var unik = /violates unique constraint "([a-z0-9_]+)"/.exec(j.message);
+    return (cek && PESAN_CHECK[cek[1]]) || (unik && PESAN_UNIK[unik[1]]) || j.message;
   }
   if (j && j.error_description) return j.error_description;
   if (j && j.msg) return j.msg;
@@ -7556,7 +7566,9 @@ var GALAT_BERKAS = [
   { pola:/pilihan_tipe_roda|quote_lines\.set_komponen|set_inline|label_set_inline/i,   /* #28 (sebelum pola 94: "set_komponen") */
     berkas:"108-set-inline-baris.sql" },
   { pola:/set_komponen|simpan_set|hapus_set|periksa_komposisi_set/i,   /* #1 #6 #7 */
-    berkas:"94-po-set-diskon-snapshot.sql" }
+    berkas:"94-po-set-diskon-snapshot.sql" },
+  { pola:/ehc_saldo_sp|simpan_klaim_ehc|batalkan_klaim_ehc|ehc_klaim_alokasi|ehc_klaim\.periode/i,   /* EHC tahap 1 */
+    berkas:"140-ehc-saldo-pemakaian.sql" }
 ];
 /* Galat yang menyebutkan TEMBOKNYA, bukan pintunya. "new row violates
    row-level security policy" adalah kalimat Postgres yang benar dan
@@ -7791,8 +7803,8 @@ var SIAP_DB = {
   performa:  ["leads", "lead_events", "sales_reps"],
   kirim:     ["sales_orders.no_surat_jalan", "sales_orders.no_invoice", "boleh_terbitkan()"],
   lunas:     ["sales_orders.lunas", "sales_orders.telat", "boleh_pelunasan()"],
-  ehc:       ["ehc_klaim", "ehc_klaim_nilai", "customer_pics", "jaga_gerbang_klaim()"],
-  kas:       ["kas_sales (view)"],
+  ehc:       ["ehc_klaim", "ehc_klaim_alokasi", "ehc_saldo_sp (view)", "simpan_klaim_ehc()"],
+  kas:       ["kas_sales (view)", "ehc_saldo_sp (view)"],
   laporan:   ["so_ringkas", "so_baris_hitung", "ehc_klaim_nilai",
               "transfer_pengajuan", "ajukan_transfer()", "rekap_transfer()"],
   gm:        ["antrean_gm (view)", "pic_rekening_ubah", "putuskan_ubah_rekening()"]
@@ -7856,18 +7868,15 @@ var LANJUT = {
   vonnycek: { baris:[], riwayat:[], dimuat:false, memuat:false },   /* #35: riwayat = baru diloloskan */   /* SP 'menunggu vonny' — tab Double Check Vonny */
   lunas:    { baris:[], dimuat:false, memuat:false, cari:"", saring:"semua", rep:"",
               tglKol:"tgl_invoice", periode:"semua", dari:"", sampai:"", total:null, dipotong:false },
-  /* Empat halaman (titik 19), masing-masing dengan kotak cari &
-     saringannya sendiri. Yang terbuka duluan "sudah bisa klaim": itu
-     daftar pekerjaannya, dan itu yang paling sering dibuka. */
-  /* `nol` = ikut menampilkan SP yang EHC-nya Rp 0. Bawaannya MATI: SP
-     tanpa EHC tidak akan pernah punya klaim EHC, jadi ia cuma memenuhi
-     layar yang isinya pekerjaan. Ia setelan SATU LAYAR, bukan satu
-     halaman — kalau per halaman, angka di tombol halaman lain akan
-     menghitung baris yang tidak akan ditampilkan halaman itu. */
-  ehc:      { siap:[], pic:[], berkas:[], customerId:null,
-              dimuat:false, memuat:false, form:null, nol:false,
-              hal:"bisa", cacah:null,
-              hlm:{ belum:null, bisa:null, klaim:null, transfer:null } },
+  /* Empat halaman (titik 19, disusun ulang berkas 140), masing-masing
+     dengan kotak cari & saringannya sendiri. Yang terbuka duluan "saldo
+     per SP": itu daftar pekerjaannya. saldo = SP yang masih punya saldo
+     EHC (isi laci klaim); rek = rekening sales (tujuan reimburse);
+     form = keadaan laci klaim. */
+  ehc:      { saldo:[], saldoDipotong:false, rek:{}, form:null,
+              dimuat:false, memuat:false,
+              hal:"saldo", cacah:null,
+              hlm:{ saldo:null, diajukan:null, selesai:null, batal:null } },
   kas:      { baris:[], dimuat:false, memuat:false },
   /* Laporan Finance tidak lagi punya "dimuat": ia memang tidak memuat
      apa pun sampai tombolnya ditekan. rekap.ehc dan rekap.komisi berisi
@@ -11514,82 +11523,97 @@ function formLunas(s){
    sales — dan itu dijaga trigger jaga_rekening_pic().
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* ── empat halaman EHC (titik 19) ────────────────────────────────────
-   belum bisa klaim · sudah bisa klaim · sudah klaim belum transfer ·
-   sudah transfer.
+/* ── berkas 140 · EHC = SALDO per SP ──────────────────────────────────
+   EHC yang disisihkan di SP adalah saldo. Satu klaim (= satu transaksi
+   pemakaian) boleh memotong beberapa SP; tiap SP paling banyak sisa
+   saldonya. Saldo dihitung database (view ehc_saldo_sp) — layar ini cuma
+   menampilkannya, supaya yang dijanjikan di sini sama dengan yang diterima
+   simpan_klaim_ehc().
 
-   Dua yang pertama datang dari view ehc_belum_klaim (SP yang belum punya
-   klaim), dua yang terakhir dari tabel ehc_klaim dan dibedakan oleh
-   transfer_batch_id — kolom yang dibuat berkas 34. Sebelum berkas itu,
-   pemisahan "sudah ditransfer" memang tidak mungkin: tidak ada yang
-   mencatatnya. */
-var EHC_KOLOM = "id,so_id,pic_id,sales_rep_id,bank,no_rekening,atas_nama,dini,tanggal,"
-  + "cara_bayar,transfer_batch_id,"
-  /* berkas 50 · keadaan pencairan cepat. Ikut ditarik supaya barisnya
-     bisa mengatakan DI MANA permintaannya berada — tanpa ini layar cuma
-     bisa menawarkan tombolnya dan tidak pernah melaporkan hasilnya. */
-  + "cepat_minta,cepat_ok,cepat_alasan,cepat_catatan,"
-  + "sales_orders(no_sp,kepada,lunas),customer_pics(nama,jabatan),ehc_klaim_nilai(nominal,kas),"
+   Empat halaman: saldo per SP · diajukan · disetujui/ditransfer ·
+   batal/ditolak. Klaim yang diajukan masih bisa diubah atau dibatalkan
+   sampai cutoff periodenya (tgl 18, #61); sesudah itu GM memeriksa. */
+var EHC_KEPERLUAN = [["uang_customer", "Transfer ke customer"],
+                     ["entertain",     "Entertain customer"],
+                     ["bongkar_muat",  "Ongkos bongkar muat"]];
+var EHC_CARA = [["transfer",  "Transfer langsung ke customer"],
+                ["reimburse", "Sales bayar dulu (reimburse)"]];
+var EHC_CARA_LAIN = { kartu_kredit:"Kartu kredit perusahaan", tunai:"Tunai (klaim lama)" };
+function labelEhc(daftar, v){
+  var x = daftar.filter(function(p){ return p[0] === v; })[0];
+  return x ? x[1] : (EHC_CARA_LAIN[v] || v || "—");
+}
+
+/* Periode EHC — cermin periode_ehc()/cutoff_ehc() di database: tanggal 1–18
+   masuk periode bulan itu, tanggal 19 ke atas masuk periode bulan berikutnya.
+   Cutoff tgl 18, GM memeriksa sesudahnya, finance memproses tgl 20. */
+function periodeEhcDari(tgl){
+  var p = String(tgl || hariIniJkt()).split("-"), th = Number(p[0]), bl = Number(p[1]);
+  if (Number(p[2]) > 18) { bl += 1; if (bl > 12) { bl = 1; th += 1; } }
+  return th + "-" + dd(bl);
+}
+function cutoffEhc(periode){ return periode + "-18"; }
+function bayarEhc(periode){ return periode + "-20"; }
+function ehcMasihBisaUbah(k){
+  return k.status === "diajukan" && !k.transfer_batch_id
+    && !(k.cepat_minta && k.cepat_ok !== false)
+    && hariIniJkt() <= cutoffEhc(k.periode);
+}
+
+var EHC_KOLOM = "id,so_id,sales_rep_id,pic_id,bank,no_rekening,atas_nama,tanggal,periode,status,"
+  + "keperluan,cara_bayar,customer_id,keterangan,lintas_customer,batal_alasan,transfer_batch_id,"
+  + "dibuat_pada,cepat_minta,cepat_ok,cepat_alasan,cepat_catatan,"
+  + "customers(nama),customer_pics(nama,jabatan),ehc_klaim_nilai(nominal),"
+  + "ehc_klaim_alokasi(so_id,nominal,sales_orders(no_sp,lunas)),"
   + "ehc_klaim_berkas(id,nama_berkas,path,ukuran)";
 
-/* SP yang EHC-nya Rp 0 tidak punya urusan di layar EHC: tidak ada yang
-   bisa diklaim, dan klaim Rp 0 tidak menghasilkan apa pun. Syaratnya
-   dipasang di SATU tempat dan dipakai tiga-tiganya — daftar halaman,
-   angka di tombol halaman, dan isi dropdown "Klaim baru" — supaya tidak
-   ada tombol bertuliskan 3 yang membuka daftar berisi 1. */
-function ehcSyaratNilai(){ return LANJUT.ehc.nol ? "" : "&total_ehc=gt.0"; }
 var EHC_HAL = [
-  { id:"belum",    label:"Belum bisa klaim",
-    q:"/ehc_belum_klaim?select=so_id&bisa_klaim=is.false",
-    path:"/ehc_belum_klaim?select=*", syarat:"bisa_klaim=is.false",
-    nilai:true, tglKol:"tanggal", kunci:"so_id", jenis:"sp" },
-  { id:"bisa",     label:"Sudah bisa klaim",
-    q:"/ehc_belum_klaim?select=so_id&bisa_klaim=is.true",
-    path:"/ehc_belum_klaim?select=*", syarat:"bisa_klaim=is.true",
-    nilai:true, tglKol:"tgl_lunas", kunci:"so_id", jenis:"sp" },
-  { id:"klaim",    label:"Sudah klaim, belum transfer",
-    q:"/ehc_klaim?select=id&transfer_batch_id=is.null",
-    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"transfer_batch_id=is.null",
-    tglKol:"tanggal", kunci:"id", jenis:"klaim" },
-  { id:"transfer", label:"Sudah ditransfer",
-    q:"/ehc_klaim?select=id&transfer_batch_id=not.is.null",
-    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"transfer_batch_id=not.is.null",
-    tglKol:"tanggal", kunci:"id", jenis:"klaim" }
+  { id:"saldo",    label:"Saldo per SP",
+    q:"/ehc_saldo_sp?select=so_id&sisa=gt.0&tertutup=is.false",
+    path:"/ehc_saldo_sp?select=*", syarat:"sisa=gt.0&tertutup=is.false",
+    tglKol:"tanggal", jenis:"sp" },
+  { id:"diajukan", label:"Diajukan",
+    q:"/ehc_klaim?select=id&status=eq.diajukan&transfer_batch_id=is.null",
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"status=eq.diajukan&transfer_batch_id=is.null",
+    tglKol:"tanggal", jenis:"klaim" },
+  { id:"selesai",  label:"Disetujui / ditransfer",
+    q:"/ehc_klaim?select=id&or=(status.eq.disetujui,transfer_batch_id.not.is.null)",
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"or=(status.eq.disetujui,transfer_batch_id.not.is.null)",
+    tglKol:"tanggal", jenis:"klaim" },
+  { id:"batal",    label:"Batal / ditolak",
+    q:"/ehc_klaim?select=id&status=in.(batal,ditolak)",
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"status=in.(batal,ditolak)",
+    tglKol:"tanggal", jenis:"klaim" }
 ];
-var KOL_TGL_KLAIM = [["tanggal", "Tanggal klaim"]];
-var KOL_TGL_BK = [
-  ["tanggal",   "Tanggal SP"],
-  ["tgl_lunas", "Tanggal lunas"]
-];
+var KOL_TGL_KLAIM = [["tanggal", "Tanggal transaksi"]];
+var KOL_TGL_BK = [["tanggal", "Tanggal SP"], ["tgl_lunas", "Tanggal lunas"]];
 
-function ehcDef(id){ return EHC_HAL.filter(function(x){ return x.id === id; })[0] || EHC_HAL[1]; }
+function ehcDef(id){ return EHC_HAL.filter(function(x){ return x.id === id; })[0] || EHC_HAL[0]; }
 function ehcHal(id){
   var E = LANJUT.ehc, d = ehcDef(id);
   if (!E.hlm[id]) E.hlm[id] = halBaru(d.tglKol);
   return E.hlm[id];
 }
 
-/* Yang boleh diklaim datang dari view ehc_belum_klaim, bukan dari daftar SP
-   lunas yang disusun layar. Gerbangnya satu — kalau layar menyusun
-   daftarnya sendiri, ia bisa menawarkan SP yang lalu ditolak trigger, dan
-   orangnya tidak akan mengerti kenapa. */
+/* Daftar SP yang saldonya masih ada — isi pilihan SP di laci klaim. Datang
+   dari view yang sama dengan halaman "Saldo per SP", bukan disusun layar. */
+var BATAS_SALDO_EHC = 1000;
 function muatEhc(){
   var E = LANJUT.ehc;
   if (E.memuat) return Promise.resolve();
   E.memuat = true;
   return Promise.all([
-    api("GET", "/ehc_belum_klaim?select=*&bisa_klaim=is.true&total_ehc=gt.0"
-             + "&order=tgl_lunas.desc,so_id.desc&limit=200"),
+    api("GET", "/ehc_saldo_sp?select=*&sisa=gt.0&tertutup=is.false&order=tanggal.desc,so_id.desc"
+             + "&limit=" + (BATAS_SALDO_EHC + 1)),
     repAlur(),
-    /* Dihitung terpisah supaya laci "Klaim baru" bisa mengatakan berapa
-       SP yang sengaja TIDAK ditawarkan, dan kenapa. Daftar yang lebih
-       pendek dari yang diharapkan tanpa penjelasan membuat orang
-       menyangka SP-nya belum masuk. */
-    api("GET", "/ehc_belum_klaim?select=so_id&bisa_klaim=is.true&total_ehc=eq.0&limit=200")
-      .catch(function(){ return null; })
+    /* Rekening sales — tujuan reimburse. Sales hanya menerima barisnya sendiri. */
+    api("GET", "/sales_rep_rekening?select=sales_rep_id,bank,no_rekening,atas_nama")
+      .catch(function(){ return []; })
   ]).then(function(r){
-    E.siap = r[0] || [];
-    E.tanpaEhc = r[2] === null ? null : (r[2] || []).length;
+    E.saldo = (r[0] || []).slice(0, BATAS_SALDO_EHC);
+    E.saldoDipotong = (r[0] || []).length > BATAS_SALDO_EHC;
+    E.rek = {};
+    (r[2] || []).forEach(function(x){ E.rek[x.sales_rep_id] = x; });
     E.dimuat = true; E.memuat = false;
   }).catch(function(e){ E.memuat = false; throw e; });
 }
@@ -11603,11 +11627,9 @@ function berkasKlaim(k){
   var b = k.ehc_klaim_berkas;
   return Array.isArray(b) ? b : (b ? [b] : []);
 }
-
-function pilBisa(s){
-  return s.bisa_klaim
-    ? '<span class="pill p-lunas">bisa diklaim</span>'
-    : '<span class="pill ' + (s.ehc_dini_minta ? "p-sebagian" : "p-belum") + '">belum bisa</span>';
+function alokasiKlaim(k){
+  var a = k.ehc_klaim_alokasi;
+  return Array.isArray(a) ? a : (a ? [a] : []);
 }
 
 function muatEhcHal(){
@@ -11615,44 +11637,31 @@ function muatEhcHal(){
   var urut = d.jenis === "sp"
     ? H.tglKol + ".desc.nullslast,so_id.desc"
     : H.tglKol + ".desc.nullslast,id.desc";
-  var syarat = d.syarat + (d.nilai ? ehcSyaratNilai() : "");
-  return muatHalaman(H, d.path, syarat, urut);
+  return muatHalaman(H, d.path, d.syarat, urut);
 }
-/* Angka di tombol halaman memakai syarat yang sama persis dengan
-   daftarnya. Dibuat sebagai salinan daftar, bukan diubah di tempat:
-   EHC_HAL adalah tetapan, dan tetapan yang diam-diam berubah adalah
-   sumber bug yang paling sulit dilacak. */
 function ehcHalCacah(){
-  return EHC_HAL.map(function(d){
-    return d.nilai ? { id:d.id, q:d.q + ehcSyaratNilai() } : { id:d.id, q:d.q };
-  });
+  return EHC_HAL.map(function(d){ return { id:d.id, q:d.q }; });
 }
 
 function barisSpEhc(s){
-  return '<tr' + (s.bisa_klaim ? ' data-bkso="' + s.so_id + '" tabindex="0" style="cursor:pointer"' : '') + '>'
+  var bisa = bolehAlurJual();
+  return '<tr' + (bisa ? ' data-bkso="' + s.so_id + '" tabindex="0" style="cursor:pointer"' : '') + '>'
     + '<td class="l">' + esc(s.no_sp) + '</td>'
     + '<td>' + td(s.tanggal) + '</td>'
-    + '<td>' + td(s.tgl_lunas) + '</td>'
-    + '<td class="l">' + esc(s.kepada || "—") + '</td>'
+    + '<td class="l">' + esc(s.customer || s.kepada || "—") + '</td>'
     + '<td class="l">' + esc(namaRepAlur(s.sales_rep_id) || "—") + '</td>'
+    + '<td>' + (s.lunas ? '<span class="pill p-lunas">lunas ' + td(s.tgl_lunas) + '</span>'
+                        : '<span class="pill p-sebagian">belum lunas</span>') + '</td>'
     + '<td>' + rp(s.total_ehc) + '</td>'
-    /* Alasannya menempel di bawah labelnya, bukan jadi kolom sendiri: satu
-       kolom lagi membuat tabelnya melebar dan justru alasan itulah yang
-       terpotong lebih dulu. */
-    + '<td class="l">' + pilBisa(s)
-    +   '<br><span class="muted">' + esc(s.alasan) + '</span></td></tr>';
+    + '<td>' + rp(s.terpakai) + '</td>'
+    + '<td><b>' + rp(s.sisa) + '</b></td></tr>';
 }
 
-/* ── berkas 50 · pencairan cepat ─────────────────────────────────────
-
-   Ada PIC pelanggan yang minta EHC-nya cair sebelum cut-off. Alur
-   bulanan tidak bisa melayani itu tanpa memajukan rekap seluruh sales,
-   jadi ada jalur kedua yang persetujuannya PER KLAIM.
-
-   Layar tidak boleh cuma menawarkan tombolnya: keadaan permintaan —
-   menunggu, disetujui, ditolak — harus terbaca di barisnya, kalau tidak
-   sales menekan tombolnya berulang kali karena tidak tahu apa yang
-   terjadi. */
+/* ── pencairan cepat (EHC darurat) ────────────────────────────────────
+   Berkas 140: EHC dini dan EHC cepat digabung jadi satu — EHC cepat untuk
+   keadaan darurat: cair di luar jadwal, boleh sebelum SP lunas, GM memutus
+   per klaim. Keadaan permintaannya harus terbaca di baris, kalau tidak sales
+   menekan tombolnya berulang kali. */
 function pilCepat(k){
   if (!k || !k.cepat_minta) return "";
   if (k.cepat_ok === true)
@@ -11661,9 +11670,6 @@ function pilCepat(k){
     return '<br><span class="pill p-belum">cepat · ditolak GM</span>';
   return '<br><span class="pill p-sebagian">cepat · menunggu GM</span>';
 }
-/* Alasan dan catatan GM ditulis di bawah pil-nya, bukan disembunyikan di
-   balik tooltip: kalau permintaan ditolak, alasannya justru yang paling
-   perlu dibaca sales. */
 function ketCepat(k){
   if (!k || !k.cepat_minta) return "";
   var t = "";
@@ -11672,55 +11678,71 @@ function ketCepat(k){
     + '<span class="muted">Catatan GM: ' + esc(k.cepat_catatan) + '</span>';
   return t ? '<br>' + t : "";
 }
-/* Tombolnya cuma muncul kalau ada yang bisa dilakukan. Tombol yang
-   selalu ada lalu ditolak server mengajari orang mengabaikan pesan
-   galat. */
-function tombolCepat(k, sudahTransfer){
-  if (sudahTransfer || !bolehMintaCepat()) return "";
+function tombolCepat(k){
+  if (k.status !== "diajukan" || k.transfer_batch_id || !bolehMintaCepat()) return "";
   if (!k.cepat_minta || k.cepat_ok === false)
     return '<button type="button" class="btn kecil bahaya" data-ehcepat="' + k.id + '">'
-         + (k.cepat_ok === false ? "Ajukan cepat lagi" : "Ajukan klaim cepat") + '</button>';
+         + (k.cepat_ok === false ? "Ajukan cepat lagi" : "Minta EHC cepat") + '</button>';
   if (k.cepat_ok === null || k.cepat_ok === undefined)
     return '<button type="button" class="btn kecil" data-ehtarikcepat="' + k.id + '">'
          + 'Tarik permintaan cepat</button>';
   return "";
 }
-/* Sales-nya sendiri, atau orang kantor yang mengurus klaim. Sama persis
-   dengan boleh_minta_klaim_cepat() di database — yang menolak tetap
-   database, ini cuma supaya tombolnya tidak ditawarkan sia-sia. */
+/* Sama dengan boleh_minta_klaim_cepat() di database — yang menolak tetap
+   database, ini supaya tombolnya tidak ditawarkan sia-sia. */
 function bolehMintaCepat(){
   return ["owner","gm","staff","finance","sales"].indexOf(saya.peran) > -1;
 }
 
-function barisKlaimEhc(k, sudahTransfer){
-  var n = nilaiKlaim(k), so = k.sales_orders, pic = k.customer_pics, bk = berkasKlaim(k);
-  return '<tr><td class="l">' + esc(so ? so.no_sp : "—") + '</td>'
-    + '<td>' + td(k.tanggal) + '</td>'
-    + '<td class="l">' + esc(so ? so.kepada || "—" : "—") + '</td>'
-    + '<td class="l">' + esc(pic ? pic.nama : "—") + '</td>'
-    /* Cara bayar dan rekening ditumpuk di satu kolom: untuk klaim tunai,
-       rekeningnya memang kosong, dan kolom kosong yang lebar hanya membuat
-       orang bertanya apa yang hilang. */
-    + '<td class="l">' + (k.cara_bayar === "tunai"
-        ? '<span class="pill p-sebagian">tunai</span>'
-          + '<br><span class="muted">diserahkan langsung</span>'
-        : '<span class="pill p-jalan">transfer</span>'
-          + '<br><span class="muted">' + esc([k.bank, k.no_rekening].filter(Boolean).join(" ") || "—")
-          + (k.atas_nama ? ' a.n. ' + esc(k.atas_nama) : '') + '</span>') + '</td>'
+function pilStatusEhc(k){
+  if (k.transfer_batch_id) return '<span class="pill p-lunas">ditransfer · batch #' + esc(k.transfer_batch_id) + '</span>';
+  if (k.status === "disetujui") return '<span class="pill p-lunas">disetujui GM</span>';
+  if (k.status === "ditolak")   return '<span class="pill p-belum">ditolak GM</span>';
+  if (k.status === "batal")     return '<span class="pill p-belum">dibatalkan</span>';
+  return hariIniJkt() <= cutoffEhc(k.periode)
+    ? '<span class="pill p-sebagian">diajukan · bisa diubah s.d. ' + td(cutoffEhc(k.periode)) + '</span>'
+    : '<span class="pill p-jalan">menunggu pemeriksaan GM</span>';
+}
+
+function barisKlaimEhc(k){
+  var n = nilaiKlaim(k), bk = berkasKlaim(k), al = alokasiKlaim(k);
+  var cust = k.customers ? k.customers.nama : "—";
+  var tujuan = k.cara_bayar === "transfer"
+    ? '<br><span class="muted">' + esc(k.customer_pics ? k.customer_pics.nama : "PIC") + ' · '
+      + esc([k.bank, k.no_rekening].filter(Boolean).join(" ") || "—")
+      + (k.atas_nama ? ' a.n. ' + esc(k.atas_nama) : '') + '</span>'
+    : (k.cara_bayar === "reimburse"
+        ? '<br><span class="muted">ke rekening ' + esc(namaRepAlur(k.sales_rep_id) || "sales") + '</span>' : '');
+  var aksi = "";
+  if (bolehAlurJual() && ehcMasihBisaUbah(k)) {
+    aksi += '<button type="button" class="btn kecil" data-ehubah="' + k.id + '">Ubah</button> '
+         +  '<button type="button" class="btn kecil bahaya" data-ehbatal="' + k.id + '">Batalkan</button> ';
+  }
+  aksi += tombolCepat(k);
+  return '<tr><td>' + td(k.tanggal) + '<br><span class="muted">periode ' + esc(namaBulan(k.periode)) + '</span></td>'
+    + '<td class="l">' + esc(labelEhc(EHC_KEPERLUAN, k.keperluan))
+    +   '<br><span class="muted">' + esc(labelEhc(EHC_CARA, k.cara_bayar)) + '</span>' + tujuan
+    +   (k.keterangan ? '<br><span class="muted">' + esc(k.keterangan) + '</span>' : '') + '</td>'
+    + '<td class="l">' + esc(cust)
+    +   (k.lintas_customer ? '<br><span class="pill p-sebagian" title="Ada SP dari customer lain — perlu persetujuan GM">'
+                             + 'lintas customer · perlu GM</span>' : '') + '</td>'
+    + '<td class="l">' + (al.length
+        ? al.map(function(a){
+            var so = a.sales_orders || {};
+            return esc(so.no_sp || ("#" + a.so_id)) + ' · ' + rp(a.nominal)
+              + (so.lunas === false ? ' <span class="muted">(belum lunas)</span>' : '');
+          }).join("<br>")
+        : '<span class="muted">—</span>') + '</td>'
     + '<td>' + (n ? rp(n.nominal) : '<span class="muted">—</span>') + '</td>'
-    + '<td>' + (n ? rp(n.kas) : '<span class="muted">—</span>') + '</td>'
     + '<td class="l">' + (bk.length
         ? bk.map(function(f){ return '<button type="button" class="btn kecil" data-ehunduh="'
             + esc(f.path) + '" data-ehnama="' + esc(f.nama_berkas) + '">'
             + esc(f.nama_berkas) + '</button>'; }).join(" ")
         : '<span class="muted">—</span>') + '</td>'
-    + '<td class="l">'
-    +   (sudahTransfer ? '<span class="pill p-lunas">batch #' + esc(k.transfer_batch_id) + '</span>'
-                       : '<span class="pill p-sebagian">belum ditransfer</span>')
-    +   (k.dini ? '<br><span class="pill p-sebagian">klaim dini</span>' : '')
+    + '<td class="l">' + pilStatusEhc(k)
+    +   (k.status === "batal" && k.batal_alasan ? '<br><span class="muted">' + esc(k.batal_alasan) + '</span>' : '')
     +   pilCepat(k) + ketCepat(k)
-    +   (tombolCepat(k, sudahTransfer)
-          ? '<div style="margin-top:6px">' + tombolCepat(k, sudahTransfer) + '</div>' : '')
+    +   (aksi ? '<div style="margin-top:6px">' + aksi + '</div>' : '')
     + '</td></tr>';
 }
 
@@ -11731,7 +11753,7 @@ function panelEhc(){
     E.cacah = null;
   }
   if (!E.dimuat && !E.memuat) {
-    el.innerHTML = kotakMuat("Memuat klaim EHC…");
+    el.innerHTML = kotakMuat("Memuat saldo EHC…");
     muatEhc().then(function(){ panelEhc(); })
       .catch(function(e){ el.innerHTML = kotakGalat(e); });
     return;
@@ -11745,150 +11767,121 @@ function panelEhc(){
     return;
   }
 
-  $("head-aksi").innerHTML = bolehAlurJual() && E.siap.length
-    ? '<button class="btn utama" id="btn-ehc-baru" type="button">Klaim baru</button>' : '';
-  if ($("btn-ehc-baru")) $("btn-ehc-baru").addEventListener("click", function(){ formEhcBaru(); });
+  $("head-aksi").innerHTML = bolehAlurJual() && E.saldo.length
+    ? '<button class="btn utama" id="btn-ehc-baru" type="button">Klaim EHC baru</button>' : '';
+  if ($("btn-ehc-baru")) $("btn-ehc-baru").addEventListener("click", function(){ formEhc(null); });
 
+  var per = periodeEhcDari(hariIniJkt());
   var h = kotakAkunSales() + tabHalaman("eh", E.hal, EHC_HAL, E.cacah);
 
   var KET = {
-    belum:    'SP yang <b>belum bisa diklaim</b>: pelunasannya belum dicatat, dan GM belum '
-            + 'menyetujui klaim dini. Halaman ini menjawab "kenapa SP ini belum bisa" — '
-            + 'alasannya ditulis di kolom paling kanan.',
-    bisa:     'SP yang <b>gerbangnya sudah terbuka</b>. Klik barisnya untuk membuat klaim.',
-    klaim:    'Klaim yang <b>sudah tercatat tapi uangnya belum keluar</b>. Selama belum masuk '
-            + 'batch transfer, nominalnya masih bisa diperbaiki.',
-    transfer: 'Klaim yang <b>uangnya sudah dikirim</b>, ditandai lewat batch transfer di '
-            + 'Laporan Finance. Nominalnya sudah membeku — kalau masih bisa diubah, total '
-            + 'yang tercatat di batch dan isinya bisa berbeda.'
+    saldo:    'Saldo EHC tiap SP = EHC yang disisihkan di SP dikurangi klaim yang sudah diajukan. '
+            + 'Klik baris SP untuk memakai saldonya. Saldo boleh dipakai berkali-kali selama '
+            + '<b>komisi SP itu belum diklaim</b> — sesudah komisi diklaim, sisanya masuk kas sales.',
+    diajukan: 'Klaim yang <b>sudah diajukan</b>. Sampai cutoff periodenya (tanggal 18) masih bisa '
+            + 'diubah atau dibatalkan; sesudah itu GM memeriksa dan finance memproses tanggal 20. '
+            + 'Transfer ke customer dan reimburse baru dibayar sesudah semua SP-nya lunas.',
+    selesai:  'Klaim yang <b>sudah disetujui GM</b> atau <b>uangnya sudah dikirim</b> (batch transfer di '
+            + 'Laporan Finance). Nominalnya sudah membeku.',
+    batal:    'Klaim yang <b>dibatalkan</b> sales sebelum cutoff, atau <b>ditolak</b> GM. Saldo EHC '
+            + 'SP-nya sudah kembali.'
   };
   h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
     + KET[E.hal]
-    /* Yang disembunyikan HARUS disebut. Menyaring diam-diam adalah cara
-       paling cepat membuat orang mengira SP-nya tidak masuk. */
-    + (d0.jenis === "sp" && !E.nol
-        ? '<br><span class="muted">SP yang <b>EHC-nya Rp 0</b> tidak ditampilkan — tidak ada '
-          + 'yang bisa diklaim dari SP seperti itu. Ganti saringan <b>Nilai EHC</b> di bawah '
-          + 'kalau tetap ingin melihatnya.</span>'
-        : '')
+    + '<br><span class="muted">Klaim yang diajukan hari ini masuk <b>periode ' + esc(namaBulan(per))
+    + '</b> — cutoff ' + td(cutoffEhc(per)) + ', diproses ' + td(bayarEhc(per)) + '.</span>'
     + '</div></div>';
 
-  var tambahan = "";
-  if (d0.jenis === "sp") {
-    tambahan = pilihKotak("eh-nol", E.nol ? "1" : "",
-      [["","Hanya SP yang ada EHC-nya"],["1","Termasuk SP tanpa EHC (Rp 0)"]], "Nilai EHC");
-  } else {
-    H.cara = H.cara || "";
-    tambahan = pilihKotak("eh-cara", H.cara,
-      [["","Semua cara bayar"],["transfer","Transfer"],["tunai","Tunai"]], "Cara bayar");
-  }
   h += alatHalaman(H, "eh", d0.jenis === "sp" ? KOL_TGL_BK : KOL_TGL_KLAIM,
         d0.jenis === "sp" ? "Cari No SP, customer, atau sales…"
-                          : "Cari No SP, customer, PIC, atau bank…", tambahan);
+                          : "Cari No SP, customer, keterangan, atau PIC…", "");
 
   var d = H.baris;
   if (d0.jenis === "sp") {
     d = saringLentur(d, H.cari, function(s){
-      return [s.no_sp, s.kepada, namaRepAlur(s.sales_rep_id), s.alasan]; });
+      return [s.no_sp, s.customer, s.kepada, namaRepAlur(s.sales_rep_id)]; });
   } else {
-    if (H.cara) d = d.filter(function(k){ return (k.cara_bayar || "transfer") === H.cara; });
     d = saringLentur(d, H.cari, function(k){
-      var so = k.sales_orders, pic = k.customer_pics;
-      return [so ? so.no_sp : "", so ? so.kepada : "", pic ? pic.nama : "",
-              k.bank, k.no_rekening, k.atas_nama]; });
+      return [k.customers ? k.customers.nama : "", k.keterangan,
+              k.customer_pics ? k.customer_pics.nama : "", k.bank, k.no_rekening,
+              alokasiKlaim(k).map(function(a){ return a.sales_orders ? a.sales_orders.no_sp : ""; }).join(" ")]; });
   }
 
   var kosongAsli = {
-    belum:    "Tidak ada SP yang tertahan. Semua yang belum diklaim gerbangnya sudah terbuka.",
-    bisa:     "Belum ada SP yang gerbangnya terbuka. Klaim EHC baru bisa diajukan setelah "
-            + "pelunasan dicatat di tab Pelunasan.",
-    klaim:    "Tidak ada klaim yang menunggu ditransfer."
+    saldo:    "Tidak ada SP yang masih punya saldo EHC. Saldo muncul begitu ada SP yang EHC-nya diisi.",
+    diajukan: "Tidak ada klaim EHC yang sedang diajukan."
             + (peranSales()
-                ? " Kalau Anda baru saja mengajukan klaim dan ia tidak ada di sini, "
-                  + "kemungkinan besar akun Anda belum ditautkan ke nama sales — klaim "
-                  + "hanya dikirim database kepada sales pemiliknya. Minta owner mengisi "
-                  + "\"Masuk sebagai\" di tab Pengguna."
+                ? " Kalau Anda baru saja mengajukan klaim dan ia tidak ada di sini, kemungkinan besar "
+                  + "akun Anda belum ditautkan ke nama sales. Minta owner mengisi \"Masuk sebagai\" di tab Pengguna."
                 : ""),
-    transfer: "Belum ada klaim yang ditandai sudah ditransfer. Penandaannya lewat "
-            + "tombol batch di tab Laporan Finance."
+    selesai:  "Belum ada klaim yang disetujui atau ditransfer.",
+    batal:    "Tidak ada klaim yang dibatalkan atau ditolak."
   }[E.hal];
 
   var kos = kosongHalaman(H, d, kosongAsli);
   if (kos) {
     h += kos;
   } else if (d0.jenis === "sp") {
-    h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
-      +  '<th>Tgl lunas</th><th class="l">Customer</th><th class="l">Sales</th>'
-      +  '<th>EHC di SP</th><th class="l">Bisa diklaim?</th></tr></thead><tbody>'
-      +  d.map(barisSpEhc).join("") + '</tbody></table></div>';
-  } else {
-    var sudahT = E.hal === "transfer";
-    var adaNilai = d.some(function(k){ return nilaiKlaim(k); });
-    var tot = d.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal)||0 : 0); }, 0);
-    var totKas = d.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.kas)||0 : 0); }, 0);
-    var tunai = d.filter(function(k){ return k.cara_bayar === "tunai"; }).length;
+    var totSisa = d.reduce(function(a, s){ return a + (Number(s.sisa) || 0); }, 0);
     h += '<div class="tiles" style="margin-top:12px">'
-      + tile("Klaim di halaman ini", d.length,
-             tunai ? "sesudah saringan · " + tunai + " diserahkan tunai" : "sesudah saringan", "", "ehc:daftar")
-      + tile("Nominal ke PIC", adaNilai ? rpS(tot) : "—",
-             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "ehc:nominal")
-      + tile("Jadi kas sales", adaNilai ? rpS(totKas) : "—", adaNilai ? "jumlah yang tampil" : "", "", ["kas","ehc:daftar"])
+      + tile("SP dengan saldo", d.length, "sesudah saringan", "", "ehc:daftar")
+      + tile("Total sisa saldo", rpS(totSisa), "jumlah yang tampil", "", "ehc:nominal")
       + '</div>';
     h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th class="l">No SP</th><th>Tanggal</th>'
-      +  '<th class="l">Customer</th><th class="l">PIC</th><th class="l">Cara bayar</th>'
-      +  '<th>Nominal</th><th>Kas sales</th><th class="l">Bukti</th>'
-      +  '<th class="l">Transfer</th></tr></thead><tbody>'
-      +  d.map(function(k){ return barisKlaimEhc(k, sudahT); }).join("")
+      +  '<th class="l">Customer</th><th class="l">Sales</th><th>Pelunasan</th>'
+      +  '<th>EHC di SP</th><th>Terpakai</th><th>Sisa saldo</th></tr></thead><tbody>'
+      +  d.map(barisSpEhc).join("") + '</tbody></table></div>';
+  } else {
+    var adaNilai = d.some(function(k){ return nilaiKlaim(k); });
+    var tot = d.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal)||0 : 0); }, 0);
+    var lintas = d.filter(function(k){ return k.lintas_customer; }).length;
+    h += '<div class="tiles" style="margin-top:12px">'
+      + tile("Klaim di halaman ini", d.length,
+             lintas ? lintas + " lintas customer (perlu GM)" : "sesudah saringan", lintas ? "alert" : "", "ehc:daftar")
+      + tile("Nominal", adaNilai ? rpS(tot) : "—",
+             adaNilai ? "jumlah yang tampil" : "tidak dikirim untuk peran Anda", "", "ehc:nominal")
+      + '</div>';
+    h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th>Tanggal</th>'
+      +  '<th class="l">Untuk apa · cara bayar</th><th class="l">Customer</th><th class="l">SP dipakai</th>'
+      +  '<th>Nominal</th><th class="l">Lampiran</th><th class="l">Status</th></tr></thead><tbody>'
+      +  d.map(barisKlaimEhc).join("")
       +  '</tbody></table></div>';
   }
 
   h += ketPeriode(H, d0.jenis === "sp" ? KOL_TGL_BK : KOL_TGL_KLAIM);
-  if (d0.jenis === "sp") {
-    h += '<p class="muted" style="margin:6px 2px 0">Kolom <b>Bisa diklaim?</b> memakai aturan yang '
-      +  'sama persis dengan gerbang di database (<code>jaga_gerbang_klaim()</code>): SP sudah lunas, '
-      +  'atau klaim dini sudah disetujui GM. Tidak ada syarat tambahan yang ditambahkan layar ini, '
-      +  'supaya yang dijanjikan di sini tidak ditolak saat disimpan.</p>';
+  if (d0.jenis === "sp" && E.saldoDipotong) {
+    h += '<p class="muted" style="margin:6px 2px 0">Pilihan SP di laci klaim dibatasi '
+      +  BATAS_SALDO_EHC + ' SP terbaru yang masih punya saldo.</p>';
   }
 
-  h += kotakGerbang('<b>Tiga hal di sini dijaga database, bukan layar.</b><br>'
-    + '1 · Klaim ditolak kalau SP-nya belum lunas — kecuali GM sudah menyetujui klaim dini. '
-    + 'Penolakannya datang dari trigger <code>jaga_gerbang_klaim()</code>.<br>'
-    + '2 · Klaim hanya lewat fungsi <code>ajukan_klaim_ehc()</code> — jalur simpan langsung ditutup, '
-    + 'jadi nominal ≤ EHC di SP, PIC penerima, dan rekening (untuk transfer) tidak bisa dilewati. '
-    + 'Bukti tidak wajib (#23); lampiran klaim lama tetap bisa diunduh di kolom Bukti.<br>'
-    + '3 · Nominal klaim disimpan di tabel terpisah <code>ehc_klaim_nilai</code> dengan policy sendiri, '
-    + 'karena RLS menyaring baris, bukan kolom. Kolom nominal yang tampil "—" berarti peran Anda '
-    + 'memang tidak dikirimi angkanya — bukan datanya hilang.<br><br>'
-    + '<b>Empat halaman, empat kotak cari.</b> Saringan di satu halaman tidak terbawa ke halaman '
-    + 'lain — saringan bersama membuat orang pindah halaman lalu melihat daftar kosong tanpa '
-    + 'tahu apa yang mengosongkannya.');
+  h += kotakGerbang('<b>Yang dijaga database, bukan layar.</b><br>'
+    + '1 · Klaim hanya lewat <code>simpan_klaim_ehc()</code>: tiap SP paling banyak sisa saldonya (dikunci '
+    + 'supaya dua klaim bersamaan tidak sama-sama lolos), semua SP milik sales yang sama, lampiran wajib '
+    + 'dan harus unggahan Anda sendiri, PIC penerima harus PIC customer penerima.<br>'
+    + '2 · Ubah/batal hanya sampai cutoff periode (tgl 18). Sesudah itu klaimnya menunggu GM.<br>'
+    + '3 · SP yang EHC-nya sudah dipakai tidak bisa dibatalkan atau diturunkan EHC-nya di bawah yang '
+    + 'sudah terpakai — batalkan/ubah klaimnya dulu.<br>'
+    + '4 · Nominal disimpan di tabel terpisah dengan policy sendiri. Kolom yang tampil "—" berarti peran '
+    + 'Anda memang tidak dikirimi angkanya.');
 
   el.innerHTML = h;
 
   pasangTabHalaman(el, function(id){ LANJUT.ehc.hal = id; panelEhc(); });
-  pasangAlatHalaman(H, "eh", panelEhc, [], d0.jenis === "sp" ? [] : ["cara"]);
-  if ($("eh-nol")) $("eh-nol").addEventListener("change", function(){
-    /* Sakelar SATU LAYAR: kedua halaman SP dan angka di tombolnya ikut
-       berubah bersama. Kalau hanya halaman yang sedang terbuka yang
-       ditarik ulang, tombol halaman sebelah tetap menunjukkan angka
-       lama — dan angka yang salah di tombol lebih buruk daripada
-       daftar yang perlu dimuat ulang. */
-    LANJUT.ehc.nol = this.value === "1";
-    EHC_HAL.forEach(function(x){
-      if (x.nilai && LANJUT.ehc.hlm[x.id]) {
-        LANJUT.ehc.hlm[x.id].dimuat = false; LANJUT.ehc.hlm[x.id].baris = [];
-      }
-    });
-    LANJUT.ehc.cacah = null;
-    panelEhc();
-  });
+  pasangAlatHalaman(H, "eh", panelEhc, [], []);
   Array.prototype.forEach.call(el.querySelectorAll("[data-ehunduh]"), function(b){
     b.addEventListener("click", function(){ unduhBukti(b.dataset.ehunduh, b.dataset.ehnama); });
   });
   Array.prototype.forEach.call(el.querySelectorAll("[data-bkso]"), function(n){
-    n.addEventListener("click", function(){
-      if (bolehAlurJual()) formEhcBaru(Number(n.dataset.bkso));
+    n.addEventListener("click", function(){ if (bolehAlurJual()) formEhc(null, Number(n.dataset.bkso)); });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehubah]"), function(b){
+    b.addEventListener("click", function(){
+      var k = H.baris.filter(function(x){ return String(x.id) === b.dataset.ehubah; })[0];
+      if (k) formEhc(k);
     });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehbatal]"), function(b){
+    b.addEventListener("click", function(){ batalkanKlaimEhc(Number(b.dataset.ehbatal)); });
   });
   Array.prototype.forEach.call(el.querySelectorAll("[data-ehcepat]"), function(b){
     b.addEventListener("click", function(){ formKlaimCepat(Number(b.dataset.ehcepat)); });
@@ -11898,26 +11891,20 @@ function panelEhc(){
   });
 }
 
-/* ── berkas 50 · meminta pencairan cepat untuk klaim yang SUDAH ada ──
-
-   Dua pintu masuk, sengaja: tombol merah di laci "Klaim EHC baru" untuk
-   yang sudah tahu sejak awal, dan tombol ini untuk yang baru diminta
-   pelanggannya belakangan. Keduanya berakhir di fungsi database yang
-   sama. */
+/* ── meminta EHC cepat untuk klaim yang SUDAH ada ────────────────────── */
 function formKlaimCepat(klaimId){
   var h = '<div class="flag merah"><span class="f-ico">!</span><div>'
-    + '<b>Pencairan di luar jadwal.</b> Klaim EHC dibayar sekali sebulan, sekaligus untuk '
-    + 'seluruh sales. Yang Anda minta di sini adalah pengecualian: klaim ini saja, lebih '
-    + 'cepat. <b>GM yang memutuskan</b>, satu per satu — bukan finance, dan bukan tombol ini.'
+    + '<b>EHC cepat = keadaan darurat.</b> EHC biasanya diperiksa GM sesudah cutoff tanggal 18 dan '
+    + 'dibayar tanggal 20. Yang Anda minta di sini adalah pengecualian: klaim ini saja, lebih cepat, '
+    + 'boleh walaupun SP-nya belum lunas. <b>GM yang memutuskan</b>, satu per satu.'
     + '</div></div>'
     + field({ nama:"kc_alasan", label:"Apa yang mendesak?", jenis:"textarea", wajib:true,
               bantu:"Minimal satu kalimat: apa yang mendesak dan kapan uangnya dibutuhkan. "
-                  + "Inilah satu-satunya keterangan yang dibaca GM — dan satu-satunya yang "
-                  + "tersisa kalau pembayaran ini dipertanyakan setahun lagi." });
+                  + "Inilah keterangan yang dibaca GM." });
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML =
-    '<button class="btn bahaya" id="btn-kc-kirim" type="button">Ajukan klaim cepat</button>';
-  bukaLaci("Ajukan klaim cepat");
+    '<button class="btn bahaya" id="btn-kc-kirim" type="button">Minta EHC cepat</button>';
+  bukaLaci("Minta EHC cepat");
   $("btn-kc-kirim").addEventListener("click", function(){
     var alasan = String(nilaiForm("kc_alasan") || "").trim();
     if (alasan.length < 10) {
@@ -11929,7 +11916,7 @@ function formKlaimCepat(klaimId){
     api("POST", "/rpc/minta_klaim_cepat", { p_klaim: klaimId, p_alasan: alasan })
       .then(function(r){
         tutupLaci();
-        toast(String(Array.isArray(r) ? r[0] : r) || "Permintaan klaim cepat terkirim.");
+        toast(String(Array.isArray(r) ? r[0] : r) || "Permintaan EHC cepat terkirim.");
         segarkanEhc();
       })
       .catch(function(e){ tampilPesan(esc(e.message)); })
@@ -11938,9 +11925,8 @@ function formKlaimCepat(klaimId){
 }
 
 function tarikKlaimCepat(klaimId){
-  if (!confirm("Tarik permintaan klaim cepat ini?\n\n"
-    + "Klaimnya tetap ada dan kembali ikut rekap bulanan biasa. Anda bisa mengajukannya "
-    + "lagi nanti dengan alasan yang diperbaiki.")) return;
+  if (!confirm("Tarik permintaan EHC cepat ini?\n\n"
+    + "Klaimnya tetap ada dan kembali ikut jadwal biasa (cutoff tgl 18, bayar tgl 20).")) return;
   sibuk(true, "Menarik…");
   api("POST", "/rpc/batalkan_klaim_cepat", { p_klaim: klaimId })
     .then(function(r){ toast(String(Array.isArray(r) ? r[0] : r) || "Permintaan ditarik.");
@@ -11949,9 +11935,24 @@ function tarikKlaimCepat(klaimId){
     .then(function(){ sibuk(false); });
 }
 
-/* Halaman klaim ditarik ulang, bukan barisnya ditambal di tempat: pil
-   status, tombolnya, dan angka di tab semuanya ikut berubah, dan yang
-   ditambal sepotong cepat atau lambat tidak sepakat dengan sisanya. */
+/* #61: pembatalan sebelum cutoff. Klaimnya tidak dihapus — statusnya jadi
+   "batal" beserta alasannya, dan saldo SP-nya kembali. */
+function batalkanKlaimEhc(klaimId){
+  var alasan = prompt("Batalkan klaim EHC ini?\n\nSaldo EHC SP-nya kembali dan bisa dipakai lagi. "
+    + "Tulis alasan pembatalannya:");
+  if (alasan === null) return;
+  alasan = String(alasan).trim();
+  if (!alasan) { toast("Alasan pembatalan wajib diisi.", true); return; }
+  sibuk(true, "Membatalkan…");
+  api("POST", "/rpc/batalkan_klaim_ehc", { p_klaim: klaimId, p_alasan: alasan })
+    .then(function(r){ toast(String(Array.isArray(r) ? r[0] : r) || "Klaim dibatalkan.");
+                       LANJUT.kas.dimuat = false; segarkanEhc(); })
+    .catch(function(e){ toast(e.message, true); })
+    .then(function(){ sibuk(false); });
+}
+
+/* Halaman ditarik ulang, bukan barisnya ditambal di tempat: pil status,
+   tombol, saldo, dan angka di tab semuanya ikut berubah. */
 function segarkanEhc(){
   var E = LANJUT.ehc;
   EHC_HAL.forEach(function(d){ if (E.hlm[d.id]) E.hlm[d.id].dimuat = false; });
@@ -11959,8 +11960,8 @@ function segarkanEhc(){
   muatEhc().then(panelEhc).catch(function(){});
 }
 
-/* Bukti diunduh lewat signed URL berumur pendek, sama seperti dokumen
-   impor: alamat berkasnya tidak bisa disalin lalu dibagikan ke luar. */
+/* Bukti diunduh lewat signed URL berumur pendek: alamat berkasnya tidak bisa
+   disalin lalu dibagikan ke luar. */
 function unduhBukti(jalur, nama){
   sibuk(true, "Menyiapkan unduhan…");
   storage("POST", "/object/sign/dokumen/" + encodeURI(jalur),
@@ -11977,224 +11978,435 @@ function unduhBukti(jalur, nama){
     .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
 }
 
-/* ── laci klaim baru ─────────────────────────────────────────────────
-   Tiga hal yang dulu tidak ada di sini, dan alasannya:
-
-   1 · PIC + rekening bisa diisi sales langsung. Sebelumnya layar ini
-       menyuruh orang "tambahkan lewat SQL Editor", yang artinya klaim
-       macet sampai ada yang membuka Supabase. Aturannya tidak berubah:
-       rekening yang BARU diisi langsung terkunci, dan yang sudah
-       terkunci tidak bisa diganti dari sini — itu tetap lewat GM.
-
-   2 · #23: bukti transaksi TIDAK wajib lagi, dan lampiran dari laci ini
-       dihapus. Yang menjaga klaim: ajukan_klaim_ehc() (nominal ≤ EHC,
-       PIC, rekening untuk transfer). Lampiran klaim lama tetap terbaca.
-
-   3 · BUKTI_JENIS, ukuranTampil & amanNama tetap ada — dipakai komisi. */
+/* ── laci klaim EHC (baru & ubah) ─────────────────────────────────────
+   Satu laci untuk keduanya: klaim yang diubah memakai aturan yang sama
+   persis dengan klaim baru (simpan_klaim_ehc dengan p_klaim terisi).
+   Urutannya: PIC (bila perlu) → unggah lampiran → simpan klaim. Kalau
+   klaimnya gagal, lampiran yang terlanjur naik dibersihkan lagi. */
 var BUKTI_JENIS = ".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.csv,.docx,.doc";
 
-function formEhcBaru(soAwal){
-  var E = LANJUT.ehc;
-  E.pic = [];
-  /* Daftarnya hanya SP yang EHC-nya di atas nol. SP tanpa EHC memang
-     bisa dimasukkan sebagai klaim Rp 0, tapi tidak ada gunanya sama
-     sekali — dan sesudah itu SP-nya hilang dari daftar "belum diklaim"
-     untuk selamanya, karena satu SP hanya boleh punya satu klaim.
-     Jumlah yang disembunyikan disebutkan, bukan didiamkan. */
-  var h = field({ nama:"eh_so", label:"Surat Pesanan yang siap diklaim", jenis:"select", wajib:true,
-                  nilai: soAwal || "",
-                  bantu: "Hanya SP yang ada nilai EHC-nya yang muncul di sini"
-                       + (E.tanpaEhc ? " — " + E.tanpaEhc + " SP lain sudah lunas tapi EHC-nya "
-                                       + "Rp 0, jadi tidak ada yang bisa diklaim darinya." : "."),
-                  pilihan: [{v:"",l:"— pilih SP —"}].concat(E.siap.map(function(s){
-                    return { v:s.so_id, l:s.no_sp + " · " + (s.kepada || "")
-                                          + " · EHC " + rp(s.total_ehc) };
-                  })) })
-    + '<div id="eh-pic-kotak"><p class="muted">Pilih SP dulu — daftar PIC-nya ikut perusahaan di SP itu.</p></div>'
-    + field({ nama:"eh_cara", label:"Cara bayar", jenis:"select", nilai:"transfer",
-              pilihan:[{v:"transfer",l:"Transfer ke rekening PIC"},
-                       {v:"tunai",l:"Tunai — diserahkan langsung ke PIC"}],
-              bantu:"Ada PIC yang tidak mau ditransfer. Untuk tunai, rekening tidak diperlukan — "
-                  + "jejak banknya adalah nama PIC penerima." })
-    + field({ nama:"eh_nominal", label:"Nominal diserahkan ke PIC", jenis:"angka", wajib:true,
-              bantu:"Sisanya otomatis jadi kas sales." })
-    + field({ nama:"eh_tanggal", label:"Tanggal klaim", jenis:"date",
-              nilai:hariIniJkt() })
-    /* #23: fitur "Lampirkan bukti" EHC dihapus — bukti tidak lagi wajib. */
-    /* berkas 50 · kolomnya SELALU tampak, tidak muncul-hilang mengikuti
-       tombol. Kolom yang baru muncul sesudah tombol merah ditekan berarti
-       orang menekan tombolnya, membaca "alasan wajib diisi", lalu mencari
-       kolom yang tadi tidak ada. Yang tidak wajib cukup dikatakan. */
-    + '<hr style="margin:16px 2px 10px;border:0;border-top:1px solid var(--garis,#dfe4e6)">'
-    + field({ nama:"eh_alasan", label:"Alasan mendesak (hanya untuk klaim cepat)",
-              jenis:"textarea",
-              bantu:"Kosongkan kalau klaim ini ikut jadwal biasa. Isi hanya kalau PIC minta "
-                  + "uangnya cair sebelum cut-off — lalu tekan tombol merah di bawah." });
-
-  $("laci-form").innerHTML = h;
-  $("laci-kaki").innerHTML =
-      '<button class="btn utama" id="btn-eh-simpan" type="button">Ajukan klaim</button> '
-    + (bolehMintaCepat()
-        ? '<button class="btn bahaya" id="btn-eh-cepat" type="button">Ajukan klaim cepat</button>'
-        : '');
-  bukaLaci("Klaim EHC baru");
-
-  /* #23: unggah bukti EHC dihapus — bukti tidak lagi wajib. */
-
-  $("f_eh_so").addEventListener("change", function(){ muatPicUntukSp(this.value); });
-  $("f_eh_cara").addEventListener("change", function(){
-    E.cara = this.value;
-    var pil = $("f_eh_pic");
-    gambarRekPic(pil ? pil.value : "");
+/* SP yang bisa dipilih di laci: dari daftar saldo; saat mengubah klaim,
+   SP yang sudah dipakai klaim itu ikut tersedia dan saldonya ditambah
+   bagian klaim itu sendiri (yang akan diganti). */
+function spPilihanEhc(){
+  var F = LANJUT.ehc.form, peta = {}, out = [];
+  LANJUT.ehc.saldo.forEach(function(s){ peta[s.so_id] = { so:s, tersedia:Number(s.sisa) || 0 }; });
+  (F.spEkstra || []).forEach(function(s){
+    if (!peta[s.so_id]) peta[s.so_id] = { so:s, tersedia:Number(s.sisa) || 0 };
   });
-  if (soAwal) muatPicUntukSp(String(soAwal));
+  (F.alokLama || []).forEach(function(a){
+    if (peta[a.so_id]) peta[a.so_id].tersedia += Number(a.nominal) || 0;
+  });
+  Object.keys(peta).forEach(function(k){ out.push(peta[k]); });
+  out.sort(function(a, b){ return String(b.so.tanggal || "").localeCompare(String(a.so.tanggal || ""))
+                                 || (b.so.so_id - a.so.so_id); });
+  return out;
+}
+function spEhcById(id){
+  return spPilihanEhc().filter(function(x){ return String(x.so.so_id) === String(id); })[0] || null;
+}
 
-  $("btn-eh-simpan").addEventListener("click", function(){ simpanKlaimEhc(false); });
-  if ($("btn-eh-cepat")) $("btn-eh-cepat").addEventListener("click", function(){
-    if (!confirm("Ajukan klaim ini sebagai KLAIM CEPAT?\n\n"
-      + "Klaim EHC biasanya dibayar sekali sebulan, sekaligus untuk seluruh sales. "
-      + "Klaim cepat adalah pengecualian: klaim ini saja, lebih cepat, dan GM harus "
-      + "menyetujuinya satu per satu.\n\n"
-      + "Kalau tidak mendesak, tekan \"Ajukan klaim\" yang biasa.")) return;
-    simpanKlaimEhc(true);
+function formEhc(klaim, soAwal){
+  var E = LANJUT.ehc, ubah = !!klaim;
+  E.form = { klaim: klaim, berkas: [], hapus: [], pic: [], custPilihan: [],
+             alokLama: ubah ? alokasiKlaim(klaim).map(function(a){ return { so_id:a.so_id, nominal:a.nominal }; }) : [],
+             spEkstra: [] };
+  var F = E.form;
+  /* nominal di F.alok selalu TEKS berformat Indonesia ("5.000,00") — sama
+     dengan isi kotaknya. Angka dari database ("5000.00") diformat dulu;
+     angkaSaja() memang hanya mengurai format Indonesia. */
+  var alokAwal = ubah ? F.alokLama.map(function(a){ return { so: String(a.so_id), nominal: angkaTeks(Number(a.nominal), 2) }; })
+                      : [{ so: soAwal ? String(soAwal) : "", nominal: "" }];
+  F.alok = alokAwal;
+  var per = ubah ? klaim.periode : periodeEhcDari(hariIniJkt());
+
+  var siapkan = ubah && F.alokLama.length
+    ? api("GET", "/ehc_saldo_sp?select=*&so_id=in.(" + F.alokLama.map(function(a){ return a.so_id; }).join(",") + ")")
+        .then(function(r){ F.spEkstra = r || []; })
+    : Promise.resolve();
+
+  sibuk(true, "Menyiapkan…");
+  siapkan.then(function(){
+    sibuk(false);
+    var h = '<div class="flag"><span class="f-ico">i</span><div>'
+      + (ubah ? 'Mengubah klaim periode <b>' + esc(namaBulan(per)) + '</b>.'
+              : 'Klaim ini masuk <b>periode ' + esc(namaBulan(per)) + '</b>.')
+      + ' Masih bisa diubah atau dibatalkan sampai <b>' + td(cutoffEhc(per)) + '</b>; sesudah itu GM '
+      + 'memeriksa dan finance memproses tanggal ' + td(bayarEhc(per)) + '. Transfer ke customer dan '
+      + 'reimburse baru dibayar sesudah semua SP-nya lunas.</div></div>'
+      + field({ nama:"eh_kep", label:"Dipakai untuk apa?", jenis:"select", wajib:true,
+                nilai: ubah ? klaim.keperluan : "",
+                pilihan: [{v:"",l:"— pilih —"}].concat(EHC_KEPERLUAN.map(function(p){ return {v:p[0], l:p[1]}; })) })
+      + field({ nama:"eh_cara", label:"Cara bayar", jenis:"select", wajib:true,
+                nilai: ubah && (klaim.cara_bayar === "transfer" || klaim.cara_bayar === "reimburse") ? klaim.cara_bayar : "",
+                pilihan: [{v:"",l:"— pilih —"}].concat(EHC_CARA.map(function(p){ return {v:p[0], l:p[1]}; })),
+                bantu:"Pemakaian kartu kredit perusahaan dicatat lewat statement dari finance (menyusul)." })
+      + field({ nama:"eh_tanggal", label:"Tanggal transaksi", jenis:"date", wajib:true,
+                nilai: ubah ? klaim.tanggal : hariIniJkt() })
+      + '<label class="f"><span class="wajib">SP yang saldo EHC-nya dipakai</span>'
+      + '<span class="bantu">Satu transaksi boleh memotong beberapa SP. Tiap SP paling banyak sisa saldonya.</span></label>'
+      + '<div id="eh-alok"></div>'
+      + '<div id="eh-cust-kotak"></div>'
+      + '<div id="eh-tujuan"></div>'
+      + field({ nama:"eh_ket", label:"Keterangan", jenis:"textarea", nilai: ubah ? (klaim.keterangan || "") : "",
+                bantu:"Mis. \"makan siang dengan tim purchasing\", \"parcel lebaran\", \"bongkar 2 truk\"." })
+      + '<label class="f"><span class="wajib">Lampiran (bill / nota / bukti transfer)</span>'
+      + '<span class="bantu">Wajib — diperiksa GM. Maksimal 25 MB per berkas.</span></label>'
+      + '<div class="lampir-alat">'
+      + '<input type="file" id="f_eh_berkas" multiple accept="' + BUKTI_JENIS + '" class="tersembunyi">'
+      + '<button type="button" class="btn" id="btn-eh-lampir">＋ Lampirkan berkas</button></div>'
+      + '<div id="eh-berkas-daftar"></div>'
+      + (ubah ? '' :
+          '<hr style="margin:16px 2px 10px;border:0;border-top:1px solid var(--garis,#dfe4e6)">'
+          + field({ nama:"eh_alasan", label:"Alasan mendesak (hanya untuk EHC cepat)", jenis:"textarea",
+                    bantu:"Kosongkan kalau klaim ini ikut jadwal biasa. Isi hanya untuk keadaan darurat — "
+                        + "lalu tekan tombol merah di bawah." }));
+    $("laci-form").innerHTML = h;
+    $("laci-kaki").innerHTML =
+        '<button class="btn utama" id="btn-eh-simpan" type="button">' + (ubah ? "Simpan perubahan" : "Ajukan klaim") + '</button> '
+      + (!ubah && bolehMintaCepat()
+          ? '<button class="btn bahaya" id="btn-eh-cepat" type="button">Ajukan sebagai EHC cepat</button>' : '');
+    bukaLaci(ubah ? "Ubah klaim EHC" : "Klaim EHC baru");
+
+    gambarAlokEhc();
+    gambarCustEhc(ubah ? klaim.customer_id : null);
+    gambarBerkasEhc();
+
+    $("btn-eh-lampir").addEventListener("click", function(){ $("f_eh_berkas").click(); });
+    $("f_eh_berkas").addEventListener("change", function(){
+      var tolak = [];
+      Array.prototype.forEach.call(this.files || [], function(f){
+        if (f.size > BATAS_BERKAS) { tolak.push(f.name); return; }
+        F.berkas.push(f);
+      });
+      this.value = "";
+      gambarBerkasEhc();
+      if (tolak.length) tampilPesan("Terlalu besar (maksimal 25 MB): " + esc(tolak.join(", ")) + ".");
+    });
+    $("f_eh_cara").addEventListener("change", function(){ gambarTujuanEhc(); });
+    $("btn-eh-simpan").addEventListener("click", function(){ simpanKlaimEhc(false); });
+    if ($("btn-eh-cepat")) $("btn-eh-cepat").addEventListener("click", function(){
+      if (!confirm("Ajukan klaim ini sebagai EHC CEPAT (darurat)?\n\n"
+        + "EHC biasanya diperiksa GM sesudah cutoff tanggal 18 dan dibayar tanggal 20. EHC cepat adalah "
+        + "pengecualian: klaim ini saja, lebih cepat, dan GM harus menyetujuinya.\n\n"
+        + "Kalau tidak darurat, tekan \"Ajukan klaim\" yang biasa.")) return;
+      simpanKlaimEhc(true);
+    });
+  }).catch(function(e){ sibuk(false); toast(e.message, true); });
+}
+
+/* Baris alokasi dibaca dari kotaknya sebelum digambar ulang, supaya yang
+   sudah diketik tidak hilang saat orang menambah atau membuang baris. */
+function bacaAlokEhc(){
+  var F = LANJUT.ehc.form;
+  F.alok = F.alok.map(function(a, i){
+    var s = $("f_eh_so_" + i), n = $("f_eh_nom_" + i);
+    return { so: s ? s.value : a.so, nominal: n ? n.value : a.nominal };
+  });
+  return F.alok;
+}
+function gambarAlokEhc(){
+  var F = LANJUT.ehc.form, el = $("eh-alok"); if (!el) return;
+  var pil = spPilihanEhc();
+  var tot = 0;
+  var h = '<div class="tw"><table class="kecil"><thead><tr><th class="l">SP</th><th>Sisa saldo</th>'
+    + '<th>Dipakai</th><th></th></tr></thead><tbody>'
+    + F.alok.map(function(a, i){
+        var x = spEhcById(a.so), n = angkaSaja(a.nominal);
+        if (n) tot += n;
+        return '<tr><td class="l"><select id="f_eh_so_' + i + '" data-ehalok="' + i + '">'
+          + '<option value="">— pilih SP —</option>'
+          + pil.map(function(p){
+              return '<option value="' + p.so.so_id + '"' + (String(p.so.so_id) === String(a.so) ? ' selected' : '') + '>'
+                + esc(p.so.no_sp + " · " + (p.so.customer || p.so.kepada || "") + " · sisa " + rp(p.tersedia)) + '</option>';
+            }).join("") + '</select></td>'
+          + '<td>' + (x ? rp(x.tersedia) : '—') + '</td>'
+          + '<td><input type="text" id="f_eh_nom_' + i + '" inputmode="decimal" data-angka="2" autocomplete="off" '
+          +   'value="' + esc(a.nominal || "") + '" '
+          +   'data-ehnom="' + i + '" style="width:9em"></td>'
+          + '<td>' + (F.alok.length > 1 ? '<button type="button" class="btn kecil bahaya" data-ehbuangalok="' + i + '">Buang</button>' : '')
+          + (x ? ' <button type="button" class="btn kecil" data-ehpenuh="' + i + '">Pakai semua</button>' : '') + '</td></tr>';
+      }).join("")
+    + '</tbody></table></div>'
+    + '<div class="baris-alat" style="margin-top:6px"><button type="button" class="btn kecil" id="btn-eh-tambahsp">＋ Tambah SP</button>'
+    + '<span class="muted" style="align-self:center">Total klaim: <b id="eh-total">' + rp(tot) + '</b></span></div>';
+  el.innerHTML = h;
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehalok]"), function(s){
+    s.addEventListener("change", function(){
+      bacaAlokEhc(); gambarAlokEhc();
+      /* SP pertama menentukan customer penerima bawaan; customer yang sudah
+         dipilih tidak ditimpa. */
+      gambarCustEhc($("f_eh_cust") && $("f_eh_cust").value ? $("f_eh_cust").value : null);
+    });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehnom]"), function(n){
+    n.addEventListener("input", function(){
+      bacaAlokEhc();
+      var t = 0; LANJUT.ehc.form.alok.forEach(function(a){ var v = angkaSaja(a.nominal); if (v) t += v; });
+      if ($("eh-total")) $("eh-total").textContent = rp(t);
+    });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehbuangalok]"), function(b){
+    b.addEventListener("click", function(){
+      bacaAlokEhc(); LANJUT.ehc.form.alok.splice(Number(b.dataset.ehbuangalok), 1);
+      gambarAlokEhc(); cekLintasEhc();
+    });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehpenuh]"), function(b){
+    b.addEventListener("click", function(){
+      bacaAlokEhc();
+      var a = LANJUT.ehc.form.alok[Number(b.dataset.ehpenuh)], x = spEhcById(a.so);
+      if (x) a.nominal = angkaTeks(x.tersedia, 2);
+      gambarAlokEhc();
+    });
+  });
+  $("btn-eh-tambahsp").addEventListener("click", function(){
+    bacaAlokEhc(); LANJUT.ehc.form.alok.push({ so:"", nominal:"" }); gambarAlokEhc();
   });
 }
 
-/* PIC-nya: pilih yang sudah ada, atau buat baru di tempat. Yang sudah
-   punya rekening terkunci ditampilkan apa adanya dan tidak bisa diubah
-   dari sini — layar ini menyebut jalur yang benar, bukan menyembunyikan
-   bahwa jalurnya ada. */
-function muatPicUntukSp(soId){
-  var E = LANJUT.ehc, box = $("eh-pic-kotak");
-  var so = E.siap.filter(function(s){ return String(s.so_id) === String(soId); })[0];
-  if (!so) { box.innerHTML = '<p class="muted">Pilih SP dulu.</p>'; return; }
+/* Customer penerima: bawaannya customer SP pertama. Customer lain boleh,
+   tapi klaimnya lalu wajib disetujui GM — dan itu dikatakan di sini,
+   bukan baru ketahuan saat GM menolak. */
+function custDariAlokEhc(){
+  var peta = {}, out = [];
+  LANJUT.ehc.form.alok.forEach(function(a){
+    var x = spEhcById(a.so);
+    if (x && x.so.customer_id && !peta[x.so.customer_id]) {
+      peta[x.so.customer_id] = 1;
+      out.push({ id: x.so.customer_id, nama: x.so.customer || x.so.kepada || ("#" + x.so.customer_id) });
+    }
+  });
+  return out;
+}
+function gambarCustEhc(pilih){
+  var F = LANJUT.ehc.form, el = $("eh-cust-kotak"); if (!el) return;
+  var dariSp = custDariAlokEhc();
+  var k = F.klaim;
+  if (pilih === null || pilih === undefined) pilih = dariSp.length ? dariSp[0].id : "";
+  var opsi = dariSp.slice();
+  F.custPilihan.forEach(function(c){
+    if (!opsi.some(function(o){ return String(o.id) === String(c.id); })) opsi.push(c);
+  });
+  if (k && k.customer_id && !opsi.some(function(o){ return String(o.id) === String(k.customer_id); }))
+    opsi.push({ id:k.customer_id, nama:(k.customers && k.customers.nama) || ("#" + k.customer_id) });
+  el.innerHTML = field({ nama:"eh_cust", label:"Untuk customer", jenis:"select", wajib:true, nilai: pilih,
+      pilihan: [{v:"",l:"— pilih customer —"}].concat(opsi.map(function(c){ return { v:c.id, l:c.nama }; })),
+      bantu:"Bawaannya customer SP yang dipakai. Customer lain boleh, tapi perlu persetujuan GM." })
+    + '<div class="baris-alat" style="margin:-4px 0 8px"><input type="search" id="eh-cust-cari" '
+    + 'placeholder="Cari customer lain…" style="min-width:220px">'
+    + '<button type="button" class="btn kecil" id="btn-eh-cust-cari">Cari</button></div>'
+    + '<div id="eh-lintas"></div>';
+  $("f_eh_cust").addEventListener("change", function(){ cekLintasEhc(); segarTujuanEhc(); });
+  $("btn-eh-cust-cari").addEventListener("click", cariCustEhc);
+  $("eh-cust-cari").addEventListener("keydown", function(e){ if (e.key === "Enter") { e.preventDefault(); cariCustEhc(); } });
+  cekLintasEhc();
+  segarTujuanEhc();
+}
+/* Daftar PIC hanya ditarik ulang kalau customernya berganti — kalau tidak,
+   PIC yang sudah dipilih hilang setiap kali orang menambah SP. */
+function segarTujuanEhc(){
+  var F = LANJUT.ehc.form, cara = $("f_eh_cara") ? $("f_eh_cara").value : "";
+  var cust = $("f_eh_cust") ? $("f_eh_cust").value : "";
+  if (cara === "transfer" && $("eh-pic-kotak") && String(F.picCust || "") === String(cust)) return;
+  gambarTujuanEhc();
+}
+function cariCustEhc(){
+  var F = LANJUT.ehc.form, q = String(($("eh-cust-cari") || {}).value || "").trim();
+  if (q.length < 2) { toast("Ketik minimal 2 huruf nama customer.", true); return; }
+  var r = repSayaAlur();
+  var path = "/customers?select=id,nama,sales_rep_id&nama=ilike." + encodeURIComponent("*" + q.replace(/[*,()]/g, " ") + "*")
+    + (peranSales() && r ? "&or=(sales_rep_id.is.null,sales_rep_id.eq." + r.id + ")" : "")
+    + "&order=nama&limit=20";
+  api("GET", path).then(function(d){
+    if (!d || !d.length) { toast("Tidak ada customer yang cocok.", true); return; }
+    d.forEach(function(c){
+      if (!F.custPilihan.some(function(x){ return String(x.id) === String(c.id); }))
+        F.custPilihan.push({ id:c.id, nama:c.nama });
+    });
+    var pilihSekarang = d.length === 1 ? d[0].id : ($("f_eh_cust") ? $("f_eh_cust").value : "");
+    gambarCustEhc(pilihSekarang);
+    if (d.length > 1) toast(d.length + " customer ditemukan — pilih di daftar \"Untuk customer\".");
+  }).catch(function(e){ toast(e.message, true); });
+}
+function cekLintasEhc(){
+  var el = $("eh-lintas"); if (!el) return;
+  var cust = $("f_eh_cust") ? $("f_eh_cust").value : "";
+  var lain = LANJUT.ehc.form.alok.filter(function(a){
+    var x = spEhcById(a.so);
+    return x && cust && String(x.so.customer_id || "") !== String(cust);
+  });
+  el.innerHTML = lain.length
+    ? '<div class="flag bad"><span class="f-ico">!</span><div><b>Lintas customer.</b> '
+      + lain.map(function(a){ return esc(spEhcById(a.so).so.no_sp); }).join(", ")
+      + ' bukan SP customer ini. Klaim tetap bisa diajukan, tapi wajib disetujui GM.</div></div>'
+    : '';
+}
+
+/* Tujuan uang: transfer → PIC customer penerima (rekening terkunci sekali
+   terisi); reimburse → rekening sales yang diisi finance. */
+function gambarTujuanEhc(){
+  var el = $("eh-tujuan"); if (!el) return;
+  var cara = $("f_eh_cara") ? $("f_eh_cara").value : "";
+  var F = LANJUT.ehc.form;
+  if (cara === "transfer") {
+    el.innerHTML = '<div id="eh-pic-kotak"><p class="muted">Pilih customer dulu — daftar PIC-nya ikut customer itu.</p></div>';
+    muatPicEhc();
+    return;
+  }
+  if (cara === "reimburse") {
+    var rep = null;
+    F.alok.some(function(a){ var x = spEhcById(a.so); if (x) { rep = x.so.sales_rep_id; return true; } return false; });
+    if (!rep && F.klaim) rep = F.klaim.sales_rep_id;
+    var rek = rep ? LANJUT.ehc.rek[rep] : null;
+    el.innerHTML = rek
+      ? '<div class="flag"><span class="f-ico">i</span><div>Diganti ke <b>' + esc(rek.bank) + ' ' + esc(rek.no_rekening)
+        + '</b> a.n. ' + esc(rek.atas_nama || "—") + ' tanggal 20, sesudah semua SP-nya lunas. Rekening ini '
+        + 'diisi finance.</div></div>'
+      : '<div class="flag bad"><span class="f-ico">!</span><div><b>Rekening sales belum diisi finance.</b> '
+        + 'Klaim tetap bisa diajukan, tapi reimburse baru bisa dibayar sesudah finance mengisi rekening '
+        + 'tujuan untuk ' + esc(namaRepAlur(rep) || "sales ini") + '.</div></div>';
+    return;
+  }
+  el.innerHTML = "";
+}
+function muatPicEhc(){
+  var F = LANJUT.ehc.form, box = $("eh-pic-kotak");
+  if (!box) return;
+  var cust = $("f_eh_cust") ? $("f_eh_cust").value : "";
+  if (!cust) { box.innerHTML = '<p class="muted">Pilih customer dulu.</p>'; return; }
   box.innerHTML = '<p class="muted">Memuat PIC…</p>';
   api("GET", "/customer_pics?select=id,nama,jabatan,hp,bank,no_rekening,atas_nama,terkunci"
-      + "&customer_id=eq." + so.customer_id + "&aktif=is.true&order=nama")
+      + "&customer_id=eq." + encodeURIComponent(cust) + "&aktif=is.true&order=nama")
     .then(function(d){
-      E.pic = d || [];
-      E.customerId = so.customer_id;
-      box.innerHTML = '<p class="muted" style="margin:2px">Nilai EHC di SP ini: <b>'
-          + rp(so.total_ehc) + '</b>.</p>'
-        + field({ nama:"eh_pic", label:"PIC penerima transfer", jenis:"select", wajib:true,
-            pilihan: [{v:"",l:"— pilih PIC —"}].concat(E.pic.map(function(p){
+      F.pic = d || []; F.picCust = cust;
+      var awal = F.klaim && String(F.klaim.customer_id) === String(cust) ? F.klaim.pic_id : "";
+      box.innerHTML = field({ nama:"eh_pic", label:"PIC penerima transfer", jenis:"select", wajib:true, nilai: awal || "",
+            pilihan: [{v:"",l:"— pilih PIC —"}].concat(F.pic.map(function(p){
               return { v:p.id, l:p.nama + (p.jabatan ? " · " + p.jabatan : "")
-                          + (p.no_rekening ? " · " + (p.bank||"") + " " + p.no_rekening
-                                           : " · rekening belum ada") };
+                          + (p.no_rekening ? " · " + (p.bank||"") + " " + p.no_rekening : " · rekening belum ada") };
             })).concat([{ v:"baru", l:"＋ PIC baru…" }]) })
         + '<div id="eh-rek"></div>';
       $("f_eh_pic").addEventListener("change", function(){ gambarRekPic(this.value); });
-      gambarRekPic("");
+      gambarRekPic(awal || "");
     })
     .catch(function(e){ box.innerHTML = '<p class="muted">' + esc(e.message) + '</p>'; });
 }
-
 function gambarRekPic(nilai){
-  var E = LANJUT.ehc, el = $("eh-rek");
+  var F = LANJUT.ehc.form, el = $("eh-rek");
   if (!el) return;
-  var tunai = $("f_eh_cara") && $("f_eh_cara").value === "tunai";
-  /* Untuk tunai, rekening bukan cuma tidak wajib — ia tidak ada urusannya
-     sama sekali, dan menampilkannya hanya mengundang orang mengisinya
-     lalu bertanya kenapa tidak tersimpan. */
-  if (tunai && nilai !== "baru") {
-    var pt = E.pic.filter(function(x){ return String(x.id) === String(nilai); })[0];
-    el.innerHTML = pt
-      ? '<div class="flag"><span class="f-ico">i</span><div>'
-        + '<b>' + esc(pt.nama) + '</b> menerima uangnya langsung, tunai.<br>'
-        + 'Rekening tidak diperlukan dan tidak ikut tersimpan. Yang menggantikan jejak banknya '
-        + 'adalah nama PIC di atas.</div></div>'
-      : "";
-    return;
-  }
   if (nilai === "baru") {
     el.innerHTML = '<div class="kotak-pic">'
-      + '<p class="muted" style="margin:0 2px 8px">PIC baru ini tersimpan permanen begitu klaim '
-      + 'diajukan, jadi klaim berikutnya untuk perusahaan yang sama tinggal memilihnya.'
-      + (tunai ? ' Karena pembayarannya tunai, bank dan rekening boleh dikosongkan.' : '') + '</p>'
+      + '<p class="muted" style="margin:0 2px 8px">PIC baru ini tersimpan permanen begitu klaim diajukan.</p>'
       + field({ nama:"eh_pnama", label:"Nama PIC", wajib:true })
       + field({ nama:"eh_pjabatan", label:"Jabatan" })
       + field({ nama:"eh_php", label:"Nomor HP" })
-      + field({ nama:"eh_pbank", label:"Bank" })
-      + field({ nama:"eh_prek", label:"Nomor rekening",
+      + field({ nama:"eh_pbank", label:"Bank", wajib:true })
+      + field({ nama:"eh_prek", label:"Nomor rekening", wajib:true,
                 bantu:"Sekali tersimpan, nomor ini terkunci. Menggantinya butuh persetujuan GM." })
       + field({ nama:"eh_patas", label:"Atas nama" })
       + '</div>';
     return;
   }
-  var p = E.pic.filter(function(x){ return String(x.id) === String(nilai); })[0];
+  var p = F.pic.filter(function(x){ return String(x.id) === String(nilai); })[0];
   if (!p) { el.innerHTML = ""; return; }
   if (p.no_rekening) {
     el.innerHTML = '<div class="flag"><span class="f-ico">i</span><div><b>' + esc(p.bank || "") + " "
       + esc(p.no_rekening) + '</b> a.n. ' + esc(p.atas_nama || "—") + '<br>'
-      + (p.terkunci
-          ? 'Rekening ini <b>terkunci</b>. Mengubahnya butuh persetujuan GM dan tidak bisa '
-            + 'dilakukan dari layar klaim — ajukan lewat tab Approval GM.'
-          : 'Rekening ini belum terkunci.')
+      + (p.terkunci ? 'Rekening ini <b>terkunci</b>; perubahannya butuh persetujuan GM.'
+                    : 'Rekening ini belum terkunci.')
       + '</div></div>';
     return;
   }
-  /* PIC lama yang rekeningnya masih kosong: boleh diisi di sini, tanpa GM.
-     Pengisian PERTAMA memang bukan perubahan — tidak ada yang diganti. */
   el.innerHTML = '<div class="kotak-pic">'
     + '<p class="muted" style="margin:0 2px 8px"><b>' + esc(p.nama) + '</b> belum punya rekening. '
-    + 'Isi di sini — pengisian pertama tidak butuh persetujuan GM, tapi begitu tersimpan ia '
-    + 'terkunci dan perubahannya harus lewat GM.</p>'
+    + 'Pengisian pertama tidak butuh persetujuan GM, tapi begitu tersimpan ia terkunci.</p>'
     + field({ nama:"eh_pbank", label:"Bank", wajib:true })
     + field({ nama:"eh_prek", label:"Nomor rekening", wajib:true })
     + field({ nama:"eh_patas", label:"Atas nama", nilai:p.nama })
     + '</div>';
 }
 
-/* Urutannya penting: PIC dulu (supaya rekeningnya ada saat klaim dibuat),
-   lalu berkasnya diunggah, baru klaimnya diajukan. Kalau klaimnya gagal,
-   berkas yang terlanjur naik dibersihkan — jangan tinggalkan sampah yang
-   tidak ada catatannya. */
+function gambarBerkasEhc(){
+  var F = LANJUT.ehc.form, el = $("eh-berkas-daftar"); if (!el) return;
+  var lama = F.klaim ? berkasKlaim(F.klaim).filter(function(f){ return F.hapus.indexOf(f.id) < 0; }) : [];
+  if (!lama.length && !F.berkas.length) {
+    el.innerHTML = '<p class="muted" style="margin:2px">Belum ada lampiran — wajib minimal satu.</p>';
+    return;
+  }
+  el.innerHTML = '<div class="slot-grup">'
+    + lama.map(function(f){
+        return '<div class="slot ada"><div class="slot-berkas"><span>' + esc(f.nama_berkas)
+          + (f.ukuran ? ' · ' + ukuranTampil(f.ukuran) : '') + ' <i class="muted">(tersimpan)</i></span>'
+          + '<span class="slot-aksi"><button type="button" class="btn kecil bahaya" data-ehbuanglama="' + f.id
+          + '">Buang</button></span></div></div>';
+      }).join("")
+    + F.berkas.map(function(f, i){
+        return '<div class="slot ada"><div class="slot-berkas">'
+          + '<span>' + esc(f.name) + ' · ' + ukuranTampil(f.size) + '</span>'
+          + '<span class="slot-aksi"><button type="button" class="btn kecil bahaya" '
+          + 'data-ehbuangbaru="' + i + '">Buang</button></span></div></div>';
+      }).join("") + '</div>';
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehbuangbaru]"), function(x){
+    x.addEventListener("click", function(){ F.berkas.splice(Number(x.dataset.ehbuangbaru), 1); gambarBerkasEhc(); });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehbuanglama]"), function(x){
+    x.addEventListener("click", function(){ F.hapus.push(Number(x.dataset.ehbuanglama)); gambarBerkasEhc(); });
+  });
+}
+
 function simpanKlaimEhc(cepat){
-  var E = LANJUT.ehc;
-  var soId = nilaiForm("eh_so");
-  /* Alasannya diperiksa DI SINI, sebelum satu berkas pun diunggah:
-     kalau ia baru ditolak server, lampiran yang terlanjur naik harus
-     dibersihkan lagi — pekerjaan yang tidak perlu ada. */
+  var E = LANJUT.ehc, F = E.form, ubah = !!F.klaim;
   var alasanCepat = String(nilaiForm("eh_alasan") || "").trim();
   if (cepat && alasanCepat.length < 10) {
-    tampilPesan("Klaim cepat wajib beralasan. Tulis apa yang mendesak dan kapan uangnya "
-      + "dibutuhkan di kolom \"Alasan mendesak\" — GM memutuskan dari kalimat itu.");
+    tampilPesan("EHC cepat wajib beralasan. Tulis apa yang mendesak dan kapan uangnya dibutuhkan "
+      + "di kolom \"Alasan mendesak\" — GM memutuskan dari kalimat itu.");
     return;
   }
-  var picPil = nilaiForm("eh_pic");
-  var nominal = angkaSaja(nilaiForm("eh_nominal"));
-  if (!soId) { tampilPesan("Pilih Surat Pesanan dulu."); return; }
-  if (!picPil) { tampilPesan("Pilih PIC penerima transfer, atau buat PIC baru."); return; }
-  if (nominal === null || nominal < 0) { tampilPesan("Nominal belum diisi dengan benar."); return; }
-  /* #23: bukti EHC tidak lagi wajib — pemeriksaan lampiran dihapus. */
-  var so = E.siap.filter(function(s){ return String(s.so_id) === String(soId); })[0] || {};
-  var totalEhc = Number(so.total_ehc) || 0;
-  if (keSen(nominal) > keSen(totalEhc)) {   /* #12: sampai sen (= ajukan_klaim_ehc) */
-    tampilPesan("Nominal " + rp(nominal) + " melebihi EHC di SP itu (" + rp(totalEhc) + ").");
-    return;
+  var kep = nilaiForm("eh_kep"), cara = nilaiForm("eh_cara"), tgl = nilaiForm("eh_tanggal");
+  var cust = nilaiForm("eh_cust");
+  if (!kep) { tampilPesan("Pilih untuk apa EHC ini dipakai."); return; }
+  if (!cara) { tampilPesan("Pilih cara bayar."); return; }
+  if (!tgl) { tampilPesan("Isi tanggal transaksi."); return; }
+  if (tgl > hariIniJkt()) { tampilPesan("Tanggal transaksi tidak boleh di masa depan."); return; }
+  var alok = bacaAlokEhc(), daftar = [], dobel = {};
+  for (var i = 0; i < alok.length; i++) {
+    var a = alok[i], n = angkaSaja(a.nominal);
+    if (!a.so && (n === null || n === 0)) continue;
+    if (!a.so) { tampilPesan("Pilih SP di baris " + (i + 1) + "."); return; }
+    if (dobel[a.so]) { tampilPesan("SP yang sama dipilih dua kali."); return; }
+    dobel[a.so] = 1;
+    var x = spEhcById(a.so);
+    if (n === null || n <= 0) { tampilPesan("Isi nominal untuk " + esc(x ? x.so.no_sp : "SP baris " + (i + 1)) + "."); return; }
+    if (x && keSen(n) > keSen(x.tersedia)) {
+      tampilPesan("Saldo EHC " + esc(x.so.no_sp) + " tinggal " + rp(x.tersedia) + ", tidak cukup untuk " + rp(n) + ".");
+      return;
+    }
+    daftar.push({ so_id: Number(a.so), nominal: keSen(n) / 100 });
   }
+  if (!daftar.length) { tampilPesan("Pilih minimal satu SP yang saldo EHC-nya dipakai."); return; }
+  if (!cust) { tampilPesan("Pilih customer penerima / yang di-entertain."); return; }
+  var lamaTersisa = ubah ? berkasKlaim(F.klaim).filter(function(f){ return F.hapus.indexOf(f.id) < 0; }).length : 0;
+  if (!F.berkas.length && !lamaTersisa) { tampilPesan("Lampiran wajib: lampirkan bill/nota atau bukti transfer."); return; }
 
-  var cara = nilaiForm("eh_cara") || "transfer";
-  var picLama = E.pic.filter(function(x){ return String(x.id) === String(picPil); })[0];
-  /* Untuk tunai, PIC lama tanpa rekening tidak perlu disentuh sama sekali —
-     tidak ada yang mau disimpan. */
-  var perluSimpanPic = (picPil === "baru")
-    || (cara === "transfer" && picLama && !picLama.no_rekening);
-  if (picPil === "baru" && !nilaiForm("eh_pnama")) {
-    tampilPesan("Nama PIC baru wajib diisi."); return;
+  var picPil = cara === "transfer" ? nilaiForm("eh_pic") : null;
+  var picLama = picPil ? F.pic.filter(function(x){ return String(x.id) === String(picPil); })[0] : null;
+  if (cara === "transfer") {
+    if (!picPil) { tampilPesan("Pilih PIC penerima transfer, atau buat PIC baru."); return; }
+    if (picPil === "baru" && !nilaiForm("eh_pnama")) { tampilPesan("Nama PIC baru wajib diisi."); return; }
+    if ((picPil === "baru" || (picLama && !picLama.no_rekening)) && (!nilaiForm("eh_pbank") || !nilaiForm("eh_prek"))) {
+      tampilPesan("Isi bank dan nomor rekening PIC penerima."); return;
+    }
   }
-  if (cara === "transfer" && picLama && !picLama.no_rekening
-      && nominal > 0 && !nilaiForm("eh_prek")) {
-    tampilPesan("PIC ini belum punya rekening. Isi bank dan nomor rekeningnya dulu, "
-      + "atau ganti cara bayarnya jadi tunai kalau uangnya memang diserahkan langsung."); return;
-  }
+  var perluSimpanPic = cara === "transfer" && (picPil === "baru" || (picLama && !picLama.no_rekening));
 
-  sibuk(true, "Menyimpan klaim…");
+  var terunggah = [];
+  sibuk(true, "Menyimpan…");
   Promise.resolve()
     .then(function(){
-      if (!perluSimpanPic) return Number(picPil);
+      if (!perluSimpanPic) return picPil ? Number(picPil) : null;
       return api("POST", "/rpc/simpan_pic_rekening", {
-        p_customer: E.customerId,
+        p_customer:  Number(cust),
         p_nama:      picPil === "baru" ? nilaiForm("eh_pnama") : picLama.nama,
         p_jabatan:   picPil === "baru" ? nilaiForm("eh_pjabatan") : null,
         p_hp:        picPil === "baru" ? nilaiForm("eh_php") : null,
@@ -12204,29 +12416,40 @@ function simpanKlaimEhc(cepat){
       }).then(function(r){ return Number(Array.isArray(r) ? r[0] : r); });
     })
     .then(function(picId){
-      sibuk(true, cepat ? "Mengajukan klaim cepat…" : "Mengajukan klaim…");
-      /* Satu RPC, bukan dua. Kalau klaimnya dibuat lebih dulu lalu
-         permintaan cepatnya dikirim terpisah, yang kedua bisa gagal dan
-         sales melihat klaim biasa padahal ia menekan tombol merah.
-         ajukan_klaim_ehc_cepat() melakukan keduanya dalam satu
-         transaksi. */
-      return api("POST", cepat ? "/rpc/ajukan_klaim_ehc_cepat" : "/rpc/ajukan_klaim_ehc",
-        cepat
-          ? { p_so: Number(soId), p_pic: picId, p_nominal: nominal,
-              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: [], p_cara_bayar: cara,
-              p_alasan: alasanCepat }
-          : { p_so: Number(soId), p_pic: picId, p_nominal: nominal,
-              p_tanggal: nilaiForm("eh_tanggal"), p_berkas: [], p_cara_bayar: cara });   /* #23: tanpa lampiran */
+      var kunci = Date.now() + "-" + Math.random().toString(36).slice(2, 8), urut = Promise.resolve();
+      if (F.berkas.length) sibuk(true, "Mengunggah lampiran…");
+      F.berkas.forEach(function(f){
+        urut = urut.then(function(){
+          var jalur = "ehc/" + kunci + "/" + Date.now() + "-" + amanNama(f.name);
+          return storage("POST", "/object/dokumen/" + encodeURI(jalur), f, f.type || "application/octet-stream")
+            .then(function(){ terunggah.push({ nama_berkas:f.name, path:jalur, ukuran:f.size, mime:f.type || null }); });
+        });
+      });
+      return urut.then(function(){ return picId; });
+    })
+    .then(function(picId){
+      sibuk(true, cepat ? "Mengajukan EHC cepat…" : (ubah ? "Menyimpan perubahan…" : "Mengajukan klaim…"));
+      var data = { keperluan: kep, cara_bayar: cara, tanggal: tgl, customer_id: Number(cust),
+                   pic_id: picId, keterangan: nilaiForm("eh_ket"), alokasi: daftar, berkas: terunggah };
+      if (ubah) data.berkas_hapus = F.hapus;
+      if (cepat) data.cepat_alasan = alasanCepat;
+      return api("POST", "/rpc/simpan_klaim_ehc", { p_klaim: ubah ? F.klaim.id : null, p_data: data });
     })
     .then(function(){
       tutupLaci();
-      toast(cepat
-        ? "Klaim EHC tersimpan dan diajukan sebagai KLAIM CEPAT — menunggu putusan GM."
-        : "Klaim EHC tersimpan.");
-      E.dimuat = false; LANJUT.kas.dimuat = false;
-      muatEhc().then(panelEhc).catch(function(){});
+      toast(cepat ? "Klaim EHC tersimpan dan diajukan sebagai EHC CEPAT — menunggu putusan GM."
+                  : (ubah ? "Perubahan klaim EHC tersimpan." : "Klaim EHC tersimpan."));
+      E.form = null; LANJUT.kas.dimuat = false;
+      segarkanEhc();
     })
-    .catch(function(e){ tampilPesan(esc(e.message)); })
+    .catch(function(e){
+      var buang = terunggah.length
+        ? storage("DELETE", "/object/dokumen",
+            JSON.stringify({ prefixes: terunggah.map(function(x){ return x.path; }) }),
+            "application/json").catch(function(){})
+        : Promise.resolve();
+      return buang.then(function(){ tampilPesan(esc(e.message)); });
+    })
     .then(function(){ sibuk(false); });
 }
 
@@ -12617,7 +12840,26 @@ function gambarHitungKomisi(soId){
     : '<div class="flag bad"><span class="f-ico">!</span><div><b>Rekening sales belum diisi.</b> '
       + 'Klaim tidak bisa diajukan sebelum finance mengisi rekening tujuan untuk <b>'
       + esc(namaRepAlur(s.sales_rep_id) || "sales ini") + '</b>.</div></div>';
+  h += '<div id="km-ehc"></div>';
   el.innerHTML = h;
+  /* Berkas 140: klaim komisi MENUTUP EHC SP itu — sisa saldonya pindah ke
+     kas sales dan tidak bisa dipakai lagi. Sales harus tahu angkanya
+     SEBELUM menekan tombol (keputusan Hannes). */
+  K.ehcSisa = K.ehcSisa || {};
+  api("GET", "/ehc_saldo_sp?select=so_id,total_ehc,terpakai,sisa&so_id=eq." + encodeURIComponent(soId))
+    .then(function(r){
+      var v = (r || [])[0], kotak = $("km-ehc");
+      K.ehcSisa[soId] = v ? Number(v.sisa) || 0 : 0;
+      if (!kotak || !v || !(Number(v.total_ehc) > 0)) return;
+      kotak.innerHTML = Number(v.sisa) > 0
+        ? '<div class="flag bad"><span class="f-ico">!</span><div><b>Sisa saldo EHC SP ini ' + rp(v.sisa)
+          + '</b> (EHC ' + rp(v.total_ehc) + ', terpakai ' + rp(v.terpakai) + '). Begitu komisi diklaim, '
+          + 'EHC SP ini <b>tertutup</b>: sisanya pindah ke kas sales dan tidak bisa dipakai lagi. '
+          + 'Pakai dulu saldonya di tab EHC kalau masih diperlukan.</div></div>'
+        : '<div class="flag"><span class="f-ico">i</span><div>Saldo EHC SP ini sudah habis terpakai ('
+          + rp(v.terpakai) + '). Klaim komisi akan menutup EHC SP ini.</div></div>';
+    })
+    .catch(function(){ K.ehcSisa[soId] = null; });
 }
 
 function gambarBerkasKomisi(){
@@ -12649,6 +12891,14 @@ function simpanKlaimKomisi(){
   if (!K.rek[s.sales_rep_id]) {
     tampilPesan("Rekening sales belum diisi finance. Klaim tidak bisa diajukan dulu.");
     return;
+  }
+  var sisaEhc = K.ehcSisa ? K.ehcSisa[soId] : undefined;
+  if (sisaEhc === null || sisaEhc === undefined) {
+    if (!confirm("Saldo EHC SP ini belum terbaca. Klaim komisi menutup EHC SP ini — sisa saldonya "
+      + "pindah ke kas sales dan tidak bisa dipakai lagi. Lanjutkan?")) return;
+  } else if (sisaEhc > 0) {
+    if (!confirm("Sisa saldo EHC SP ini " + rp(sisaEhc) + " akan PINDAH KE KAS SALES dan tidak bisa "
+      + "dipakai lagi begitu komisi diklaim.\n\nLanjutkan klaim komisi?")) return;
   }
   var terunggah = [];
   sibuk(true, K.berkas.length ? "Mengunggah lampiran…" : "Mengajukan klaim…");
@@ -12691,9 +12941,10 @@ function simpanKlaimKomisi(){
 /* ═══════════════════════════════════════════════════════════════════════
    7 · KAS SALES — view, bukan tabel
 
-   Saldonya dijumlahkan database dari klaim yang benar-benar tercatat.
-   Kalau disimpan sebagai tabel tersendiri, angkanya bisa berbeda dengan
-   klaimnya, dan yang mana yang benar jadi pertanyaan tanpa jawaban.
+   Berkas 140: kas sales = sisa saldo EHC dari SP yang KOMISINYA SUDAH
+   DIKLAIM (EHC SP itu tertutup). Dijumlahkan database dari saldo SP
+   (ehc_saldo_sp) setiap kali dibaca — kalau disimpan sebagai tabel
+   tersendiri, angkanya bisa berbeda dengan klaimnya.
    ═══════════════════════════════════════════════════════════════════════ */
 
 function panelKas(){
@@ -12717,16 +12968,16 @@ function panelKas(){
           + 'database untuk peran Anda — bukan disembunyikan layar.</div></div>'
         : '')
     + '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile(peranSales() ? "Kas saya" : "Total kas sales", rpS(total), "sisa EHC yang tidak ditransfer", "", "kas:saldo")
+    + tile(peranSales() ? "Kas saya" : "Total kas sales", rpS(total), "sisa EHC SP yang komisinya sudah diklaim", "", "kas:saldo")
     + tile("Sales dengan saldo", K.baris.length, "", "", "kas:sales")
-    + tile("Klaim menyumbang", klaim, "baris klaim", "", "kas:klaim")
+    + tile("SP menyumbang", klaim, "SP tertutup yang masih bersisa", "", "kas:klaim")
     + '</div>';
 
   if (!K.baris.length) {
-    h += kosong("Belum ada kas sales. Saldo muncul sendiri begitu ada klaim EHC yang nominal "
-      + "transfernya lebih kecil dari EHC di Surat Pesanan — sisanya jadi kas.");
+    h += kosong("Belum ada kas sales. Kas muncul sendiri begitu komisi sebuah SP diklaim sementara "
+      + "saldo EHC SP itu masih bersisa — sisanya pindah ke kas sales.");
   } else {
-    h += '<div class="tw" id="daftar-kas"><table><thead><tr><th class="l">Sales</th><th>Jumlah klaim</th>'
+    h += '<div class="tw" id="daftar-kas"><table><thead><tr><th class="l">Sales</th><th>SP menyumbang</th>'
       +  '<th>Saldo kas</th></tr></thead><tbody>'
       +  K.baris.map(function(x){
            return '<tr><td class="l">' + esc(x.sales || "Tanpa nama") + '</td>'
@@ -12737,9 +12988,9 @@ function panelKas(){
   }
 
   h += kotakGerbang('<b><code>kas_sales</code> adalah view, bukan tabel.</b> '
-    + 'Angkanya dijumlahkan ulang dari klaim setiap kali dibaca, jadi ia tidak bisa melenceng '
-    + 'dari klaimnya. Tidak ada tombol ubah di sini karena tidak ada yang bisa diubah — '
-    + 'yang berubah adalah klaimnya, di tab EHC.');
+    + 'Angkanya dijumlahkan ulang dari saldo EHC tiap SP setiap kali dibaca: EHC SP dikurangi klaim '
+    + 'EHC yang diajukan/disetujui, hanya untuk SP yang komisinya sudah diklaim. Tidak ada tombol ubah '
+    + 'di sini karena tidak ada yang bisa diubah — yang berubah adalah klaimnya, di tab EHC dan Komisi.');
 
   el.innerHTML = h;
 }
@@ -12754,6 +13005,17 @@ function panelKas(){
    ═══════════════════════════════════════════════════════════════════════ */
 
 function bulanIniJkt(){ return hariIniJkt().slice(0, 7); }
+/* Berkas 140: pembayaran EHC per PERIODE (cutoff tgl 18), bukan bulan
+   kalender. Yang bisa diajukan adalah periode terakhir yang sudah ditutup:
+   tgl 19 ke atas → periode bulan ini; tgl 1–18 → periode bulan lalu.
+   Database ikut mengambil klaim periode sebelumnya yang tertunda (SP-nya
+   baru lunas belakangan). Komisi masih bulan kalender (tahap 4). */
+function bulanTransfer(jenis){
+  if (jenis !== "ehc") return bulanIniJkt();
+  var h = hariIniJkt(), th = Number(h.slice(0, 4)), bl = Number(h.slice(5, 7));
+  if (Number(h.slice(8, 10)) <= 18) { bl -= 1; if (bl < 1) { bl = 12; th -= 1; } }
+  return th + "-" + dd(bl);
+}
 
 /* Rekap dijalankan atas permintaan, bukan saat layar dibuka.
 
@@ -12773,14 +13035,30 @@ function tarikRekap(jenis){
         + "&batal=is.false&tanggal=gte." + awal + "&tanggal=lte." + akhir
         + "&order=tanggal.desc&limit=3000";
   var tugas = [ api("GET", q), repAlur() ];
-  if (jenis === "ehc")
-    tugas.push(api("GET", "/ehc_klaim?select=id,so_id,sales_rep_id,tanggal,ehc_klaim_nilai(nominal,kas)"
-      + "&tanggal=gte." + awal + "&tanggal=lte." + akhir + "&limit=3000"));
-  else
+  /* Berkas 140: satu SP bisa dipakai banyak klaim EHC, dan satu klaim bisa
+     memakai banyak SP. Rekap EHC per SP diambil dari saldo SP (terpakai =
+     klaim yang diajukan/disetujui; kas = sisa SP yang komisinya sudah
+     diklaim), bukan dari baris klaim per so_id. */
+  if (jenis !== "ehc")
     tugas.push(api("GET", "/komisi_klaim?select=id,so_id,sales_rep_id,tanggal,komisi_klaim_nilai(nominal)"
       + "&tanggal=gte." + awal + "&tanggal=lte." + akhir + "&limit=3000"));
 
   return Promise.all(tugas)
+    .then(function(r){
+      if (jenis !== "ehc") return r;
+      var ids = (r[0] || []).map(function(s){ return s.id; }), potong = [];
+      for (var i = 0; i < ids.length; i += 150) potong.push(ids.slice(i, i + 150));
+      return Promise.all(potong.map(function(x){
+        return api("GET", "/ehc_saldo_sp?select=so_id,terpakai,sisa,tertutup,jumlah_klaim&so_id=in.(" + x.join(",") + ")");
+      })).then(function(h){
+        r[2] = [].concat.apply([], h).map(function(v){
+          return { so_id: v.so_id, ehcSaldo: true, jumlah: Number(v.jumlah_klaim) || 0,
+                   nominal: Number(v.terpakai) || 0,
+                   kas: v.tertutup ? Math.max(Number(v.sisa) || 0, 0) : 0 };
+        });
+        return r;
+      });
+    })
     .then(function(r){
       return ringkasSoUntuk(r[0] || []).then(function(sp){
         L.rekap[jenis] = susunRekap(jenis, bulan, sp, r[2] || []);
@@ -12810,11 +13088,17 @@ function susunRekap(jenis, bulan, sp, klaim){
     }
     return perRep[k];
   }
-  var nilaiPerSo = {};
+  var nilaiPerSo = {}, nKlaim = 0;
   klaim.forEach(function(k){
-    var n = jenis === "ehc" ? nilaiKlaim(k) : nilaiKlaimKomisi(k);
-    nilaiPerSo[k.so_id] = { nominal: n ? Number(n.nominal) || 0 : 0,
-                            kas: n && n.kas !== undefined ? Number(n.kas) || 0 : 0 };
+    if (k.ehcSaldo) {                       /* berkas 140: sudah per SP dari ehc_saldo_sp */
+      nilaiPerSo[k.so_id] = { nominal: k.nominal, kas: k.kas };
+      nKlaim += k.jumlah;
+      return;
+    }
+    var n = nilaiKlaimKomisi(k), x = nilaiPerSo[k.so_id] || { nominal:0, kas:0 };
+    x.nominal += n ? Number(n.nominal) || 0 : 0;
+    nilaiPerSo[k.so_id] = x;
+    nKlaim += 1;
   });
 
   sp.forEach(function(s){
@@ -12837,7 +13121,7 @@ function susunRekap(jenis, bulan, sp, klaim){
   var baris = urutan.map(function(k){ return perRep[k]; })
     .sort(function(a, b){ return a.nama.localeCompare(b.nama); });
   return { jenis:jenis, bulan:bulan, baris:baris, ditarik:new Date().toISOString(),
-           jumlahSp: sp.length, jumlahKlaim: klaim.length };
+           jumlahSp: sp.length, jumlahKlaim: nKlaim };
 }
 
 function nilaiKlaimKomisi(k){
@@ -12879,20 +13163,20 @@ function muatPengajuan(){
 }
 /* Pengajuan yang MASIH HIDUP untuk jenis + bulan berjalan. */
 function ajuanHidup(jenis){
-  var bulan = bulanIniJkt();
+  var bulan = bulanTransfer(jenis);
   return (LANJUT.laporan.ajuan || []).filter(function(t){
     return t.jenis === jenis && t.bulan === bulan
         && (t.status === "menunggu" || t.status === "disetujui"); })[0] || null;
 }
 function ajuanTerakhir(jenis){
-  var bulan = bulanIniJkt();
+  var bulan = bulanTransfer(jenis);
   return (LANJUT.laporan.ajuan || []).filter(function(t){
     return t.jenis === jenis && t.bulan === bulan; })[0] || null;
 }
 function ajukanTransfer(jenis){
-  var L = LANJUT.laporan, bulan = bulanIniJkt();
+  var L = LANJUT.laporan, bulan = bulanTransfer(jenis);
   var catatan = prompt("Catatan untuk GM (boleh dikosongkan) — "
-    + (jenis === "ehc" ? "EHC" : "komisi") + " bulan " + namaBulan(bulan) + ":");
+    + (jenis === "ehc" ? "EHC periode " : "komisi bulan ") + namaBulan(bulan) + ":");
   if (catatan === null) return;
   L.sibuk = jenis; L.pesanAjuan = ""; L.ajuanGagal = false; gambarLaporan();
   api("POST", "/rpc/ajukan_transfer",
@@ -12918,7 +13202,7 @@ function tarikPengajuan(id){
     .then(function(){ gambarLaporan(); });
 }
 function buatBatch(jenis){
-  var L = LANJUT.laporan, bulan = bulanIniJkt();
+  var L = LANJUT.laporan, bulan = bulanTransfer(jenis);
   var a = ajuanHidup(jenis);
   /* Diperiksa di layar SUPAYA PESANNYA JELAS, bukan supaya aturannya
      berlaku — yang menolak tetap rekap_transfer() di database. */
@@ -13125,7 +13409,14 @@ function gambarLaporan(){
       var nama = jenis === "ehc" ? "EHC" : "komisi";
       var a = ajuanHidup(jenis), t = ajuanTerakhir(jenis);
       var disetujui = !!a && a.status === "disetujui";
-      h += '<h4 style="margin:14px 2px 6px">' + esc(nama) + ' — ' + esc(namaBulan(bulanIniJkt())) + '</h4>';
+      h += '<h4 style="margin:14px 2px 6px">' + esc(nama) + ' — '
+        + (jenis === "ehc" ? 'periode ' + esc(namaBulan(bulanTransfer(jenis))) + ' (cutoff tgl 18)'
+                           : esc(namaBulan(bulanIniJkt()))) + '</h4>';
+      if (jenis === "ehc")
+        h += '<p class="muted" style="margin:0 2px 6px">Yang ikut: klaim EHC periode ini dan periode '
+          + 'sebelumnya yang tertunda, yang <b>semua SP-nya sudah lunas</b>, punya rekening tujuan, dan '
+          + '<b>bukan lintas customer</b> (yang lintas customer menunggu pemeriksaan GM per klaim). '
+          + 'Klaim EHC cepat dibayar lewat tombol "EHC emergency".</p>';
       h += '<div class="baris-alat">'
         + (a
             ? '<button class="btn" disabled>' + (disetujui
@@ -13138,13 +13429,13 @@ function gambarLaporan(){
               + (L.sibuk ? " disabled" : "") + '>Minta persetujuan GM</button>')
         + ' <button class="btn bahaya" id="lp-batch-' + jenis + '" type="button"'
         +   ((L.sibuk || !disetujui) ? " disabled" : "")
-        +   '>Tandai ' + esc(nama) + ' bulan ini sudah ditransfer</button>'
+        +   '>Tandai ' + esc(nama) + (jenis === "ehc" ? ' periode ini' : ' bulan ini') + ' sudah ditransfer</button>'
         + '</div>';
       /* Tombol mati HARUS menjelaskan dirinya. Tombol yang tidak bisa
          ditekan tanpa keterangan terbaca sebagai kerusakan. */
       if (!a) {
         h += '<p class="muted" style="margin:6px 2px 0">Tombol merah masih mati: '
-          + 'pembayaran ' + esc(nama) + ' bulan ini <b>belum diajukan ke GM</b>.</p>';
+          + 'pembayaran ' + esc(nama) + (jenis === "ehc" ? ' periode ini' : ' bulan ini') + ' <b>belum diajukan ke GM</b>.</p>';
       } else if (!disetujui) {
         h += '<p class="muted" style="margin:6px 2px 0">Pengajuan #' + a.id + ' — '
           + '<b>' + a.jumlah_klaim + ' klaim, total ' + rp(a.total) + '</b> — sedang '
@@ -19326,8 +19617,8 @@ window.__alur = {
        seperti gagal karena sebab lain. */
     LANJUT.kirim.hal = "belum"; LANJUT.kirim.cacah = null;
     LANJUT.kirim.dimuat = false; LANJUT.kirim.hlm = { belum:null, sudah:null };
-    LANJUT.ehc.hal = "bisa"; LANJUT.ehc.cacah = null; LANJUT.ehc.dimuat = false;
-    LANJUT.ehc.hlm = { belum:null, bisa:null, klaim:null, transfer:null };
+    LANJUT.ehc.hal = "saldo"; LANJUT.ehc.cacah = null; LANJUT.ehc.dimuat = false;
+    LANJUT.ehc.hlm = { saldo:null, diajukan:null, selesai:null, batal:null };
     LANJUT.komisi.hal = "bisa"; LANJUT.komisi.cacah = null; LANJUT.komisi.dimuat = false;
     LANJUT.komisi.hlm = { belum:null, bisa:null, klaim:null, transfer:null };
     /* Antrean GM dan usulan item ikut dikosongkan. Keduanya menyimpan
