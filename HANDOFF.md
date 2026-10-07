@@ -30,6 +30,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   `so_gm_pct_wajar`, RPC `pratinjau_komisi_sp`/`komisi_sp_saya`. Saya tidak keberatan (7 Okt). Untuk #54: tambah
   kolom per baris (mis. `sales_order_lines.komisi_pct_tetap`) sebagai cabang teratas sesudah 'biaya' di CASE
   `pct_berlaku`, `sumber_pct` = 'tetap GM'.
+  **Susulan 124 (`db/124-komisi-gm-harga-terpisah.sql`, sudah di DEV 7 Okt):** persen GM untuk keputusan HARGA kini di
+  kolom baru `sales_orders.gm_pct_harga` (CHECK 0–0,5; trigger `so_jaga_gm_pct_harga`); `gm_pct` kembali murni persen
+  SP telat. `pct_berlaku` = `coalesce(gm_pct_harga, 0)` bila `harga_ok`. Di DEV urutan terapan: 140 lalu 120–124;
+  sesudahnya dicek — saldo EHC per SP, kas sales, klaim komisi #12/#13 tidak berubah, 9 fungsi versi 140 utuh.
+  Pekerjaan tertunda dari catatan mereka (area sesi ini): laci 'telat' di FE masih menulis `harga_ok` (Tolak telat =
+  harga ditolak); SP lama yang `gm_pct`-nya dari keputusan harga tetap berperilaku lama bila kelak telat.
 - **Pekerjaan tertunda sesi ini (tahap komisi):** `laporan_komisi.komisi_terhitung` memakai `so_ringkas.komisi`, padahal klaim
   memakai `komisi_hitung` (SP telat >120 hari = total_barang × gm_pct) → laporan salah untuk SP telat. Ganti ke
   `komisi_hitung(s.id)`. **Tahap #54:** `harga_ok` tidak direset saat baris SP berubah lewat `putuskan_ubah`; dan
