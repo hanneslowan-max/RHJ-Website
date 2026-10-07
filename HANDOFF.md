@@ -30,7 +30,7 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   `so_gm_pct_wajar`, RPC `pratinjau_komisi_sp`/`komisi_sp_saya`. Saya tidak keberatan (7 Okt). Untuk #54: tambah
   kolom per baris (mis. `sales_order_lines.komisi_pct_tetap`) sebagai cabang teratas sesudah 'biaya' di CASE
   `pct_berlaku`, `sumber_pct` = 'tetap GM'.
-- **PR untuk sesi ini (tahap komisi):** `laporan_komisi.komisi_terhitung` memakai `so_ringkas.komisi`, padahal klaim
+- **Pekerjaan tertunda sesi ini (tahap komisi):** `laporan_komisi.komisi_terhitung` memakai `so_ringkas.komisi`, padahal klaim
   memakai `komisi_hitung` (SP telat >120 hari = total_barang × gm_pct) → laporan salah untuk SP telat. Ganti ke
   `komisi_hitung(s.id)`. **Tahap #54:** `harga_ok` tidak direset saat baris SP berubah lewat `putuskan_ubah`; dan
   `gm_pct` per SP dipakai bersama keputusan harga & telat (catatan sesi 50–61).
