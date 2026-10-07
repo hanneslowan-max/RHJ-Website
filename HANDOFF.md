@@ -18,6 +18,13 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   EHC/komisi/cepat/transfer, policy storage `rhj_ehc_bukti_*`/`rhj_komisi_bukti_*`; untuk #54 juga
   `jaga_baris_sp_terkunci`, `sp_vonny_gugur_baris` (ehc_item), usul ubah/`putuskan_ubah`, `gm_konteks_keputusan`.
   Rumus komisi (`so_baris_hitung`, `komisi_tier`, `komisi_hitung`) **tidak** diubah.
+- **#51 (7 Okt, sesi 50–61):** sesi itu akan mengubah rumus komisi (`so_baris_hitung` kolom pct dan/atau
+  `komisi_hitung`, berkas 12x) — persen GM untuk baris di bawah price list dipakai, + pratinjau komisi untuk sales.
+  Sudah dikabari: nominal komisi **beku saat klaim** (`ajukan_klaim_komisi` → `komisi_hitung` → `komisi_klaim_nilai`),
+  sedangkan `laporan_komisi.komisi_terhitung` ikut rumus hidup → SP yang sudah diklaim bisa muncul sebagai selisih
+  "belum diklaim" palsu bila rumus menggeser angkanya (DEV: klaim #12 SP 010/MCE/X, #13 SP 007/MCE/X). Mereka
+  mengirim definisi final sebelum menerapkan; cek terhadap `laporan_komisi` & `ehc_saldo_sp`. **Tahap 5 (#54)
+  "persen tetap" harus memakai kolom persen per baris yang sama dengan #51**, bukan jalur kedua di `so_baris_hitung`.
 
 ### Keputusan Hannes — struktur EHC (6 Okt)
 - EHC = budget entertain customer yang disisihkan di SP; akun terpisah dari penjualan.
