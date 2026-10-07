@@ -6211,6 +6211,10 @@ function formMintaUbah(jenis, id){
       return api("POST", "/rpc/putuskan_ubah",
                  { p_id: idUsulLangsung, p_setuju: true, p_catatan: "diubah langsung" })
         .catch(function(e){
+          /* Koneksi putus (TypeError dari fetch): server mungkin SUDAH menerapkan — jangan ditutup otomatis. */
+          if (e instanceof TypeError)
+            throw new Error("Koneksi terputus — belum pasti perubahannya sudah diterapkan. Muat ulang lalu periksa "
+              + "dokumen ini (atau tab Persetujuan) sebelum mengulang.");
           /* Ditolak database saat diterapkan → usulan jangan tertinggal 'menunggu' (itu mengunci usulan berikutnya
              untuk dokumen ini). Ditutup sebagai ditolak dengan alasannya, lalu galat aslinya diteruskan. */
           return api("POST", "/rpc/putuskan_ubah",
@@ -6894,7 +6898,7 @@ function panelSp(){
            jadi tidak tersambung ke pelanggan mana pun, dan sales
            penanggung jawabnya ikut kosong. */
         + '<div style="margin-top:12px">'
-        +   medanAlur("Perusahaan <em>ketik untuk mencari, atau isi baru</em>",
+        +   medanAlur("Perusahaan / Kepada <em>ketik untuk mencari, atau isi baru</em>",
               '<input type="text" id="sp-cust" value="'+esc(f.kepada)+'" '
               + 'placeholder="ketik nama perusahaan…" autocomplete="off">'
               + '<div id="sp-cust-hasil" class="cari-hasil" hidden></div>')
@@ -6959,8 +6963,11 @@ function panelSp(){
         var repSp = spRepEfektif(f), cashKunci = repCashOnly(repSp);
         if (cashKunci) { if (!f.cash_minta) f._cashPaksa = true; f.cash_minta = true; }
         else if (f._cashPaksa) { f.cash_minta = false; f._cashPaksa = false; }
+        /* #50 (berkas 124 review): di mode tanpa PO / PO menyusul kotak "Perusahaan" di atas SUDAH kotak Kepada
+           (keduanya menulis f.kepada). Kotak kedua dulu bisa mengganti nama pembeli tanpa melepas pelanggan yang
+           dipilih → SP pembeli lain tersimpan di bawah pelanggan lama tanpa No. HP. */
         h += '<div class="baris2" style="margin-top:12px">'
-          +   medanAlur("Kepada", '<input type="text" id="sp-kepada" value="'+esc(f.kepada)+'">')
+          +   (spManual(f) ? '' : medanAlur("Kepada", '<input type="text" id="sp-kepada" value="'+esc(f.kepada)+'">'))
           +   medanAlur("UP.", '<input type="text" id="sp-up" value="'+esc(f.up)+'">')
           + '</div>'
           + '<div class="baris2" style="margin-top:12px">'
@@ -7707,6 +7714,8 @@ function komisiSpSel(o, panjang){
   if (k.komisi === null || k.komisi === undefined) return '<span class="muted">menunggu GM</span>';
   var ket = k.diklaim ? 'sudah diklaim'
           : k.menunggu_gm ? 'belum termasuk baris yang menunggu GM'
+          : (o.harga_ok === false && (Number(k.n_bawah_list) || 0) + (Number(k.n_tanpa_list) || 0) > 0)
+            ? 'harga ditolak GM — baris di bawah / tanpa price list tanpa komisi'   /* berkas 124: bukan "menunggu" */
           : k.telat ? 'invoice telat — persen dari GM' : '';
   return '<b>' + rp(k.komisi) + '</b>'
     + (ket ? (panjang ? ' <span class="muted">(' + ket + ')</span>' : '<div class="muted" style="font-size:11px">' + ket + '</div>') : '')
@@ -7732,6 +7741,8 @@ function muatKomisiSaya(daftar){
       ids.forEach(function(id){ c[id] = null; });
       (r || []).forEach(function(x){ c[x.so_id] = x; });
       tambalKomisiSaya();
+      /* urutan ikut angka yang baru datang (lewat penjaga #52: ditunda bila sedang mengetik / laci terbuka) */
+      if (ALUR.spSort && ALUR.spSort.key === "komisi" && tabAktif === "sp") gambarDiam("sp");
     })
     .catch(function(e){
       ids.forEach(function(id){ delete minta[id]; });
@@ -14625,7 +14636,10 @@ function formGmPutus(jenis, ref){
         sibuk(false); tampilPesan("Persen komisi harus antara 0 dan 50%."); return;
       }
       var badan = { harga_ok: setuju, gm_pada: new Date().toISOString() };
-      if (setuju && pct !== null) badan.gm_pct = pct / 100;   /* #51: Tolak tidak menulis persen */
+      /* #51 (berkas 124): persen keputusan HARGA ditulis ke gm_pct_harga (baris di bawah / tanpa list); gm_pct tetap
+         KHUSUS persen telat >120 hari — dulu satu kolom, sehingga SP yang harganya disetujui tidak pernah masuk
+         antrean telat dan persen harga diam-diam dipakai untuk seluruh SP. Tolak tidak menulis persen. */
+      if (setuju && pct !== null) badan[jenis === "harga" ? "gm_pct_harga" : "gm_pct"] = pct / 100;
       janji = api("PATCH", "/sales_orders?id=eq." + ref, badan, "return=representation");
     }
     janji.then(function(){
