@@ -159,6 +159,8 @@
   .bi-ket{display:block;margin-top:3px;font-size:10.5px;color:var(--redup,#5a6672)}
   .bi-hasil{grid-column:2;grid-row:1/3;align-self:center;text-align:right}
   .bi-hasil b{font-size:13.5px}
+  .bi-komisi{display:block;font-size:11.5px;line-height:1.35;color:var(--redup,#5a6672);margin-top:3px}
+  .bi-komisi.tunggu{color:#8a5a00}
   .bi-tanda{display:block;margin-top:3px;font-size:10px;color:var(--aksen,#0d7d70)}
   .bi-tanda.bad{color:#b3261e}
   .bi-angka{grid-column:1;grid-row:2;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
@@ -1023,6 +1025,12 @@ function bolehLihatImpor(){ return ["owner","gm","staff","finance","selfie"].ind
    boleh_alur_impor() di database. */
 function bolehAlurImpor(){ return ["owner","gm","staff","selfie"].indexOf(saya.peran) > -1; }
 function bolehLihatHpp(){   return ["owner","gm","staff","finance"].indexOf(saya.peran) > -1; }
+/* #51 (berkas 123): sales melihat komisi SP ATAS NAMANYA SENDIRI di daftar & detail SP. Sengaja terpisah dari
+   bolehLihatHpp() supaya HPP/margin tidak ikut terbuka. Angkanya dari komisi_sp_saya (angka resmi: komisi_hitung,
+   atau nominal klaim bila sudah diklaim) — bukan so_ringkas, yang bagi sales bisa keliru (harga khusus pelanggan
+   yang sudah dipindah ke sales lain tidak terbaca; SP telat/batal). Per baris: SP buatannya yang dialihkan ke
+   sales lain masih terbaca selama menunggu Vonny, tapi komisinya bukan miliknya. */
+function bolehKolomKomisiSp(){ return bolehLihatHpp() || peranSales(); }
 /* Nominal klaim EHC & komisi. Sengaja TERPISAH dari bolehLihatHpp():
    Lenni perlu angka klaim untuk merekap, tapi tidak boleh melihat HPP
    dan margin. Cerminan boleh_lihat_nilai_klaim() di database. */
@@ -4841,7 +4849,7 @@ function urutkan(arr, s, kolom){
 }
 var KOLOM_URUT_ALUR = {
   grand:   { jenis:"angka", ambil:function(r){ return r.ringkas ? Number(r.ringkas.grand_total) : null; } },
-  komisi:  { jenis:"angka", ambil:function(r){ return r.ringkas ? Number(r.ringkas.komisi) : null; } },
+  komisi:  { jenis:"angka", ambil:function(r){ return komisiSpAngka(r); } },   /* #51: sales hanya SP miliknya */
   tanggal: { jenis:"tgl",   ambil:function(r){ return r.tanggal || null; } },
   dibuat:  { jenis:"tgl",   ambil:function(r){ return r.dibuat_pada || null; } },
   no:      { jenis:"teks",  ambil:function(r){ return r.no_po || r.no_sp || null; } },
@@ -5824,6 +5832,9 @@ function formDetailDoc(jenis, row){
       +  'lewat retur. PO tetap mencatat nilai awalnya.</p>';
   }
   if (!isPo && bolehLihatHpp() && r) h += '<p class="muted" style="margin-top:8px">Komisi terhitung: <b>'+rp(r.komisi)+'</b></p>';
+  else if (!isPo && peranSales() && spMilikSaya(row))   /* #51 */
+    h += '<p class="muted" style="margin-top:8px" id="dd-komisi-saya" data-komisi-sp="'+row.id+'">Komisi Anda: '
+      + komisiSpSel(row, true) + '</p>';
   if (row.catatan) h += '<div class="flag" style="margin-top:10px"><span class="f-ico">✎</span><div>'+esc(row.catatan)+'</div></div>';
   /* #10: SP tanpa PO — tampilkan modenya, dan beri jalan ke laci "Tempelkan PO / tanpa PO". */
   var laciPo = !isPo && !row.po_id && !row.batal && bolehInputPo();
@@ -5840,6 +5851,7 @@ function formDetailDoc(jenis, row){
   $("laci-kaki").innerHTML = (laciPo ? '<button class="btn utama" id="btn-detail-tp" type="button">Tempelkan PO / tanpa PO</button> ' : '')
     + '<button class="btn" id="btn-detail-tutup" type="button">Tutup</button>';
   bukaLaci((isPo ? "Detail PO — " + row.no_po : "Detail SP — " + row.no_sp));
+  if (!isPo && $("dd-komisi-saya")) { ALUR._komisiDetail = row; muatKomisiSaya([row]); }   /* #51 */
   $("btn-detail-tutup").addEventListener("click", tutupLaci);
   if ($("btn-detail-tp")) $("btn-detail-tp").addEventListener("click", function(){ formTautkanPo(row.id); });
   if ($("btn-dd-pelanggan")) $("btn-dd-pelanggan").addEventListener("click", function(){   /* #37 */
@@ -6686,6 +6698,7 @@ function spFormBaru(){
      customer_id, dan customer bisa saja sama sementara isinya sudah
      berubah — misalnya karena permintaan yang barusan diajukan. */
   SP_KHUSUS = { customerId:null, baris:null, memuat:false, galat:"" };
+  resetKomisiSp();   /* #51 */
   lupakanSalesPelanggan();
   return { po_id:null, menyusul:false, tanpaPo:false, alasanMenyusul:"",
            kepada:"", alamat:"", up:"", telp:"", no_seri:"", cash_minta:false, catatan:"",
@@ -6777,7 +6790,9 @@ function panelSp(){
            tertahan.length ? tertahan.length + " sudah kirim, invoice tertahan"
                            : "PO pelanggan belum datang",
            tertahan.length ? "alert" : "", "sp:menunggu-po")
-    + (bolehLihatHpp() ? tile("Komisi terhitung", rpS(totKomisi), "hanya yang tampil di bawah", "", ["komisi","sp:komisi"]) : "")
+    + (bolehLihatHpp() ? tile("Komisi terhitung", rpS(totKomisi), "hanya yang tampil di bawah", "", ["komisi","sp:komisi"])
+       : peranSales() ? tile("Komisi Anda (perkiraan)", komisiSayaTotal(ALUR.sp) === null ? "…" : rpS(komisiSayaTotal(ALUR.sp)),
+                             "SP atas nama Anda yang tampil — angka resmi di tab Komisi", "", ["komisi","sp:komisi"]) : "")   /* #51 */
     + '</div>';
   if (cariSp) {
     h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
@@ -6997,11 +7012,14 @@ function panelSp(){
               ? '<p class="muted" style="margin:6px 2px 0;font-size:12px">Include PPN: harga nett &amp; EHC yang diketik sudah termasuk PPN. '
                 + 'Price list, komisi, harga khusus, dan margin dihitung dari DPP-nya (÷ 1,11).</p>'
               : '');
-        if (tt.bawah) {
+        h += '<div id="sp-komisi">' + kotakKomisiSpHtml(f) + '</div>';   /* #51 (berkas 123) */
+        /* #51: sales komisi flat (Riksa/Michael, Office) tidak ke antrean GM — baris di bawah list tetap flat. */
+        var flatSp = (function(r){ return r && r.komisi_flat_pct !== null && r.komisi_flat_pct !== undefined; })(repAlurById(spRepEfektif(f)));
+        if (tt.bawah && !flatSp) {
           h += '<div class="flag" style="margin-top:12px"><span class="f-ico">!</span><div>'
             + '<b>' + tt.bawah + ' baris di bawah price list.</b> SP tetap bisa disimpan dan dikirim ke '
-            + 'gudang, tapi komisinya menunggu keputusan GM. Persentase finalnya ditetapkan GM, '
-            + 'bukan di layar ini.</div></div>';
+            + 'gudang, tapi harganya menunggu keputusan GM. Komisi baris itu memakai persen yang '
+            + 'ditetapkan GM saat menyetujui harga, bukan di layar ini.</div></div>';
         }
         /* Grand total SP harus sama persis dengan PO-nya. PO adalah
            pesanan resmi pelanggan; kalau angkanya berbeda, yang dikirim
@@ -7048,6 +7066,7 @@ function panelSp(){
            pencarian pelanggan, jadi satu-satunya tempat yang PASTI
            dilewati kedua mode adalah saat panelnya digambar. */
         muatKhususPelanggan(f.customer_id, panelSp);
+        setTimeout(function(){ if (ALUR.spForm === f) muatKomisiSp(f); }, 0);   /* #51: sesudah panel tergambar */
         var perlu  = spBarisPerluKhusus(f);
         var sudah  = spBarisSudahKhusus(f);
         /* Dua-duanya dimatikan, bukan cuma "Simpan": tombol merah juga
@@ -7103,7 +7122,7 @@ function panelSp(){
   h += '<div class="tw"><table><thead><tr>'
     + thUrut("No SP","no",ALUR.spSort) + thUrut("Kepada","pihak",ALUR.spSort) + thUrut("Tgl","tanggal",ALUR.spSort) + thUrut("Dibuat","dibuat",ALUR.spSort) + thUrut("Sales","sales",ALUR.spSort)
     + thUrut("Status","status",ALUR.spSort) + thUrut("Grand Total","grand",ALUR.spSort,"r")
-    + (bolehLihatHpp() ? thUrut("Komisi","komisi",ALUR.spSort,"r") : '')
+    + (bolehKolomKomisiSp() ? thUrut(bolehLihatHpp() ? "Komisi" : "Komisi Anda","komisi",ALUR.spSort,"r") : '')   /* #51 */
     + (bolehUsul ? '<th></th>' : '') + '</tr></thead><tbody>';   /* #24 */
   if (!ALUR.sp.length) {
     h += '<tr><td colspan="9" class="kosong">'
@@ -7130,7 +7149,7 @@ function panelSp(){
       +   (o.status !== "batal" && (o.sales_order_lines || []).some(function(l){ return qtyBatal(l) > 0; })
             ? ' <span class="pill p-sebagian" title="Ada qty yang dibatalkan">batal sebagian</span>' : '')   /* #18 */
       + '</td>'
-      + (bolehLihatHpp() ? '<td class="r">'+(o.ringkas?rp(o.ringkas.komisi):'—')+'</td>' : '')
+      + (bolehKolomKomisiSp() ? '<td class="r" data-komisi-sp="'+o.id+'">'+komisiSpSel(o)+'</td>' : '')   /* #51 */
       + (bolehUsul ? '<td style="white-space:nowrap">' + (o.status === "batal"
             ? '<span class="pill p-belum" title="' + esc(o.alasan_batal || "") + '">batal</span>'
             : (adaUsul
@@ -7142,6 +7161,7 @@ function panelSp(){
   });
   h += '</tbody></table></div>';
   el.innerHTML = h;
+  muatKomisiSaya(ALUR.sp);   /* #51: komisi SP milik sales sendiri */
   pasangUrut(el, function(){ return ALUR.spSort; }, function(v){ ALUR.spSort = v; }, panelSp);   /* #24 */
 
   $("sp-periode").addEventListener("change", function(){
@@ -7288,7 +7308,8 @@ function spBarisHtml(f){
       + '</div>'
       + '<div class="bi-hasil"><label>Total baris</label><b>'+rp(total)+'</b>'
       +   (bawah ? '<span class="bi-tanda bad">di bawah list</span>'
-               : (diubah ? '<span class="bi-tanda">di atas list</span>' : ''))+'</div>'
+               : (diubah ? '<span class="bi-tanda">di atas list</span>' : ''))
+      +   '<span class="bi-komisi" data-i="'+i+'">' + komisiBarisHtml(f, i) + '</span></div>'   /* #51 */
       + '<div class="bi-angka'+(spManual(f)?' bi-sp':'')+'">'
       +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="sp-qty" data-i="'+i+'" value="'+ribu(b.qty)+'"></div>'
       +   '<div><label>'+(biaya?'Nilai':'Harga nett')+(!biaya && modePpnDok(f) === "include" ? ' <span class="muted">incl. PPN</span>' : '')+'</label><input type="text" inputmode="decimal" data-angka="2" class="sp-nett'+(bawah?" bawah":"")+'" data-i="'+i+'" value="'+ribu(b.nett)+'">'
@@ -7567,6 +7588,178 @@ function pasangSpMenyusul(f){
    "tidak perlu diajukan lagi", tapi alasannya berbeda dan itu ditulis
    berbeda di layar. */
 var SP_KHUSUS = { customerId:null, baris:null, memuat:false, galat:"" };
+/* ── #51 (berkas 123): perkiraan komisi di form SP ───────────────────────
+   Dihitung DATABASE (pratinjau_komisi_sp — rumus yang sama dengan so_baris_hitung), bukan di browser:
+   tier, harga khusus, flat, Office, dan cash punya urutan yang tidak boleh berbeda dari angka akhirnya.
+   Hasil ditambal ke kotak & sel tersendiri (bukan panelSp) supaya fokus ketikan tidak hilang; jawaban
+   untuk isian lama dibuang (gen + kunci). */
+var SP_KOMISI = { kunci:"", hasil:null, galat:"", gen:0, timer:null, tidakAda:false, memuat:false };
+function resetKomisiSp(){
+  if (typeof SP_KOMISI !== "object" || !SP_KOMISI) return;
+  clearTimeout(SP_KOMISI.timer);
+  SP_KOMISI.kunci = ""; SP_KOMISI.hasil = null; SP_KOMISI.galat = ""; SP_KOMISI.memuat = false; SP_KOMISI.gen++;
+}
+function pctTeks(p){ return String(Number((Number(p) * 100).toPrecision(12))).replace(".", ",") + "%"; }
+function badanKomisiSp(f){
+  var rep = spRepEfektif(f);
+  return { p_sales_rep: rep ? Number(rep) : null, p_customer: f.customer_id || null, p_mode_ppn: modePpnDok(f),
+           p_cash_minta: !!f.cash_minta || repCashOnly(rep), p_po: f.po_id || null,
+           p_baris: (f.baris || []).map(function(b, i){
+             var biaya = b.jenis === "biaya";
+             return { i: i, product_id: biaya ? null : (b.kode || null), jenis: biaya ? "biaya" : "barang",
+                      qty: Number(b.qty) || 0, harga_nett: Number(b.nett) || 0 }; }) };
+}
+function bolehKomisiSp(f){
+  return bolehAlurJual() && spFormSiap(f) && !SP_KOMISI.tidakAda && !spKhususGmTerkunci(f)
+    && (f.baris || []).some(function(b){ return Number(b.qty) > 0; });
+}
+function komisiSpAktif(f){
+  return SP_KOMISI.hasil && SP_KOMISI.kunci === JSON.stringify(badanKomisiSp(f)) ? SP_KOMISI.hasil : null;
+}
+function muatKomisiSp(f){
+  if (!bolehKomisiSp(f)) { if (SP_KOMISI.kunci) resetKomisiSp(); return; }
+  var badan = badanKomisiSp(f), kunci = JSON.stringify(badan);
+  if (kunci === SP_KOMISI.kunci) return;
+  clearTimeout(SP_KOMISI.timer);
+  SP_KOMISI.kunci = kunci; SP_KOMISI.hasil = null; SP_KOMISI.galat = ""; SP_KOMISI.memuat = true;
+  var g = ++SP_KOMISI.gen;
+  SP_KOMISI.timer = setTimeout(function(){
+    api("POST", "/rpc/pratinjau_komisi_sp", badan)
+      .then(function(r){
+        if (g !== SP_KOMISI.gen) return;
+        SP_KOMISI.hasil = r; SP_KOMISI.memuat = false; tambalKomisiSp();
+      })
+      .catch(function(e){
+        if (g !== SP_KOMISI.gen) return;
+        SP_KOMISI.memuat = false;
+        if (rpcBelumAda(e)) SP_KOMISI.tidakAda = true;   /* database tanpa berkas 123: tanpa perkiraan */
+        else SP_KOMISI.galat = (e && e.message) || String(e);
+        tambalKomisiSp();
+      });
+  }, 350);
+}
+function komisiBarisHtml(f, i){
+  var h = bolehKomisiSp(f) ? komisiSpAktif(f) : null;
+  if (!h) return "";
+  var e = (h.baris || []).filter(function(x){ return Number(x.i) === i; })[0];
+  if (!e) return "";
+  var cash = e.pct_bila_cash !== null && e.pct_bila_cash !== undefined
+    ? " · " + pctTeks(e.pct_bila_cash) + " (" + rp(e.komisi_bila_cash) + ") bila cash dicocokkan finance" : "";
+  switch (e.status) {
+    case "flat":   return Number(e.pct) === 0 ? "Office — tanpa komisi" : "komisi flat " + pctTeks(e.pct) + " · " + rp(e.komisi);
+    case "khusus": return "komisi " + pctTeks(e.pct) + " harga khusus · " + rp(e.komisi);
+    case "tier":   return "komisi " + pctTeks(e.pct) + " · " + rp(e.komisi) + cash;
+    case "bawah_list":
+      return '<span class="tunggu">di bawah price list — komisi memakai persen yang ditetapkan GM'
+        + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan" : "") + "</span>";
+    case "tanpa_list":
+      return '<span class="tunggu">belum ada price list — komisi diputus GM (atau tier bila price list disahkan lebih dulu)</span>';
+    default: return "";
+  }
+}
+function kotakKomisiSpHtml(f){
+  if (!bolehKomisiSp(f)) return "";
+  var h = komisiSpAktif(f);
+  var isi;
+  if (!h) {
+    isi = SP_KOMISI.galat && SP_KOMISI.kunci === JSON.stringify(badanKomisiSp(f))
+      ? '<span class="muted">Perkiraan komisi belum bisa dihitung: ' + esc(SP_KOMISI.galat) + '</span>'
+      : '<span class="muted">menghitung…</span>';
+  } else {
+    var tunggu = (Number(h.n_bawah_list) || 0) + (Number(h.n_tanpa_list) || 0);
+    isi = '<b style="font-size:15px">' + rp(h.komisi) + '</b>'
+      + (h.flat_pct !== null && h.flat_pct !== undefined
+          ? ' <span class="muted">— ' + (Number(h.flat_pct) === 0 ? 'Office, tanpa komisi' : 'komisi flat ' + pctTeks(h.flat_pct)) + '</span>' : '')
+      + (!h.sales_rep_id ? '<br><span class="muted">SP tanpa sales tidak punya penerima komisi.</span>' : '')
+      + (tunggu ? '<br><span class="muted">Belum termasuk ' + tunggu + ' baris di bawah / tanpa price list (nilai barang sebelum PPN '
+                  + rp(h.dasar_menunggu) + ') — persennya ditetapkan GM saat menyetujui harga.</span>' : '')
+      + (h.komisi_bila_cash !== null && h.komisi_bila_cash !== undefined
+          ? '<br><span class="muted">Bila finance mencocokkan pembayaran cash saat pelunasan: <b>' + rp(h.komisi_bila_cash)
+            + '</b>. Sebelum dicocokkan berlaku tier biasa.</span>' : '');
+  }
+  return '<div class="flag" style="margin-top:12px"><span class="f-ico">%</span><div><b>Perkiraan komisi</b> '
+    + '<span class="muted">— angka resmi di tab Komisi</span><br>' + isi + '</div></div>';
+}
+function spMilikSaya(o){
+  if (!o || !peranSales()) return false;
+  var r = repSayaAlur();
+  return !!(r && String(o.sales_rep_id) === String(r.id));
+}
+/* Cache per daftar SP: daftar ditarik ulang (mis. GM baru memutus) → angkanya ditarik ulang juga. */
+function komisiSayaCache(){
+  if (ALUR._komisiSayaUntuk !== ALUR.sp) { ALUR._komisiSayaUntuk = ALUR.sp; ALUR.komisiSaya = {}; ALUR.komisiSayaMinta = {}; }
+  return ALUR.komisiSaya;
+}
+function komisiSpAngka(o){
+  if (bolehLihatHpp()) return o.ringkas ? Number(o.ringkas.komisi) : null;
+  if (!spMilikSaya(o)) return null;
+  if (ALUR.komisiSayaTidakAda) return o.ringkas ? Number(o.ringkas.komisi) : null;   /* DB tanpa berkas 123 */
+  var k = komisiSayaCache()[o.id];
+  return k && !k.batal && k.komisi !== null && k.komisi !== undefined ? Number(k.komisi) : null;
+}
+function komisiSpSel(o, panjang){
+  if (bolehLihatHpp()) return o.ringkas ? rp(o.ringkas.komisi) : '—';
+  if (!spMilikSaya(o)) return '<span class="muted">—</span>';
+  if (ALUR.komisiSayaTidakAda) return o.ringkas ? rp(o.ringkas.komisi) : '—';
+  var k = komisiSayaCache()[o.id];
+  if (k === undefined) return '<span class="muted">…</span>';
+  if (k === null || k.batal) return '<span class="muted">—</span>';
+  if (k.komisi === null || k.komisi === undefined) return '<span class="muted">menunggu GM</span>';
+  var ket = k.diklaim ? 'sudah diklaim'
+          : k.menunggu_gm ? 'belum termasuk baris yang menunggu GM'
+          : k.telat ? 'invoice telat — persen dari GM' : '';
+  return '<b>' + rp(k.komisi) + '</b>'
+    + (ket ? (panjang ? ' <span class="muted">(' + ket + ')</span>' : '<div class="muted" style="font-size:11px">' + ket + '</div>') : '')
+    + (panjang && !k.diklaim ? ' <span class="muted">— perkiraan; angka resmi di tab Komisi</span>' : '');
+}
+function komisiSayaTotal(daftar){
+  if (!peranSales()) return null;
+  var milik = (daftar || []).filter(spMilikSaya);
+  if (!ALUR.komisiSayaTidakAda && milik.some(function(o){ return komisiSayaCache()[o.id] === undefined; })) return null;
+  return milik.reduce(function(a, o){ var n = komisiSpAngka(o); return a + (n === null ? 0 : n); }, 0);
+}
+function muatKomisiSaya(daftar){
+  if (bolehLihatHpp() || !peranSales() || ALUR.komisiSayaTidakAda) return;
+  var cache = komisiSayaCache(), minta = ALUR.komisiSayaMinta, untuk = ALUR.sp;
+  var ids = (daftar || []).filter(spMilikSaya).map(function(o){ return o.id; })
+              .filter(function(id){ return !(id in cache) && !minta[id]; });
+  if (!ids.length) return;
+  ids.forEach(function(id){ minta[id] = true; });
+  api("POST", "/rpc/komisi_sp_saya", { p_ids: ids })
+    .then(function(r){
+      if (ALUR._komisiSayaUntuk !== untuk) return;
+      var c = komisiSayaCache();
+      ids.forEach(function(id){ c[id] = null; });
+      (r || []).forEach(function(x){ c[x.so_id] = x; });
+      tambalKomisiSaya();
+    })
+    .catch(function(e){
+      ids.forEach(function(id){ delete minta[id]; });
+      if (rpcBelumAda(e)) { ALUR.komisiSayaTidakAda = true; tambalKomisiSaya(); }
+    });
+}
+function tambalKomisiSaya(){
+  Array.prototype.forEach.call(document.querySelectorAll("[data-komisi-sp]"), function(el){
+    var id = el.dataset.komisiSp, d = ALUR._komisiDetail;
+    var o = (ALUR.sp || []).filter(function(x){ return String(x.id) === String(id); })[0]
+         || (d && String(d.id) === String(id) ? d : null);
+    if (!o) return;
+    el.innerHTML = el.id === "dd-komisi-saya" ? "Komisi Anda: " + komisiSpSel(o, true) : komisiSpSel(o);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#p-sp .tile"), function(t){
+    var em = t.querySelector("em"), b = t.querySelector("b");
+    if (em && b && em.textContent === "Komisi Anda (perkiraan)") {
+      var tot = komisiSayaTotal(ALUR.sp); b.textContent = tot === null ? "…" : rpS(tot);
+    }
+  });
+}
+function tambalKomisiSp(){
+  var f = ALUR.spForm; if (!f) return;
+  var k = $("sp-komisi"); if (k) k.innerHTML = kotakKomisiSpHtml(f);
+  Array.prototype.forEach.call(document.querySelectorAll("#p-sp .bi-komisi[data-i]"), function(el){
+    el.innerHTML = komisiBarisHtml(f, Number(el.dataset.i));
+  });
+}
 function muatKhususPelanggan(cid, sesudah){
   if (!cid) { SP_KHUSUS = { customerId:null, baris:null, memuat:false, galat:"" }; return; }
   if (SP_KHUSUS.customerId === cid && (SP_KHUSUS.baris || SP_KHUSUS.galat)) return;
@@ -14258,6 +14451,31 @@ function gambarKonteksHpp(box, rows, jenisDok){
           + 'Baris batal tidak dihitung; qty = qty efektif (sesudah batal).') + '</p>';
 }
 
+/* #51 (berkas 123): saat GM mengetik persen, tampilkan berapa baris & nilai barang (sebelum PPN) yang terkena dan
+   komisinya dalam Rupiah — persen ini kini dibayarkan. Hanya pratinjau di layar; angka resmi dihitung database. */
+function pasangPratinjauKomisiGm(soId){
+  var el = $("gm-komisi-pratinjau"), inp = $("f_gm_pct");
+  if (!el || !inp) return;
+  var dasar = null, n = 0;
+  function gambar(){
+    if (!el.isConnected) return;
+    if (dasar === null) { el.textContent = "Menghitung baris yang terkena…"; return; }
+    if (!n) { el.textContent = "Tidak ada baris di bawah / tanpa price list pada SP ini."; return; }
+    var pct = angkaSaja(inp.value);
+    el.innerHTML = n + " baris terkena · nilai barang sebelum PPN " + rp(dasar)
+      + (pct === null ? "" : " · komisi pada " + esc(String(inp.value).trim()) + "%: <b>" + rp(dasar * pct / 100) + "</b>")
+      + (pct !== null && (pct < 0 || pct > 50) ? ' <span style="color:var(--bad-tx)">— harus 0 sampai 50%</span>' : "");
+  }
+  inp.addEventListener("input", gambar);
+  gambar();
+  api("GET", "/so_baris_hitung?select=nilai_barang_dpp&so_id=eq." + Number(soId) + "&jenis=eq.barang&pct=is.null")
+    .then(function(r){
+      r = r || []; n = r.length;
+      dasar = r.reduce(function(a, b){ return a + (Number(b.nilai_barang_dpp) || 0); }, 0);
+      gambar();
+    })
+    .catch(function(){ if (el.isConnected) el.textContent = ""; });
+}
 function formGmPutus(jenis, ref){
   if (jenis === "ubah") { formGmUsulUbah(ref); return; }
   /* Yang ini bukan "setuju / tolak". Keputusannya adalah MENEMPELKAN
@@ -14285,8 +14503,11 @@ function formGmPutus(jenis, ref){
                 bantu:"Wajib diisi kalau ditahan — sales-nya harus tahu apa yang perlu dibereskan." });
   }
   if (jenis === "harga") {
-    h += field({ nama:"gm_pct", label:"Komisi yang ditetapkan (%)", jenis:"angka",
-                 bantu:"Kosongkan untuk memakai tier normal. Isi kalau GM menetapkan angka lain." });
+    /* #51 (berkas 123): persen ini DIPAKAI untuk baris di bawah / tanpa price list (dulu Rp 0 walau diisi). */
+    h += field({ nama:"gm_pct", label:"Komisi untuk baris di bawah / tanpa price list (%)", jenis:"angka", wajib:true,
+                 bantu:"Dipakai hanya untuk baris yang di bawah price list atau belum punya price list — baris lain tetap "
+                     + "tier / flat / harga khusus. Isi 0 bila tanpa komisi. Maksimal 50%." })
+      + '<div id="gm-komisi-pratinjau" class="muted" style="font-size:12.5px;margin-top:-4px"></div>';
   }
   if (jenis === "telat") {
     h += field({ nama:"gm_pct", label:"Komisi yang ditetapkan (%)", jenis:"angka", wajib:true,
@@ -14342,6 +14563,7 @@ function formGmPutus(jenis, ref){
   bukaLaci((jenis === "kirim" ? "Konfirmasi kirim — " : "Keputusan GM — ") + j.l);
 
   if (GM_JENIS_HPP.indexOf(jenis) > -1) muatKonteksHpp(jenis, ref);   /* #21 */
+  if (jenis === "harga") pasangPratinjauKomisiGm(ref);   /* #51 */
 
   function kirim(setuju){
     sibuk(true);
@@ -14395,8 +14617,15 @@ function formGmPutus(jenis, ref){
       if (jenis === "telat" && setuju && pct === null) {
         sibuk(false); tampilPesan("Komisi harus ditetapkan untuk invoice yang lewat 120 hari."); return;
       }
+      /* #51: persen GM kini bernilai uang untuk baris di bawah / tanpa list — wajib saat menyetujui (boleh 0). */
+      if (jenis === "harga" && setuju && pct === null) {
+        sibuk(false); tampilPesan("Isi persen komisi untuk baris di bawah / tanpa price list (isi 0 bila tanpa komisi)."); return;
+      }
+      if (setuju && pct !== null && (pct < 0 || pct > 50)) {
+        sibuk(false); tampilPesan("Persen komisi harus antara 0 dan 50%."); return;
+      }
       var badan = { harga_ok: setuju, gm_pada: new Date().toISOString() };
-      if (pct !== null) badan.gm_pct = pct / 100;
+      if (setuju && pct !== null) badan.gm_pct = pct / 100;   /* #51: Tolak tidak menulis persen */
       janji = api("PATCH", "/sales_orders?id=eq." + ref, badan, "return=representation");
     }
     janji.then(function(){
@@ -19736,7 +19965,9 @@ window.__segar = {
   pindahTab: function(t){ pindahTab(t); }, tandaiBasi: function(t){ tandaiBasi(t); },
   muatUlangDiam: function(o){ return muatUlangDiam(o); },
   panel: function(t){ var f = PANEL_LANJUT[t]; if (f) f(); else gambar(); },
-  mintaUbah: function(j, id){ formMintaUbah(j, id); }   /* #50: uji laci Minta ubah SP */
+  mintaUbah: function(j, id){ formMintaUbah(j, id); },   /* #50: uji laci Minta ubah SP */
+  gmPutus: function(j, ref){ formGmPutus(j, ref); },      /* #51: uji laci keputusan GM */
+  detailSp: function(row){ formDetailDoc("sp", row); }     /* #51: uji detail SP */
 };
 /* Kait sesi — gate yang sama: hanya localhost / file:. Tidak membuka apa
    pun yang tidak bisa dilihat dari console; gunanya supaya penjaga sesi

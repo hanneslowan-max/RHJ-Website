@@ -66,6 +66,8 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 - Riksa & Michael: wajib cash (tidak bisa tempo lewat jalur apa pun), komisi flat 1% semua penjualan.
 - SP Office tanpa komisi (komisi flat 0%, berkas 119). Akibatnya harga di bawah price list pada SP Office tidak masuk antrean keputusan GM — pembuatnya memang GM/owner.
 - Approval GM menampilkan harga nett SP, EHC, HPP, dan margin sebelum/sesudah EHC.
+- **Persen komisi dari GM dipakai untuk baris di bawah / tanpa price list** (#51, berkas 123, keputusan Hannes 7 Okt): saat menyetujui harga SP, GM wajib mengisi persen komisi (0–50%, boleh 0) — persen itu × nilai baris sebelum PPN untuk setiap baris yang di bawah price list atau belum punya price list; baris lain tetap tier 2/3/4 HAMMER/5%, cash 5%, flat, atau harga khusus (urutan dan hitungannya tidak berubah). Belum diputus / ditolak GM = baris itu belum dihitung. Layar GM menunjukkan baris yang terkena & komisinya dalam Rupiah saat persen diketik. SP lama yang belum diklaim ikut terhitung; nominal yang sudah diklaim tidak berubah. Invoice telat >120 hari tetap memakai persen telat dari GM untuk seluruh SP.
+- **Sales melihat perkiraan komisinya** (#51, berkas 123): di form Buat SP per baris & total, dihitung database (`pratinjau_komisi_sp`, rumus yang sama dengan hasil akhir), berlabel "perkiraan — angka resmi di tab Komisi"; baris di bawah / tanpa price list ditulis "persen ditetapkan GM", komisi cash 5% ditulis "bila dicocokkan finance". Sales juga melihat kolom komisi SP **atas namanya sendiri** di daftar & detail SP (angka resmi; SP yang dialihkan ke sales lain tidak). HPP dan margin tetap tertutup bagi sales.
 - Klaim EHC tidak memerlukan lampiran bukti.
 
 ### Angka & tampilan
