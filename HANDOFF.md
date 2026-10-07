@@ -82,6 +82,10 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
   trigger baru `sol_jaga_saldo_ehc` (sales_order_lines), `so_jaga_saldo_ehc` & `so_jaga_hapus_ehc` (sales_orders).
   Migrasi 120–139 yang menyentuh objek itu WAJIB dibangun dari `pg_get_functiondef` di DEV, bukan dari berkas lama.
 
+**Dikonfirmasi Hannes (7 Okt)** untuk #50/#51: HP wajib untuk semua peran (termasuk owner/GM); persen GM juga untuk barang
+yang belum punya price list; SP lama yang belum diklaim ikut dihitung ulang (DEV: 7 SP, +Rp 1.750.185); GM wajib mengisi
+persen saat menyetujui harga (boleh 0, maks 50%).
+
 | # | Ringkas | Status |
 |---|---|---|
 | 50 | Cek Vonny: `cek_kelayakan_vonny` (berkas 120, baca saja) memeriksa tiap SP di Double Check dengan syarat yang sama dengan putuskan_vonny_cek + lengkapi_pelanggan_sp + buat_pelanggan_baru. Daftar: kartu "Belum bisa diloloskan" + alasan merah per SP + "perlu: Vonny / owner-GM / GM / sales". Laci: kotak status, cek langsung saat mengetik No. HP/alamat, tombol loloskan terkunci sampai beres (Tahan tetap bisa). Keputusan Hannes: SP tetap tidak lolos sebelum beres — Vonny diberi tahu alasannya. **Berkas 121** (hasil review): cek juga mencerminkan pelanggan daftar hitam (PO belum bertuan), PO yang sudah atas nama pelanggan lain, dan SP tanpa sales yang cocok dengan pelanggan Office; indeks `kunci_nama_pelanggan(nama/nama_lama)` + ANALYZE (cek 9 SP: ±740 → ±8 ms). Laci memeriksa ulang saat dibuka + tombol "Periksa ulang"; hasil cek hanya menulis ke laci SP-nya sendiri; galat jaringan/batas waktu ≠ DB lama (flag kuning, tombol tidak dikunci — DB tetap menolak) | **selesai (DB 120+121 + FE)**; uji DEV paritas 9/9 + 9/9 (Vonny & owner, termasuk 3 kasus baru); layar 32/32 + 16/16; pertanyaan no. 2 (HP wajib di form SP) belum dijawab |
