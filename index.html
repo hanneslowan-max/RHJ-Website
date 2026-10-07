@@ -3702,15 +3702,16 @@ function pindahTab(nama){
      · gambar ulang DITUNDA selama orang mengetik, laci terbuka, atau form
        PO/SP/penawaran sedang diisi — datanya tetap segar di cache,
      · gagal = diam, data lama tetap (tombol Muat ulang memberi tahu galatnya).
-   Jeda per tab mencegah tarikan beruntun saat orang bolak-balik tab.
+   Keputusan Hannes (7 Okt): SETIAP pindah tab / kembali ke jendela data ditarik ulang (tanpa jeda per tab).
+   Satu-satunya jeda 3 detik hanya menggabungkan pemicu yang datang bersamaan (klik tab + focus, dsb.).
 
    Tab baru cukup didaftarkan di MUAT_DIAM:
      { muat: fn→Promise, gambar: fn, boleh?: fn→bool (data sudah ada & tidak sedang dimuat terlihat),
        kunci?: fn→teks (saringan yang menentukan hasil), kunciJalan?: teks (tarikan bersama),
        jeda?: ms, tunda?: fn→bool (jangan gambar ulang sekarang) }
-   Tanpa entri (kas, laporan, report) tab tetap memakai perilaku lama.
+   Tanpa entri (laporan = rekap dengan tombol, report = form unduhan) tab tetap memakai perilaku lama.
    ═══════════════════════════════════════════════════════════════════════ */
-var SEGAR = { siap: false, jalan: {}, terakhir: {}, basi: {}, tunda: null, jedaBawaan: 20000,
+var SEGAR = { siap: false, jalan: {}, terakhir: {}, basi: {}, tunda: null, jedaBawaan: 3000,
               jedaSemuaLatar: 300000,
               dibatalkan: 0,   /* naik tiap loader menarik lagi karena ditandai ulang selagi menarik (simpan/saringan) */
               tekan: false };  /* tombol mouse / jari sedang menekan → jangan ganti DOM di bawahnya */
@@ -3726,10 +3727,10 @@ function barisDiisi(b){   /* qty sengaja tidak dihitung: baris PO baru sudah ber
 }
 var MUAT_DIAM = {
   crm: { boleh: function(){ return CRM.dimuat && !CRM.memuat; }, kunci: function(){ return String(CRM.hari); },
-         muat: function(){ return muatCrm(true); }, gambar: function(){ panelCrm(); }, jeda: 60000 },
+         muat: function(){ return muatCrm(true); }, gambar: function(){ panelCrm(); } },
   pelanggan: { boleh: function(){ var P = LANJUT.pelanggan; return P.dimuat && !P.memuat && !P.lihatLain; },
                kunci: function(){ var P = LANJUT.pelanggan; return plKunci() + "|" + P.hal + "|" + P.per + "|" + P.urut + "|" + JSON.stringify(P.urutKol || null); },
-               muat: function(){ return muatPelanggan(); }, gambar: function(){ panelPelangganTab(); }, jeda: 30000 },
+               muat: function(){ return muatPelanggan(); }, gambar: function(){ panelPelangganTab(); } },
   khusus: { boleh: function(){ var K = LANJUT.khusus; return K.dimuat && !K.memuat; },
             kunci: function(){ return String(LANJUT.khusus.status || ""); },
             muat: function(){ return muatKhusus(); }, gambar: function(){ panelKhusus(); } },
@@ -3750,7 +3751,7 @@ var MUAT_DIAM = {
           return !!f && !!(f.po_id || f.customer_id || isiTeks(f.kepada) || (f.baris || []).length); } },
   performa: { boleh: function(){ var P = LANJUT.performa; return P.dimuat && !P.memuat; },
               kunci: function(){ var P = LANJUT.performa; return [P.periode, P.dari, P.sampai].join("|"); },
-              muat: function(){ return muatPerforma(); }, gambar: function(){ panelPerforma(); }, jeda: 120000 },
+              muat: function(){ return muatPerforma(); }, gambar: function(){ panelPerforma(); } },
   vonnycek: { boleh: function(){ var V = LANJUT.vonnycek; return V.dimuat && !V.memuat; },
               muat: function(){ return muatVonnyCek(); }, gambar: function(){ panelVonnyCek(); } },
   kirim: { boleh: function(){ var K = LANJUT.kirim, H = kirimHal(K.hal); return K.dimuat && H.dimuat && !H.memuat; },
@@ -3782,10 +3783,20 @@ var MUAT_DIAM = {
   gm: { boleh: function(){ var G = LANJUT.gm; return G.dimuat && !G.memuat; },
         muat: function(){ return muatGm(); }, gambar: function(){ panelGmAntre(); } }
 };
-/* Tab yang datanya dari muatSemua: satu tarikan bersama, jeda lebih panjang (produk + price list ± 2.000 baris). */
+/* Tab yang datanya dari muatSemua: satu tarikan bersama (produk + price list ± 2.000 baris). */
 GRUP_SEMUA.forEach(function(t){
-  MUAT_DIAM[t] = { kunciJalan: "_semua", jeda: 120000, muat: function(){ return muatSemuaDiam(); }, gambar: function(){ gambar(); } };
+  MUAT_DIAM[t] = { kunciJalan: "_semua", muat: function(){ return muatSemuaDiam(); }, gambar: function(){ gambar(); } };
 });
+/* Kas Sales (dulu tanpa entri): saldo berubah tiap ada klaim/transfer */
+MUAT_DIAM.kas = { boleh: function(){ var K = LANJUT.kas; return K.dimuat && !K.memuat; },
+  muat: function(){
+    var K = LANJUT.kas, awal = K.dimuat;
+    return api("GET", "/kas_sales?select=*&order=saldo.desc").then(function(r){
+      if (awal && !K.dimuat) return;   /* ditandai ulang selagi menarik → panelnya menarik sendiri */
+      K.baris = r || []; K.dimuat = true;
+    });
+  },
+  gambar: function(){ panelKas(); } };
 
 /* opsi.manual: dari tombol "Muat ulang" — jeda dilewati dan galat dikatakan. */
 function muatUlangDiam(opsi){
