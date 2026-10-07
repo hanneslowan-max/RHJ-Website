@@ -92,7 +92,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 | 50b | HP wajib (keputusan Hannes 7 Okt): trigger `so_yy_hp_wajib` (**berkas 122**) — SP tanpa customer_id wajib No. HP sah sejak dibuat (semua peran); SP lama tanpa HP tidak dikunci (diperiksa hanya bila No. HP diubah / pelanggan dilepas; ganti Kepada bebas). FE: label & keterangan No. HP langsung, validasi sebelum nomor SP diambil, nama perusahaan diubah sesudah memilih → pelanggan dilepas (dulu customer_id lama menempel), Minta ubah SP memvalidasi No. HP; jalur "ubah langsung" owner/GM menutup usulan yang ditolak DB (dulu tertinggal 'menunggu' dan mengunci usulan berikutnya) · Berkas 124: SP batal yang dihidupkan lagi diperiksa seperti SP baru; mode tanpa PO / PO menyusul tanpa kotak Kepada kedua (dulu bisa mengganti pembeli tanpa melepas pelanggan); jalur ubah langsung tidak menutup usulan bila koneksi putus | **selesai (DB 122+124 + FE)**; uji DEV rollback 20 skenario (sales/owner/Vonny, Minta ubah, PO lama 35, no-op 54 SP); layar 35/35 |
 | 51 | Komisi (keputusan Hannes 7 Okt: tampilkan; persen GM dipakai). **Berkas 123**: `komisi_pct_baris` (satu tempat urutan persen, = CASE lama), `so_baris_hitung` + kolom `pct_berlaku`/`sumber_pct` (pct lama identik 91/91), `so_ringkas.komisi` = Σ nilai DPP × pct_berlaku (kolom lain identik → gerbang GM/status tidak bergeser), CHECK `so_gm_pct_wajar` 0–50%, RPC `pratinjau_komisi_sp` & `komisi_sp_saya`. DEV: 7 SP bergeser +Rp 1.750.185 (007/009/010/011/015/020/032 -IX), 0 sudah diklaim; klaim #12/#13 tetap; ehc_saldo_sp/ehc_belum_klaim md5 identik. FE: form SP perkiraan per baris & total; laci GM wajib persen (0–50) + pratinjau Rupiah, Tolak tidak menulis persen; kolom "Komisi Anda" & detail SP untuk sales. Sesi EHC/komisi setuju (#54 menyisipkan persen per baris di CASE pct_berlaku) · **Berkas 124** (hasil review): persen keputusan harga pindah ke kolom baru `gm_pct_harga` (diisi dari gm_pct SP yang sudah disetujui → angka tidak bergeser; dijaga GM/owner, 0–50%); `gm_pct` kembali KHUSUS persen telat — dulu persen harga yang kini wajib membuat SP tak pernah masuk antrean telat & persen harga dipakai untuk seluruh SP; OFFSET 0 di so_baris_hitung (so_ringkas ±2× lebih cepat); komisi_sp_saya "menunggu" hanya bila harga belum diputus | **selesai (DB 123+124 + FE)**; uji DEV paritas pratinjau = SP tersimpan, 12 uji peran; layar 33/33 |
 | 52 | Muat ulang diam-diam saat pindah tab, klik tab yang sama, jendela kembali dilihat (visibilitychange/focus/pageshow), dan tombol **Muat ulang** di header. Data lama tetap tampil; gambar ulang ditunda saat mengetik / laci terbuka / form PO-SP-penawaran terisi · **7 Okt (keputusan Hannes):** tanpa refresh otomatis berkala, tetapi SETIAP pindah tab / kembali ke jendela data ditarik ulang — jeda per tab (20–120 dtk) dihapus, tinggal 3 dtk penggabung pemicu beruntun; tab Kas Sales ikut terdaftar. Catatan: keluhan "harus refresh terus" terjadi di PROD yang belum memakai #52 | **selesai (FE)**, lihat catatan #52 |
-| 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
+| 53 | Keputusan Hannes 7 Okt: kelompok baru RHAJA untuk RHJ R & RHJ PP. DEV sudah sejak 1 Sep (Ubah massal oleh Hannes, tidak ada berkas db/) → **berkas 125** membawa daftar DEV yang sama ke PROD (59 produk: RHJ R*, RHJ PP*, RHJ BLACK PP 2", 2" H/R grey rubber, ROLLER PHINOLIQ 1"), dicocokkan per pasangan (kode, kelompok lama) → idempoten; kolom bahan diisi bila kosong (Karet 28, Nylon 2; PP dibiarkan kosong — products_bahan_sah tidak punya "PP"). Merek/kategori/tipe set/price list/komisi tidak berubah | **selesai (DB 125)**; uji DEV rollback: simulasi PROD 59 dipindah, 0 produk lain, ulang = 0 |
 | 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 | 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
 | 56 | Dokumen penawaran (pratinjau & detail) kini punya kolom **Spesifikasi** tersendiri (baris baru dipertahankan); isian spesifikasi jadi textarea multi-baris (dulu input 1 baris membuang Enter dari spesifikasi master) | **selesai (FE)** |
@@ -122,6 +122,25 @@ persen saat menyetujui harga (boleh 0, maks 50%).
   muatLunas/muatPerforma diperiksa lagi sesudah ringkasan, segarkanUsulan kembali ke muatSemua biasa, pengaman yang
   sama di muatGm/muatEhc/muatKomisi (2 baris) & muatUsulan tidak mengosongkan daftar saat gagal, tombol di HP pindah
   ke pojok kanan atas. Uji layar: 14/14 (temuan) + 31/31 (#52) + 31/31 (#56 #59) + 36/36 (119).
+
+## Jawaban Hannes 7 Okt (daftar konfirmasi)
+- #52: tanpa refresh berkala; SETIAP pindah tab selalu segar → selesai (jeda 3 dtk).
+- #53: kelompok RHAJA → selesai (berkas 125).
+- #55: Hannes mengirim contoh penawaran yang biasa dikirim → menunggu.
+- #57: setuju (a) set diubah → "set (sudah diubah)", (b) qty roda dalam set dikunci di SP dari PO, (c) SP lama per set bila cocok.
+- #58: masalahnya penawaran dikirim ke SATU pelanggan, padahal grup pelanggan punya banyak perusahaan yang dipegang sales
+  berbeda → Hannes bertanya cara menanganinya (usulan dikirim 7 Okt, menunggu jawaban).
+- #59: opsi B — barang usulan dari penawaran baru masuk antrean GM setelah dipakai di PO.
+- #60: diskon per baris (Rp/%) tanpa diskon total; TOP Cash/7/14/30/45/60/Lainnya (Riksa & Michael terkunci Cash); UP &
+  e-mail otomatis dari data pelanggan, e-mail yang belum ada di data pelanggan otomatis disimpan ke sana.
+- #54 & #61 dikerjakan sesi EHC/komisi.
+- #50 lanjutan: alamat juga wajib di SP tanpa pelanggan master; No. HP yang sudah dipakai pelanggan lain DITOLAK saat SP
+  disimpan (pesan tanpa nama pelanggan/sales lain, minta pilih dari daftar).
+- #51 lanjutan: harga khusus hanya berlaku bila harganya DI BAWAH price list (di atas list kembali ke tier); Riksa & Michael
+  tetap masuk antrean GM untuk harga di bawah list (komisi tetap flat 1%); penggolongan baris DIBEKUKAN (price list / harga
+  khusus yang disahkan sesudah SP dibuat tidak mengubah komisi/gerbang SP itu).
+- 16–19 (harga_ok direset saat baris berubah, Tolak telat, kosongkan gm_pct lama di PROD, klaim pelanggan belum bertuan):
+  Hannes minta dijelaskan ulang (7 Okt) → menunggu jawaban.
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
