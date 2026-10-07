@@ -85,6 +85,7 @@ transfer, `jaga_baris_sp_terkunci`, `sp_vonny_gugur_*`, `putuskan_ubah`, `gm_kon
 | # | Ringkas | Status |
 |---|---|---|
 | 50 | Cek Vonny: `cek_kelayakan_vonny` (berkas 120, baca saja) memeriksa tiap SP di Double Check dengan syarat yang sama dengan putuskan_vonny_cek + lengkapi_pelanggan_sp + buat_pelanggan_baru. Daftar: kartu "Belum bisa diloloskan" + alasan merah per SP + "perlu: Vonny / owner-GM / GM / sales". Laci: kotak status, cek langsung saat mengetik No. HP/alamat, tombol loloskan terkunci sampai beres (Tahan tetap bisa). Keputusan Hannes: SP tetap tidak lolos sebelum beres — Vonny diberi tahu alasannya. **Berkas 121** (hasil review): cek juga mencerminkan pelanggan daftar hitam (PO belum bertuan), PO yang sudah atas nama pelanggan lain, dan SP tanpa sales yang cocok dengan pelanggan Office; indeks `kunci_nama_pelanggan(nama/nama_lama)` + ANALYZE (cek 9 SP: ±740 → ±8 ms). Laci memeriksa ulang saat dibuka + tombol "Periksa ulang"; hasil cek hanya menulis ke laci SP-nya sendiri; galat jaringan/batas waktu ≠ DB lama (flag kuning, tombol tidak dikunci — DB tetap menolak) | **selesai (DB 120+121 + FE)**; uji DEV paritas 9/9 + 9/9 (Vonny & owner, termasuk 3 kasus baru); layar 32/32 + 16/16; pertanyaan no. 2 (HP wajib di form SP) belum dijawab |
+| 50b | HP wajib (keputusan Hannes 7 Okt): trigger `so_yy_hp_wajib` (**berkas 122**) — SP tanpa customer_id wajib No. HP sah sejak dibuat (semua peran); SP lama tanpa HP tidak dikunci (diperiksa hanya bila No. HP diubah / pelanggan dilepas; ganti Kepada bebas). FE: label & keterangan No. HP langsung, validasi sebelum nomor SP diambil, nama perusahaan diubah sesudah memilih → pelanggan dilepas (dulu customer_id lama menempel), Minta ubah SP memvalidasi No. HP; jalur "ubah langsung" owner/GM menutup usulan yang ditolak DB (dulu tertinggal 'menunggu' dan mengunci usulan berikutnya) | **selesai (DB 122 + FE)**; uji DEV rollback 20 skenario (sales/owner/Vonny, Minta ubah, PO lama 35, no-op 54 SP); layar 31/31 |
 | 51 | Form SP tidak menampilkan komisi; sales baru lihat di tab Komisi › Belum bisa klaim. Bug: `gm_pct` utk baris di bawah list diabaikan bila SP tidak telat (SP 007/010/011/015-IX: komisi 0) | tanya: maksud "tampilkan"? perbaiki gm_pct? |
 | 52 | Muat ulang diam-diam saat pindah tab, klik tab yang sama, jendela kembali dilihat (visibilitychange/focus/pageshow), dan tombol **Muat ulang** di header. Data lama tetap tampil; gambar ulang ditunda saat mengetik / laci terbuka / form PO-SP-penawaran terisi | **selesai (FE)**, lihat catatan #52 |
 | 53 | DEV sudah "RHAJA Series" (59 produk, 1 Sep); 27 produk kehilangan bacaan bahan | tanya: layar mana (PROD vs tipe roda "+ Set") |
@@ -135,6 +136,11 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    atau cascade hapus SP); klaim tidak ikut berubah bila EHC SP diubah (SP 007-IX: klaim 20.000, EHC jadi 5.000).
 7. **Daftar hitam terlewati** pada SP tanpa PO tanpa pelanggan (`jaga_blacklist_po` hanya di PO) — makin sering bila
    #50 meloloskan SP tanpa tautan.
+8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
+   customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
+9. **Tanggal SP tidak dijaga**: sales bisa INSERT/PATCH `sales_orders.tanggal` mundur (juga SP lunas). Snapshot price list
+   (`isi_harga_list`) memakai tanggal itu → tier naik & gerbang GM terlewati (uji: SP tgl 12 Agu 'menunggu vonny' vs hari
+   ini 'menunggu gm'). Usul: tanggal := current_date untuk selain owner/GM + kolom dijaga jaga_kolom_sales.
 
 Bug/data non-keamanan yang dicatat:
 - `putuskan_ubah` (Minta ubah SP) menghapus & membuat ulang semua baris → gagal pada SP yang sudah punya surat jalan

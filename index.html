@@ -129,6 +129,9 @@
   .medan-alur{display:block;position:relative}
   .medan-alur > span{display:block;font-size:12px;color:var(--redup,#5a6672);margin-bottom:5px}
   .medan-alur > span em{font-style:normal;color:var(--aksen,#0d7d70);font-size:11px;margin-left:6px}
+  .medan-alur > small.hp-ket{display:block;margin-top:5px;font-size:11.5px;line-height:1.45;color:var(--redup,#5a6672)}
+  .medan-alur > small.hp-ket.salah{color:var(--bad-tx)}
+  .medan-alur > small.hp-ket.sah{color:var(--ok-tx)}
   .medan-alur input,.medan-alur select,.medan-alur textarea{width:100%;padding:8px 10px;
     border:1px solid var(--garis-kuat,#c9d2d6);border-radius:8px;font:inherit;font-size:13px;
     background:var(--kartu2,#f7fafa);color:inherit}
@@ -1387,6 +1390,8 @@ function hpNormal(v){
   if (a.charAt(0) === "8")   return "62" + a;
   return a;                                  /* nomor luar negeri dibiarkan */
 }
+/* #50 (berkas 122): No. HP sah = sama dengan syarat DB (hp_baku + ^[1-9][0-9]{8,15}$, seperti buat_pelanggan_baru). */
+function hpSah(v){ var h = hpNormal(v); return !!h && /^[1-9][0-9]{8,15}$/.test(h); }
 function hpTampil(v){
   if (!v) return "—";
   if (v.slice(0,2) !== "62") return "+" + v;
@@ -6030,7 +6035,9 @@ function formMintaUbah(jenis, id){
   } else {
     h += field({ nama:"u_kepada", label:"Kepada", nilai:d.kepada })
       +  field({ nama:"u_up", label:"UP.", nilai:d.up || "" })
-      +  field({ nama:"u_telp", label:"Telp.", nilai:d.telp || "" })
+      +  field(d.customer_id ? { nama:"u_telp", label:"Telp.", nilai:d.telp || "" }
+              : { nama:"u_telp", label:"No. HP pelanggan", nilai:d.telp || "",   /* #50 (berkas 122) */
+                  bantu:"SP ini belum tertaut ke data pelanggan — bila No. HP diubah, wajib satu nomor sah (mis. 0812xxxxxxx)." })
       +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" })
       +  field({ nama:"u_mode_ppn", label:"PPN", jenis:"select", nilai:modePpnDok(d), mati: !!d.po_id,   /* #30 */
                  pilihan: MODE_PPN.map(function(o){ return { v:o[0], l:o[1] }; }),
@@ -6134,6 +6141,15 @@ function formMintaUbah(jenis, id){
       }
     }
     if (kurang) { tampilPesan(esc(kurang) + " tidak boleh dikosongkan."); return; }
+    /* #50 (berkas 122): SP tanpa pelanggan master — No. HP yang diubah harus sah (DB menolak; usulan tidak dibuat). */
+    if (jenis !== "po" && !d.customer_id
+        && String(kepala.telp || "").replace(/\D/g, "") !== String(d.telp || "").replace(/\D/g, "")
+        && !hpSah(kepala.telp)) {
+      tampilPesan(String(kepala.telp || "").trim()
+        ? 'No. HP "' + esc(String(kepala.telp).trim()) + '" tidak valid — isi satu nomor, 9 sampai 16 angka, mis. 0812xxxxxxx.'
+        : "No. HP pelanggan tidak boleh dikosongkan — SP ini belum tertaut ke data pelanggan.");
+      return;
+    }
     var isi = [], salahBaris = [];
     Array.prototype.forEach.call(document.querySelectorAll("#laci-form tbody tr"), function(tr){
       var pid = tr.querySelector(".uu-pid");
@@ -6169,6 +6185,7 @@ function formMintaUbah(jenis, id){
     if (salahBaris.length) { tampilPesan(esc(salahBaris.join(" "))); return; }
 
     sibuk(true);
+    var idUsulLangsung = null;
     api("POST", "/rpc/ajukan_ubah", {
       p_jenis: jenis, p_ref: id, p_alasan: alasan,
       p_baru: { kepala: kepala, baris: isi }
@@ -6178,8 +6195,17 @@ function formMintaUbah(jenis, id){
          seketika. Bukan supaya ada langkah tambahan, tapi supaya jejak
          angkanya sama bentuknya siapa pun yang mengubah. */
       if (!langsung) return null;
+      idUsulLangsung = Number(idUsul);
       return api("POST", "/rpc/putuskan_ubah",
-                 { p_id: Number(idUsul), p_setuju: true, p_catatan: "diubah langsung" });
+                 { p_id: idUsulLangsung, p_setuju: true, p_catatan: "diubah langsung" })
+        .catch(function(e){
+          /* Ditolak database saat diterapkan → usulan jangan tertinggal 'menunggu' (itu mengunci usulan berikutnya
+             untuk dokumen ini). Ditutup sebagai ditolak dengan alasannya, lalu galat aslinya diteruskan. */
+          return api("POST", "/rpc/putuskan_ubah",
+                     { p_id: idUsulLangsung, p_setuju: false, p_catatan: "Gagal diterapkan: " + e.message })
+            .then(function(){ throw new Error(e.message + " — perubahan tidak diterapkan; perbaiki lalu simpan lagi."); },
+                  function(){ throw e; });
+        });
     })
     .then(function(pesan){
       tutupLaci();
@@ -6670,6 +6696,28 @@ function spFormBaru(){
    barisnya diketik sendiri, tak ada PO untuk menyalin/membandingkan. Bedanya
    cuma pada teks & alur invoice, jadi dipisah hanya di tempat yang perlu. */
 function spManual(f){ return !!(f.menyusul || f.tanpaPo); }
+/* #50 (berkas 122): SP yang pelanggannya tidak dipilih dari data pelanggan wajib berisi No. HP sah sejak dibuat —
+   Vonny memakainya untuk mendaftarkan pelanggan itu saat cek. DB menolak tanpanya (semua peran). */
+function wajibHpSp(f){ return !f.customer_id; }
+function labelHpSp(f){ return wajibHpSp(f) ? 'No. HP pelanggan <em>wajib — belum dari data pelanggan</em>' : 'Telp.'; }
+function kelasKetHpSp(f){
+  if (!wajibHpSp(f) || !String(f.telp || "").trim()) return "";
+  return hpSah(f.telp) ? " sah" : " salah";
+}
+function ketHpSp(f){
+  if (!wajibHpSp(f)) return "";
+  var t = String(f.telp || "").trim();
+  if (!t) return (f.po_id ? "PO ini belum tertaut ke data pelanggan" : "Pelanggan ini belum dipilih dari data pelanggan")
+    + " — Vonny memakai nomor ini untuk mendaftarkannya saat cek. Isi satu nomor saja, tanpa ekstensi.";
+  return hpSah(t) ? "✓ " + esc(hpTampil(hpNormal(t)))
+                  : "No. HP belum sah — isi satu nomor, 9 sampai 16 angka, mis. 0812xxxxxxx.";
+}
+/* Label & keterangan No. HP diperbarui lewat DOM (bukan panelSp) supaya kursor tidak lompat saat mengetik. */
+function segarkanHpSp(f){
+  if ($("sp-telp-label")) $("sp-telp-label").innerHTML = labelHpSp(f);
+  var k = $("sp-telp-ket");
+  if (k) { k.innerHTML = ketHpSp(f); k.className = "hp-ket" + kelasKetHpSp(f); }
+}
 /* Baris SP yang diketik sendiri — hanya dipakai mode "PO menyusul". Di
    mode biasa barisnya datang dari PO dan tidak boleh ditambah di sini:
    total SP harus sama persis dengan PO-nya, dan baris yang bisa
@@ -6901,7 +6949,9 @@ function panelSp(){
           +   medanAlur("UP.", '<input type="text" id="sp-up" value="'+esc(f.up)+'">')
           + '</div>'
           + '<div class="baris2" style="margin-top:12px">'
-          +   medanAlur("Telp.", '<input type="text" id="sp-telp" value="'+esc(f.telp)+'">')
+          +   medanAlur('<span id="sp-telp-label">' + labelHpSp(f) + '</span>',   /* #50 (berkas 122) */
+                '<input type="tel" id="sp-telp" inputmode="tel" autocomplete="tel" placeholder="mis. 0812xxxxxxx" value="'+esc(f.telp)+'">'
+                + '<small id="sp-telp-ket" class="hp-ket' + kelasKetHpSp(f) + '">' + ketHpSp(f) + '</small>')
           +   medanAlur("PPN" + (f.po_id ? ' <em>ikut PO</em>' : ''),   /* #30: SP dengan PO selalu memakai mode PPN PO */
                 '<select id="sp-ppn"' + (f.po_id ? ' disabled title="SP mengikuti mode PPN PO-nya"' : '') + '>' + opsiModePpn(modePpnDok(f)) + '</select>')
           + '</div>'
@@ -7320,6 +7370,8 @@ function pasangSpIsi(f){
       f[id.slice(3) === "kepada" ? "kepada" : id.slice(3)] = e.value;
     });
   });
+  /* #50: No. HP disimpan per ketikan (Simpan bisa ditekan tanpa meninggalkan kotaknya), keterangannya ikut. */
+  if ($("sp-telp")) $("sp-telp").addEventListener("input", function(){ f.telp = this.value; segarkanHpSp(f); });
   if ($("sp-ppn")) $("sp-ppn").addEventListener("change", function(){
     f.mode_ppn = this.value; f.ppn_kena = f.mode_ppn !== "non";   /* #30 */
     (f.baris || []).forEach(function(b){ if (b.nettAutoList) b.nett = hargaDariList(b.nettAutoList, f.mode_ppn); });
@@ -7357,6 +7409,12 @@ function pasangSpMenyusul(f){
     /* Nama yang diketik tetap dipakai kalau tidak ada yang dipilih dari
        daftar — SP untuk pelanggan yang belum ada di master masih boleh,
        persis seperti di form PO. */
+    /* #50 (berkas 122), sama dengan form PO (#29): nama yang diubah sesudah memilih dari daftar tidak lagi
+       menunjuk pelanggan itu — dulu customer_id lama tetap menempel, sehingga pelanggan baru tanpa HP
+       tersimpan sebagai pelanggan lain dan lolos dari cek Vonny. */
+    if (f.customer_id && f.namaTerpilih !== undefined && this.value !== f.namaTerpilih) {
+      f.customer_id = null; f.customer_rep = null; lupakanSalesPelanggan(); segarkanHpSp(f);
+    }
     f.kepada = this.value;
   });
   /* Gambar ulang saat kotaknya DITINGGALKAN, bukan tiap ketikan.
@@ -7377,6 +7435,7 @@ function pasangSpMenyusul(f){
     f.customer_id = c ? c.id : null;
     f.customer_rep = c ? c.sales_rep_id : null;   /* berkas 119: pelanggan Office */
     f.kepada = c ? c.nama : ($("sp-cust") ? $("sp-cust").value : "");
+    f.namaTerpilih = c ? c.nama : "";   /* #50: diubah sesudahnya → pelanggan dilepas */
     if (c && c.lokasi && !f.alamat) f.alamat = c.lokasi;
     /* Satu pelanggan satu sales, dan itu tercatat di master — sama seperti
        di form PO, lewat helper yang sama supaya kedua layar tidak pernah
@@ -7593,6 +7652,22 @@ function simpanSp(khusus){
   if (khusus && khusus.type) khusus = null;   /* dipanggil dari event klik */
   if (!f.po_id && !spManual(f)) { toast("Pilih PO dulu.", true); return; }
   if (!f.kepada.trim()) { toast("Kolom Kepada belum diisi.", true); return; }
+  /* #50 (berkas 122): diperiksa SEBELUM nomor SP diambil, supaya nomornya tidak hangus. */
+  if (wajibHpSp(f)) {
+    var telpSp = String(f.telp || "").trim();
+    if (!telpSp.replace(/\D/g, "")) {
+      toast("No. HP pelanggan wajib diisi — " + (f.po_id ? "PO ini belum tertaut ke data pelanggan. "
+            : "pelanggan SP ini belum dipilih dari data pelanggan. ") + "Isi satu No. HP (mis. 0812xxxxxxx)"
+            + (f.po_id ? "." : ", atau pilih pelanggannya dari daftar."), true);
+      if ($("sp-telp")) $("sp-telp").focus();
+      return;
+    }
+    if (!hpSah(telpSp)) {
+      toast('No. HP "' + telpSp + '" tidak valid — isi satu nomor, 9 sampai 16 angka, mis. 0812xxxxxxx.', true);
+      if ($("sp-telp")) $("sp-telp").focus();
+      return;
+    }
+  }
   if (spManual(f) && !String(f.alasanMenyusul || "").trim()) {
     toast(f.tanpaPo
         ? "Alasan tanpa PO wajib diisi — itu yang dibaca Vonny saat mengecek SP ini."
@@ -19660,7 +19735,8 @@ window.__segar = {
   SEGAR: SEGAR, MUAT_DIAM: MUAT_DIAM, LANJUT: LANJUT, ALUR: ALUR,
   pindahTab: function(t){ pindahTab(t); }, tandaiBasi: function(t){ tandaiBasi(t); },
   muatUlangDiam: function(o){ return muatUlangDiam(o); },
-  panel: function(t){ var f = PANEL_LANJUT[t]; if (f) f(); else gambar(); }
+  panel: function(t){ var f = PANEL_LANJUT[t]; if (f) f(); else gambar(); },
+  mintaUbah: function(j, id){ formMintaUbah(j, id); }   /* #50: uji laci Minta ubah SP */
 };
 /* Kait sesi — gate yang sama: hanya localhost / file:. Tidak membuka apa
    pun yang tidak bisa dilihat dari console; gunanya supaya penjaga sesi
