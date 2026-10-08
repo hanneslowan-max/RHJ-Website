@@ -4586,6 +4586,18 @@ function adaFrasaProduk(q){
              .toLowerCase().replace(/\s+/g, " ").indexOf(t) > -1;
   });
 }
+/* #59 opsi B: usulan item yang SUDAH ada (mis. dari penawaran) dan cocok dengan ketikan — ditawarkan lagi di form PO/SP/
+   penawaran supaya barang yang sama tidak diusulkan dua kali; usulan dari penawaran baru masuk antrean pengesahan
+   setelah dipakai di PO/SP (berkas 127). usulkan_produk mengembalikan usulan yang sama untuk teks yang sama. */
+function cariUsulanAda(q){
+  var t = normalCari(q); if (t.length < 3) return [];
+  var kata = t.split(" ");
+  return PRODUK.filter(function(p){
+    if (!p.usulan || p.aktif === false) return false;
+    var idx = normalCari(p.usulan_teks || p.kode);
+    return kata.every(function(w){ return idx.indexOf(w) > -1; });
+  }).slice(0, 5);
+}
 function produkById(id){
   return PRODUK.filter(function(p){ return String(p.id) === String(id); })[0] || null;
 }
@@ -8553,8 +8565,10 @@ function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): ket
        ditampilkan LEBIH DULU di atas, dan tawarannya berdiri di bawah
        garis pemisah, jadi orang melihat "Gigi 4" sebelum memutuskan
        membuat yang baru. */
-    var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q));
-    if (!r.length && !tawaran) {
+    var usulAda = usulkan ? cariUsulanAda(q) : [];   /* #59 opsi B */
+    var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q)
+                   && !usulAda.some(function(p){ return normalCari(p.usulan_teks || p.kode) === normalCari(q); }));
+    if (!r.length && !tawaran && !usulAda.length) {
       var mati = q ? cariProdukNonaktif(q) : [];   /* #32: jelaskan, jangan diam */
       if (!mati.length) { box.hidden = true; return; }
       box.innerHTML = '<div class="cari-kosong">Produk yang cocok sudah <b>dinonaktifkan</b>: '
@@ -8566,6 +8580,11 @@ function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): ket
         return '<div class="cari-opsi" data-id="'+p.id+'"><b>'+esc(p.nama || p.kode)+'</b>'
           + '<span>'+esc(p.brand || "")+(p.kelompok ? ' · '+esc(p.kelompok) : '')+(p.kategori && p.kategori !== "Roda" ? ' · '+esc(p.kategori) : '')+'</span></div>'; }).join("")
       + (lebih ? '<div class="cari-kosong">+' + lebih + ' produk lain cocok — ketik lebih spesifik (mis. tambah ukuran atau fungsi).</div>' : '')
+      + usulAda.map(function(p, k){
+          return '<div class="cari-opsi cari-usul" data-usul-ada="' + k + '">'
+            + '<b>Pakai usulan yang sudah ada: "' + esc(p.usulan_teks || p.kode) + '"</b>'
+            + '<span>barang baru yang sudah pernah diusulkan, belum disahkan — dipakai lagi supaya tidak dobel</span></div>';
+        }).join("")
       + (tawaran
           ? '<div class="cari-opsi cari-usul" data-usul="1">'
             + '<b>+ Pakai "'+esc(q)+'" sebagai item baru</b>'
@@ -8577,6 +8596,10 @@ function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): ket
       d.addEventListener("mousedown", function(ev){
         ev.preventDefault();
         if (d.dataset.usul) { box.hidden = true; usulkan(q); return; }
+        if (d.dataset.usulAda !== undefined) {   /* #59 opsi B: teks usulan yang sama → usulkan_produk memakai usulan itu */
+          var ua = usulAda[Number(d.dataset.usulAda)];
+          box.hidden = true; if (ua) usulkan(ua.usulan_teks || ua.kode); return;
+        }
         pilih(r.filter(function(p){ return String(p.id) === d.dataset.id; })[0]);
       });
     });
@@ -10249,7 +10272,7 @@ function pasangPenawaran(){
       if (b.hargaAuto) { b.harga = ""; b.hargaAuto = false; }   /* tanpa price list: harga diketik sendiri */
       if (b.spesifikasi === b.spekAuto) { b.spesifikasi = ""; b.spekAuto = null; b.spekAsal = ""; }   /* spesifikasi barang sebelumnya */
       ulang();
-    }, "belum ada di master — diusulkan saat penawaran disimpan, lalu disahkan owner/GM/staff");
+    }, "belum ada di master — diusulkan saat penawaran disimpan; masuk antrean pengesahan owner/GM/staff begitu dipakai di PO/SP");
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-qty"), function(inp){
     inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].qty = n === null ? "" : n; ulang0(); });   /* #14 */
@@ -18464,7 +18487,7 @@ function blokUsulanProduk(){
   }
   if (!USULAN.baris.length) return '';
   var boleh = bolehUbahProduk();
-  var h = '<h3 class="sec" id="gm-usulan">Usulan item dari PO — ' + USULAN.baris.length + ' menunggu</h3>'
+  var h = '<h3 class="sec" id="gm-usulan">Usulan item dari PO/SP — ' + USULAN.baris.length + ' menunggu</h3>'
     + '<div class="flag"><span class="f-ico">!</span><div>'
     + '<b>Item ini dipakai di PO tapi belum ada di master.</b> Selama belum disahkan ia tidak '
     + 'boleh punya price list, jadi komisinya tidak bisa dihitung dan Surat Pesanan yang '
@@ -18472,6 +18495,7 @@ function blokUsulanProduk(){
     + 'Periksa dulu apakah barangnya memang belum ada di master — kalau ternyata sudah ada '
     + 'dengan nama lain, sahkan memakai <b>kode internal RHJ yang sudah dipakai</b>, jangan '
     + 'nama tulisan customer.'
+    + '<br>Barang baru yang diusulkan dari <b>penawaran</b> baru tampil di sini setelah dipakai di PO/SP (#59).'
     + (boleh ? '' : '<br><br>Peran Anda hanya bisa melihat. Yang boleh memutuskan: owner, GM, staff.')
     + '</div></div>'
     + '<div class="tw"><table><thead><tr><th class="l">Tulisan di PO</th><th class="l">Customer</th>'
