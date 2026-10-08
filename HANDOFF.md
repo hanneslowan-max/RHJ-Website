@@ -53,6 +53,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   menahan hanya SP pengaju harga khusus; trigger baru `so_a_dibuat_kini` & `so_zz_flat_gm_gugur` (sales_orders),
   `customers_hp_baku`; fungsi `harga_list_pada()`. Tidak menyentuh `putuskan_ubah`, `komisi_hitung`,
   `jaga_gerbang_komisi`, objek EHC. **#54: selalu bangun dari definisi DEV terbaru** (`pg_get_viewdef`/`functiondef`).
+  **133/134** (sudah di DEV): `so_a_tanggal_kini` — tanggal & no_sp SP hanya owner/GM; `so_jaga_pelanggan` —
+  customer_id/po_id SP hanya lewat `tautkan_po_sp` (bila sesi ini membuat ulang `tautkan_po_sp`, bawa bendera
+  `rhj.tautkan_po` + batas "sales hanya SP miliknya"). **Tahap komisi:** `ajukan_klaim_komisi` masih memakai
+  `current_date` (ikut TimeZone sesi, bisa diatur klien lewat header `Prefer: timezone`) → ganti `hari_ini_wib()`
+  (objek 140 sudah memakai `hari_ini_wib()`). **#8 (menunggu Hannes):** bila dipilih "bekukan pelanggan patokan harga
+  khusus saat SP dibuat", itu perubahan `so_baris_hitung` di area sesi ini.
 - **#57 (8 Okt, sesi 50–61, `db/126`, sudah di DEV):** kolom tampilan set di `sales_order_lines` (`set_grup`,
   `set_nama`, `set_qty`, `set_isi`; CHECK `sol_set_lengkap`; tidak dipakai komisi/gerbang/kirim/batal). `putuskan_ubah`
   **tidak** diubah; sebagai gantinya trigger `sol_set_usul` (BEFORE INSERT, `isi_set_baris_usul()`) mengisi kolom set
@@ -133,8 +139,8 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   saat merge; kas & laporan belum terdaftar di MUAT_DIAM (lihat HANDOFF branch itu, "Catatan #52 untuk sesi lain").
 - **Menunggu keputusan Hannes:** (1) isian nominal di HP — titik jadi koma desimal (#45), usul tampilkan
   "terbaca: Rp …"; (2) EHC SP Office/cabang/sales nonaktif tidak pernah tertutup (tahap 4); (3) #54 butuh mekanisme
-  "persen tetap" karena EHC bagian dari harga (tahap 5); (4) di luar lingkup: sales bisa mengganti `customer_id` SP
-  lewat REST (melanggar #37).
+  "persen tetap" karena EHC bagian dari harga (tahap 5); (4) ~~sales bisa mengganti `customer_id` SP lewat REST~~ —
+  **selesai oleh `db/134`** sesi 50–61 (trigger `so_jaga_pelanggan`).
 - Tahap berikut yang diusulkan: 3 (periode & pemeriksaan GM) sebelum 2 (kartu kredit), lalu 4, 5, 6.
 
 ## Status
