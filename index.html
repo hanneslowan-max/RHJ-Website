@@ -3738,7 +3738,9 @@ var MUAT_DIAM = {
          muat: function(){ return muatCrm(true); }, gambar: function(){ panelCrm(); } },
   pelanggan: { boleh: function(){ var P = LANJUT.pelanggan; return P.dimuat && !P.memuat && !P.lihatLain; },
                kunci: function(){ var P = LANJUT.pelanggan; return plKunci() + "|" + P.hal + "|" + P.per + "|" + P.urut + "|" + JSON.stringify(P.urutKol || null); },
-               muat: function(){ return muatPelanggan(); }, gambar: function(){ panelPelangganTab(); } },
+               muat: function(){   /* #58: tampilan grup ikut ditarik ulang */
+                 return LANJUT.pelanggan.lihatGrup ? Promise.all([muatPelanggan(), muatGrup(true)]) : muatPelanggan(); },
+               gambar: function(){ panelPelangganTab(); } },
   khusus: { boleh: function(){ var K = LANJUT.khusus; return K.dimuat && !K.memuat; },
             kunci: function(){ return String(LANJUT.khusus.status || ""); },
             muat: function(){ return muatKhusus(); }, gambar: function(){ panelKhusus(); } },
@@ -8486,6 +8488,8 @@ var GALAT_BERKAS = [
     berkas:"38-schema-massal-tanggal-sama.sql" },
   { pola:/quotes(_\d+)?\.(up|email|top)\b|quote_lines(_\d+)?\.diskon|customers(_\d+)?\.email|'email' column of 'customers'|'(up|email|top)' column of 'quotes'|'(diskon|diskon_tipe)' column of 'quote_lines'|quotes_jaga_top|quote_lines_diskon/i,   /* #60 */
     berkas:"129-penawaran-up-email-top-diskon.sql" },
+  { pola:/quotes(_\d+)?\.kepada_grup|'kepada_grup' column of 'quotes'|customer_groups|daftar_grup_pelanggan|simpan_grup_pelanggan|atur_anggota_grup|customers(_\d+)?\.grup_id/i,   /* #58 */
+    berkas:"132-grup-pelanggan.sql" },
   { pola:/sales_order_lines(_\d+)?\.set_(grup|nama|qty|isi)|'set_(grup|nama|qty|isi)' column of 'sales_order_lines'|sol_set_lengkap/i,   /* #57: penanda set di SP (embed PostgREST: sales_order_lines_1.…) */
     berkas:"126-set-di-sp.sql" },
   { pola:/pilihan_tipe_roda|quote_lines\.set_komponen|set_inline|label_set_inline/i,   /* #28 (sebelum pola 94: "set_komponen") */
@@ -9132,15 +9136,19 @@ function pasangHalamanPelanggan(el){
    hanya mengembalikan nama, cabang, industri, dan nama sales pemegang (tanpa HP/alamat/PIC/transaksi).
    RLS customers tidak berubah: pelanggan itu tetap tidak bisa dipakai di PO/penawaran/SP. */
 function pilihanTampilPelanggan(P){
-  if (!peranSales()) return "";
+  /* #58 (berkas 132): "Grup pelanggan" untuk semua peran; #49: "Pelanggan sales lain" untuk sales */
+  var utama = !P.lihatLain && !P.lihatGrup;
   return '<div class="baris-alat" style="margin-bottom:12px">'
-    + '<button class="btn' + (P.lihatLain ? '' : ' utama') + '" id="pl-tampil-saya" type="button">Pelanggan saya</button>'
-    + '<button class="btn' + (P.lihatLain ? ' utama' : '') + '" id="pl-tampil-lain" type="button">Pelanggan sales lain <span class="muted">(lihat saja)</span></button>'
+    + '<button class="btn' + (utama ? ' utama' : '') + '" id="pl-tampil-saya" type="button">' + (peranSales() ? 'Pelanggan saya' : 'Pelanggan') + '</button>'
+    + (peranSales() ? '<button class="btn' + (P.lihatLain ? ' utama' : '') + '" id="pl-tampil-lain" type="button">Pelanggan sales lain <span class="muted">(lihat saja)</span></button>' : '')
+    + '<button class="btn' + (P.lihatGrup ? ' utama' : '') + '" id="pl-tampil-grup" type="button">Grup pelanggan</button>'
     + '</div>';
 }
 function pasangPilihanTampilPelanggan(P){
-  if ($("pl-tampil-saya")) $("pl-tampil-saya").addEventListener("click", function(){ P.lihatLain = false; panelPelangganTab(); });
-  if ($("pl-tampil-lain")) $("pl-tampil-lain").addEventListener("click", function(){ P.lihatLain = true; panelPelangganTab(); });
+  if ($("pl-tampil-saya")) $("pl-tampil-saya").addEventListener("click", function(){ P.lihatLain = false; P.lihatGrup = false; panelPelangganTab(); });
+  if ($("pl-tampil-lain")) $("pl-tampil-lain").addEventListener("click", function(){ P.lihatLain = true; P.lihatGrup = false; panelPelangganTab(); });
+  if ($("pl-tampil-grup")) $("pl-tampil-grup").addEventListener("click", function(){
+    P.lihatGrup = true; P.lihatLain = false; GRUP.baris = null; panelPelangganTab(); });   /* selalu ditarik segar */
 }
 function panelPelangganLain(){
   var el = $("p-pelanggan"), P = LANJUT.pelanggan, L = P.lain || (P.lain = { cari:"", hal:0, per:50, baris:null, total:0, memuat:false, galat:"" });
@@ -9190,8 +9198,183 @@ function panelPelangganLain(){
   });
   if (L.baris && !L.galat) gambarIsi(); else muat();
 }
+/* ═══════════════════════════════════════════════════════════════════════
+   #58 (berkas 132) · GRUP PELANGGAN
+   Beberapa PT/divisi satu grup (mis. Garuda Metalindo) yang dipegang sales berbeda. Pemegang tiap anggota TIDAK
+   berubah. Semua peran baca melihat grup, anggota, dan sales pemegangnya (tanpa harga — sama dengan #49); owner/GM
+   mengatur grup & anggotanya dan melihat penjualan/piutang per anggota & per grup. Penawaran ke anggota boleh
+   ditujukan "<induk> — Divisi <pelanggan>" tetapi tetap tercatat milik pelanggan divisi itu.
+   ═══════════════════════════════════════════════════════════════════════ */
+var GRUP = { baris:null, memuat:null, galat:"", tidakAda:false, peta:{} };
+function muatGrup(paksa){
+  if (GRUP.tidakAda) return Promise.resolve([]);
+  if (GRUP.memuat && !paksa) return GRUP.memuat;
+  if (GRUP.baris && !paksa) return Promise.resolve(GRUP.baris);
+  var j = GRUP.memuat = api("POST", "/rpc/daftar_grup_pelanggan", {})
+    .then(function(r){
+      if (GRUP.memuat !== j) return GRUP.baris || [];   /* jawaban lama — yang terbaru yang dipakai */
+      GRUP.baris = Array.isArray(r) ? r : []; GRUP.galat = ""; GRUP.memuat = null;
+      var peta = {};
+      GRUP.baris.forEach(function(g){ (g.anggota || []).forEach(function(a){ peta[a.customer_id] = g; }); });
+      GRUP.peta = peta;
+      return GRUP.baris;
+    }, function(e){
+      if (GRUP.memuat === j) GRUP.memuat = null;
+      if (rpcBelumAda(e)) { GRUP.tidakAda = true; GRUP.baris = []; GRUP.peta = {}; return []; }   /* DB tanpa berkas 132 */
+      GRUP.galat = (e && e.message) || String(e);
+      throw e;
+    });
+  return j;
+}
+function grupPelanggan(custId){ return (custId === null || custId === undefined) ? null : (GRUP.peta[custId] || null); }
+function kunciNamaFe(s){
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(pt|cv|ud|pd|tb|tbk|toko)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+}
+function indukGrup(g){ return String(g.nama_dokumen || "").trim() || String(g.nama || "").trim(); }
+/* = judul_grup_pelanggan (berkas 132) — untuk pratinjau; judul yang tersimpan dihitung database */
+function judulGrupFe(custId){
+  var g = grupPelanggan(custId); if (!g) return null;
+  var a = (g.anggota || []).filter(function(x){ return String(x.customer_id) === String(custId); })[0];
+  if (!a) return null;
+  var induk = indukGrup(g);
+  if (kunciNamaFe(induk) === kunciNamaFe(a.nama)) return null;   /* pelanggan induknya sendiri */
+  return induk + " — Divisi " + String(a.nama).replace(/^(PT|CV|UD|PD|TB|Toko|Koperasi|Yayasan)\.?\s+/i, "").trim();
+}
+function anggotaGrupHtml(g, custId){
+  return (g.anggota || []).map(function(a){
+    var ini = String(a.customer_id) === String(custId);
+    return (ini ? '<b>' : '') + esc(a.nama) + (ini ? '</b>' : '')
+      + ' <span class="muted">(' + esc(a.sales_nama || "belum bertuan") + ')</span>';
+  }).join(", ");
+}
+function kartuGrupHtml(g){
+  var own = setaraOwner(), ang = g.anggota || [];
+  var tot = { sp:0, jual:0, tahun:0, piutang:0 };
+  ang.forEach(function(a){ tot.sp += Number(a.jumlah_sp) || 0; tot.jual += Number(a.penjualan) || 0;
+                           tot.tahun += Number(a.penjualan_tahun_ini) || 0; tot.piutang += Number(a.piutang) || 0; });
+  var contoh = ang.filter(function(a){ return kunciNamaFe(a.nama) !== kunciNamaFe(indukGrup(g)); })[0];
+  return '<div class="kartu-grup" data-grup="' + g.id + '" style="margin-top:16px">'
+    + '<div class="baris-alat" style="justify-content:space-between;align-items:center">'
+    +   '<h3 class="sec" style="margin:0">' + esc(g.nama) + ' <span class="muted" style="font-weight:400">· ' + ang.length + ' anggota</span></h3>'
+    +   (own ? '<span><button class="btn kecil" type="button" data-grup-ubah="' + g.id + '">Ubah</button> '
+              + '<button class="btn kecil" type="button" data-grup-tambah="' + g.id + '">+ Anggota</button></span>' : '')
+    + '</div>'
+    + '<p class="muted" style="margin:4px 0 8px;font-size:12px">Di dokumen penawaran: <b>' + esc(indukGrup(g)) + '</b>'
+    +   (contoh ? ' — mis. “' + esc(indukGrup(g)) + ' — Divisi ' + esc(String(contoh.nama).replace(/^(PT|CV|UD|PD|TB|Toko|Koperasi|Yayasan)\.?\s+/i, "")) + '”' : '')
+    +   (g.catatan ? '<br>' + esc(g.catatan) : '') + '</p>'
+    + (ang.length
+        ? '<div class="tw"><table><thead><tr><th class="l">Anggota</th><th class="l">Cabang</th><th class="l">Sales pemegang</th>'
+          + (own ? '<th>SP</th><th class="r">Penjualan</th><th class="r">Tahun ini</th><th class="r">Piutang</th><th></th>' : '')
+          + '</tr></thead><tbody>'
+          + ang.map(function(a){
+              return '<tr' + (a.milik_saya ? ' style="background:var(--teal-muda,#eef7f6)"' : '') + '>'
+                + '<td class="l">' + esc(a.nama) + (a.milik_saya ? ' <span class="pill p-lunas">pelanggan Anda</span>' : '') + '</td>'
+                + '<td class="l">' + (a.cabang ? esc(a.cabang) : '<span class="muted">—</span>') + '</td>'
+                + '<td class="l">' + (a.sales_nama ? esc(a.sales_nama) : '<span class="muted">belum bertuan</span>') + '</td>'
+                + (own ? '<td>' + (Number(a.jumlah_sp) || 0) + '</td><td class="r">' + rp(a.penjualan) + '</td>'
+                       + '<td class="r">' + rp(a.penjualan_tahun_ini) + '</td><td class="r">' + rp(a.piutang) + '</td>'
+                       + '<td><button class="btn kecil bahaya" type="button" data-grup-keluar="' + a.customer_id + '" data-grup-nama="'
+                       + esc(a.nama) + '">Keluarkan</button></td>' : '')
+                + '</tr>';
+            }).join("")
+          + (own ? '<tr style="font-weight:600"><td class="l" colspan="3">Total grup</td><td>' + tot.sp + '</td><td class="r">'
+                   + rp(tot.jual) + '</td><td class="r">' + rp(tot.tahun) + '</td><td class="r">' + rp(tot.piutang) + '</td><td></td></tr>' : '')
+          + '</tbody></table></div>'
+        : '<p class="muted">Belum ada anggota.</p>')
+    + '</div>';
+}
+function panelGrupPelanggan(){
+  var el = $("p-pelanggan"), P = LANJUT.pelanggan, own = setaraOwner();
+  $("head-aksi").innerHTML = (own && !GRUP.tidakAda) ? '<button class="btn utama" id="btn-grup-baru" type="button">+ Grup baru</button>' : '';
+  if ($("btn-grup-baru")) $("btn-grup-baru").addEventListener("click", function(){ formGrupPelanggan(null); });
+  var h = pilihanTampilPelanggan(P);
+  if (!GRUP.baris && !GRUP.tidakAda) {
+    el.innerHTML = h + kotakMuat("Memuat grup pelanggan…");
+    pasangPilihanTampilPelanggan(P);
+    muatGrup().then(function(){ if (P.lihatGrup && tabAktif === "pelanggan") panelGrupPelanggan(); })
+      .catch(function(e){ if (P.lihatGrup) { el.innerHTML = pilihanTampilPelanggan(P) + kotakGalat(e); pasangPilihanTampilPelanggan(P); } });
+    return;
+  }
+  if (GRUP.tidakAda) h += kosong("Grup pelanggan belum aktif di database ini — jalankan berkas db/132-grup-pelanggan.sql.");
+  else if (!GRUP.baris.length) h += kosong(own ? "Belum ada grup pelanggan. Buat dengan tombol “+ Grup baru”." : "Belum ada grup pelanggan.");
+  else h += GRUP.baris.map(kartuGrupHtml).join("");
+  h += kotakGerbang('<b>Grup pelanggan menyatukan PT/divisi satu grup yang dipegang sales berbeda.</b> '
+    + 'Pemegang tiap anggota tidak berubah — PO tetap dikirim tiap divisi, dan komisi, harga khusus, serta piutang '
+    + 'tetap milik pelanggan divisi itu. Penawaran ke anggota boleh ditujukan “induk — Divisi …”. '
+    + 'Semua peran melihat anggota & sales pemegangnya (tanpa harga); hanya owner/GM yang mengatur grup dan melihat angkanya.');
+  el.innerHTML = h;
+  pasangPilihanTampilPelanggan(P);
+  Array.prototype.forEach.call(el.querySelectorAll("[data-grup-ubah]"), function(b){
+    b.addEventListener("click", function(){ formGrupPelanggan(GRUP.baris.filter(function(g){ return String(g.id) === b.dataset.grupUbah; })[0] || null); });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-grup-tambah]"), function(b){
+    b.addEventListener("click", function(){ formTambahAnggotaGrup(GRUP.baris.filter(function(g){ return String(g.id) === b.dataset.grupTambah; })[0]); });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-grup-keluar]"), function(b){
+    b.addEventListener("click", function(){
+      if (!confirm("Keluarkan " + b.dataset.grupNama + " dari grupnya? Pemegang & datanya tidak berubah.")) return;
+      sibuk(true);
+      api("POST", "/rpc/atur_anggota_grup", { p_customer: Number(b.dataset.grupKeluar), p_grup: null })
+        .then(function(){ toast(b.dataset.grupNama + " dikeluarkan dari grup."); return muatGrup(true); })
+        .then(function(){ panelGrupPelanggan(); })
+        .catch(function(e){ toast(e.message, true); })
+        .then(function(){ sibuk(false); });
+    });
+  });
+}
+function formGrupPelanggan(g){
+  var baru = !g;
+  $("laci-form").innerHTML =
+      field({ nama:"gp_nama", label:"Nama grup", nilai: g ? g.nama : "", wajib:true, bantu:"mis. Garuda Metalindo Group" })
+    + field({ nama:"gp_dok", label:"Nama induk di dokumen penawaran", nilai: g ? (g.nama_dokumen || "") : "",
+              bantu:"mis. PT Garuda Metalindo → dokumen bertuliskan “PT Garuda Metalindo — Divisi Indo Kida Plating”. Kosong = memakai nama grup." })
+    + field({ nama:"gp_catatan", label:"Catatan", jenis:"textarea", nilai: g ? (g.catatan || "") : "" });
+  $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-gp-simpan" type="button">' + (baru ? "Buat grup" : "Simpan") + '</button>';
+  bukaLaci(baru ? "Grup pelanggan baru" : "Ubah grup — " + g.nama);
+  $("btn-gp-simpan").addEventListener("click", function(){
+    var nama = String(nilaiForm("gp_nama") || "").trim();
+    if (nama.length < 2) { tampilPesan("Nama grup wajib diisi."); return; }
+    sibuk(true);
+    api("POST", "/rpc/simpan_grup_pelanggan", { p_id: g ? g.id : null, p_nama: nama,
+         p_nama_dokumen: nilaiForm("gp_dok") || null, p_catatan: nilaiForm("gp_catatan") || null })
+      .then(function(){ tutupLaci(); toast(baru ? "Grup dibuat." : "Grup disimpan."); return muatGrup(true); })
+      .then(function(){ if (LANJUT.pelanggan.lihatGrup) panelGrupPelanggan(); })
+      .catch(function(e){ tampilPesan(esc(e.message)); })
+      .then(function(){ sibuk(false); });
+  });
+}
+function formTambahAnggotaGrup(g){
+  if (!g) return;
+  $("laci-form").innerHTML = '<p class="muted" style="margin:0 0 10px">Pilih pelanggan yang masuk grup <b>' + esc(g.nama)
+    + '</b>. Sales pemegangnya tidak berubah.</p>'
+    + medanAlur("Pelanggan", '<input type="text" id="ga-cari" placeholder="ketik nama perusahaan…" autocomplete="off">'
+               + '<div id="ga-cari-hasil" class="cari-hasil" hidden></div>');
+  $("laci-kaki").innerHTML = "";
+  bukaLaci("Tambah anggota — " + g.nama);
+  pasangCariPelanggan("ga-cari", "ga-cari-hasil", function(c){
+    var lain = grupPelanggan(c.id);
+    if (lain && String(lain.id) !== String(g.id)) { tampilPesan(esc(c.nama) + " sudah anggota grup “" + esc(lain.nama) + "” — keluarkan dulu dari grup itu."); return; }
+    sibuk(true);
+    api("POST", "/rpc/atur_anggota_grup", { p_customer: c.id, p_grup: g.id })
+      .then(function(){ tutupLaci(); toast(c.nama + " masuk grup " + g.nama + "."); return muatGrup(true); })
+      .then(function(){ if (LANJUT.pelanggan.lihatGrup) panelGrupPelanggan(); })
+      .catch(function(e){ tampilPesan(esc(e.message)); })
+      .then(function(){ sibuk(false); });
+  }, { rep: function(){ return null; }, bolehBaru: false, tampilSales: true });
+}
+/* Info grup untuk satu pelanggan (laci pelanggan, form penawaran). */
+function infoGrupHtml(custId, judulTambahan){
+  var g = grupPelanggan(custId);
+  if (!g) return "";
+  return '<div class="flag" style="margin-top:8px"><span class="f-ico">⛭</span><div><b>Anggota grup ' + esc(g.nama) + '.</b> '
+    + 'Anggota: ' + anggotaGrupHtml(g, custId) + '.'
+    + (judulTambahan || "") + '</div></div>';
+}
+
 function panelPelangganTab(){
   var el = $("p-pelanggan"), P = LANJUT.pelanggan;
+  if (P.lihatGrup) { panelGrupPelanggan(); return; }   /* #58 */
   if (peranSales() && P.lihatLain) { panelPelangganLain(); return; }   /* #49 */
   if (!P.dimuat && !P.memuat) {
     el.innerHTML = kotakMuat("Memuat pelanggan…");
@@ -9465,10 +9648,15 @@ function formPelangganTab(c){
 
   if (!baru) h += '<h3 class="sec">Riwayat lead</h3><div id="plc-lead" class="muted">Memuat…</div>';
 
+  if (!baru) h = '<div id="plc-grup">' + infoGrupHtml(c.id) + '</div>' + h;   /* #58 (berkas 132) */
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = kunci ? ""
     : '<button class="btn utama" id="btn-plc-simpan" type="button">Simpan</button>';
   bukaLaci(baru ? "Pelanggan baru" : "Pelanggan — " + c.nama);
+  if (!baru && !GRUP.baris && !GRUP.tidakAda) {   /* #58: data grup belum dimuat → tambal kotaknya sesudah datang */
+    var kotakGrup = $("plc-grup");
+    muatGrup().then(function(){ if (kotakGrup && kotakGrup.isConnected) kotakGrup.innerHTML = infoGrupHtml(c.id); }).catch(function(){});
+  }
 
   if (!kunci) $("btn-plc-simpan").addEventListener("click", function(){ simpanPelangganTab(c, baru); });
   if (!kunci) pasangPratinjauNama("plc_nama");   /* #20 */
@@ -9584,7 +9772,7 @@ function pnwFormBaru(repTetap){
   return { customer_id:null, customer_rep:null, sales_rep_id: repTetap || null, baru:null,
            kepada:"", tanggal:new Date().toISOString().slice(0,10), mode_ppn:"exclude",
            berlaku_hari:"", catatan:"", baris:[pnwBarisBaru()],  /* #5: masa berlaku default KOSONG (tanpa batas), tidak auto-14 */
-           up:"", email:"", top:"", topLain:"", upAuto:"", emailAuto:"" };   /* #60 */
+           up:"", email:"", top:"", topLain:"", upAuto:"", emailAuto:"", keGrup:false };   /* #60; #58 */
 }
 /* #60 (berkas 129): nilai baris penawaran SESUDAH diskon (Rp/%) — dihitung bulat dalam 1/10.000 Rp seperti baris PO
    (poNilaiBaris1e4), tanpa pembulatan; diskon 0 = qty × harga persis seperti dulu. */
@@ -9649,7 +9837,7 @@ function masaPenawaran(q){
   return { tanpaBatas:false, habis: b < new Date(), sampai: b.toISOString().slice(0,10) };
 }
 /* Kolom yang diminta untuk daftar, pencarian (#44), dan laci detail. */
-var PNW_SELECT = "id,nomor,tanggal,berlaku_hari,kepada,catatan,customer_id,sales_rep_id,lead_id,mode_ppn,up,email,top,"   /* #42; #60 */
+var PNW_SELECT = "id,nomor,tanggal,berlaku_hari,kepada,catatan,customer_id,sales_rep_id,lead_id,mode_ppn,up,email,top,kepada_grup,"   /* #42; #60; #58 */
   + "customers(nama,hp,sales_rep_id),quote_lines(id,urut,product_id,set_id,set_komponen,deskripsi,spesifikasi,qty,satuan,harga,harga_list,diskon,diskon_tipe)";   /* #28 #47 #60 */
 
 function muatPenawaran(){
@@ -10272,7 +10460,27 @@ function pnwKotakPelanggan(f){
   return medanAlur("Perusahaan <em>ketik untuk mencari — atau tambah pelanggan baru</em>",
       '<input type="text" id="pnw-cust" value="' + esc(f.kepada) + '" placeholder="ketik nama perusahaan…" autocomplete="off">'
       + '<div id="pnw-cust-hasil" class="cari-hasil" hidden></div>')
-    + ket;
+    + ket + '<div id="pnw-grup">' + pnwGrupHtml(f) + '</div>';   /* #58 */
+}
+/* #58 (berkas 132): pelanggan anggota grup → anggota lain & pemegangnya (supaya tidak ada dua penawaran berbeda ke grup
+   yang sama), dan pilihan menujukan dokumen ke "<induk> — Divisi <pelanggan>" (tetap tercatat milik pelanggan ini). */
+function pnwGrupHtml(f){
+  if (!f.customer_id || !grupPelanggan(f.customer_id)) return "";
+  var judul = judulGrupFe(f.customer_id);
+  return infoGrupHtml(f.customer_id, judul
+    ? '<label style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;font-weight:400">'
+      + '<input type="checkbox" id="pnw-ke-grup"' + (f.keGrup ? ' checked' : '') + '>'
+      + '<span>Tujukan dokumen ke <b>' + esc(judul) + '</b> — penawaran tetap tercatat milik ' + esc(f.kepada || "pelanggan ini")
+      + ' (sales, komisi, harga khusus, piutang tidak berubah).</span></label>'
+    : '<br><span class="muted">Pelanggan ini induk grupnya — dokumen ditujukan ke namanya sendiri.</span>');
+}
+function pasangPnwGrup(f){
+  var cb = $("pnw-ke-grup");
+  if (cb) cb.addEventListener("change", function(){ f.keGrup = cb.checked; });
+}
+function segarkanPnwGrup(f){
+  var box = $("pnw-grup"); if (!box) return;
+  box.innerHTML = pnwGrupHtml(f); pasangPnwGrup(f);
 }
 
 function pnwBarisHtml(f){
@@ -10393,11 +10601,14 @@ function pasangPenawaran(){
       toast("Pelanggan " + f.kepada + " dipegang sales " + (namaRepAlur(f.customer_rep) || "lain")
         + " — pilih pelanggan milik sales yang diwakili.", true);
       f.customer_id = null; f.customer_rep = null; f.kepada = "";
-      lepasKontakPnw(f);   /* #60 review */
+      lepasKontakPnw(f); f.keGrup = false;   /* #60 review; #58 */
     }
     segarkanSpekPenawaran(f);   /* #40 */
     ulang();
   });
+  pasangPnwGrup(f);   /* #58 */
+  if (f.customer_id && !GRUP.baris && !GRUP.tidakAda)
+    muatGrup().then(function(){ if (LANJUT.penawaran.form === f) segarkanPnwGrup(f); }).catch(function(){});
   if (f.baru) {   /* #41 */
     $("pnw-baru-nama").addEventListener("input", function(){ f.baru.nama = this.value; f.kepada = this.value; });
     $("pnw-baru-hp").addEventListener("input", function(){ f.baru.hp = this.value; });
@@ -10406,7 +10617,7 @@ function pasangPenawaran(){
   } else {
     $("pnw-cust").addEventListener("input", function(){
       f.kepada = this.value;
-      if (f.customer_id) lepasKontakPnw(f);   /* #60 review: kontak otomatis pelanggan yang dilepas */
+      if (f.customer_id) { lepasKontakPnw(f); f.keGrup = false; f.customer_id = null; segarkanPnwGrup(f); }   /* #60 review; #58 */
       f.customer_id = null; f.customer_rep = null;
     });
     pasangCariPelanggan("pnw-cust", "pnw-cust-hasil", function(c){
@@ -10419,15 +10630,18 @@ function pasangPenawaran(){
         segarkanSpekPenawaran(f);   /* #40 */
       }
       if (c.blacklist) toast("Perhatian: " + c.nama + " ada di daftar hitam.", true);
+      f.keGrup = false;   /* #58: dipilih ulang per pelanggan */
       ulang();
       isiKontakPnw(f, c.id);   /* #60: UP & e-mail dari data pelanggan */
+      if (!GRUP.baris && !GRUP.tidakAda)   /* #58 */
+        muatGrup().then(function(){ if (LANJUT.penawaran.form === f && String(f.customer_id) === String(c.id)) segarkanPnwGrup(f); }).catch(function(){});
     }, {
       rep: function(){ return peranSales() ? null : f.sales_rep_id; },   /* #11 + #4 */
       bolehBaru: false,
       tampilSales: true,
       tawarBaru: function(q){   /* #41 */
         f.baru = { nama: q, hp: "", lokasi: "" }; f.customer_id = null; f.customer_rep = null; f.kepada = q;
-        lepasKontakPnw(f);   /* #60 review */
+        lepasKontakPnw(f); f.keGrup = false;   /* #60 review; #58 */
         ulang();
         if ($("pnw-baru-hp")) $("pnw-baru-hp").focus();
       },
@@ -10695,12 +10909,17 @@ function gambarPratinjauPenawaran(f, cek, kepada){
   /* #60 review: kepala (UP, e-mail, TOP) dibekukan saat pratinjau digambar — sama dengan barisnya (cek.isi). Dulu
      isian otomatis UP/e-mail yang datang sesudah pratinjau tampil ikut tersimpan tanpa pernah terlihat. */
   var kepala = { up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f) };
+  /* #58: ditujukan ke grup (judul dihitung ulang database saat simpan) */
+  kepala.judulGrup = (!f.baru && f.keGrup) ? judulGrupFe(f.customer_id) : null;
+  kepala.keGrup = !!kepala.judulGrup;
   $("laci-form").innerHTML = '<div class="flag" style="margin-bottom:10px"><span class="f-ico">i</span><div>'
     + 'Periksa sekali lagi sebelum disimpan. Nomor penawaran diberikan database saat disimpan.'
     + (f.baru ? ' <b>' + esc(kepada) + '</b> ikut disimpan sebagai pelanggan baru (HP ' + esc(hpTampil(hpNormal(f.baru.hp)))
         + ', sales PIC ' + esc(namaSalesPnw(f) || "—") + ').' : '')
     + '</div></div>'
-    + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: kepada,
+    + (kepala.keGrup ? '<p class="muted" style="margin:-4px 0 8px;font-size:12px">Ditujukan ke grup — tercatat milik <b>'
+        + esc(kepada) + '</b>.</p>' : '')
+    + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: kepala.judulGrup || kepada,
         alamat: f.baru ? String(f.baru.lokasi).trim() : "", sales: namaSalesPnw(f), berlaku_hari: f.berlaku_hari,
         mode_ppn: f.mode_ppn, catatan: String(f.catatan || "").trim(),
         up: kepala.up, email: kepala.email, top: kepala.top,   /* #60 */
@@ -10716,7 +10935,8 @@ function simpanPenawaran(isi, kepala){
   var f = LANJUT.penawaran.form;
   if (!isi) { var cek = periksaPenawaran(f); if (cek.salah) { toast(cek.salah, true); return; } isi = cek.isi; }
   /* #60 review: yang disimpan = yang tampil di pratinjau */
-  kepala = kepala || { up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f) };
+  kepala = kepala || { up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f),
+                       keGrup: !!(!f.baru && f.keGrup && judulGrupFe(f.customer_id)) };
 
   /* Satu panggilan: (pelanggan baru +) nomor + kepala + baris dalam satu transaksi database
      (berkas 87/109). Gagal di tengah = tidak ada yang tersimpan, nomor tidak
@@ -10734,6 +10954,7 @@ function simpanPenawaran(isi, kepala){
       mode_ppn: f.mode_ppn || "exclude",   /* #42 */
       up: kepala.up || null, email: kepala.email || null,   /* #60 (berkas 129) */
       top: kepala.top,
+      ke_grup: kepala.keGrup ? true : undefined,   /* #58 (berkas 132): judulnya dihitung database */
       pelanggan_baru: f.baru ? { nama: String(f.baru.nama).trim(), hp: hpNormal(f.baru.hp), lokasi: String(f.baru.lokasi).trim() } : null,   /* #41 */
       sales_rep_id: peranSales() ? null : f.sales_rep_id   /* #11: sales = dirinya, diisi database */
     },
@@ -10805,6 +11026,7 @@ function pnwDaftarHtml(){
          return '<tr class="baris-klik" data-pnw-detail="' + q.id + '" tabindex="0">'
            + '<td class="l">' + esc(q.nomor) + '</td><td>' + td(q.tanggal) + '</td>'
            + '<td class="l">' + esc(namaPenawaran(q))   /* #47 */
+           +   (q.kepada_grup ? '<div class="muted" style="font-size:11.5px">→ ' + esc(q.kepada_grup) + '</div>' : '')   /* #58 */
            +   (cat ? '<div class="muted" style="font-size:11.5px">✎ ' + esc(cat.length > 80 ? cat.slice(0, 80) + "…" : cat) + '</div>' : '')
            + '</td>'
            + (kolSales ? '<td class="l">' + (q.sales_rep_id ? esc(namaRepAlur(q.sales_rep_id) || ("#" + q.sales_rep_id))
@@ -10868,7 +11090,9 @@ function formDetailPenawaran(q){
            m.tanpaBatas ? "tidak kedaluwarsa" : (q.berlaku_hari + " hari dari " + tglTampil(q.tanggal)),
            m.habis ? "alert" : "")
     + '</div>';
-  h += docPenawaranHtml({ nomor: q.nomor, tanggal: q.tanggal, kepada: namaPenawaran(q), alamat: "",
+  if (q.kepada_grup) h += '<p class="muted" style="margin:0 0 8px;font-size:12px">Ditujukan ke grup — tercatat milik <b>'
+    + esc(namaPenawaran(q)) + '</b>.</p>';   /* #58 */
+  h += docPenawaranHtml({ nomor: q.nomor, tanggal: q.tanggal, kepada: q.kepada_grup || namaPenawaran(q), alamat: "",
     sales: q.sales_rep_id ? (namaRepAlur(q.sales_rep_id) || ("#" + q.sales_rep_id)) : "—",
     berlaku_hari: q.berlaku_hari, mode_ppn: q.mode_ppn || "exclude", catatan: q.catatan,
     up: q.up || "", email: q.email || "", top: q.top || "",   /* #60 */
@@ -10911,6 +11135,7 @@ function salinPenawaran(q){
     /* #60 review: salinan = isian otomatis (bukan ketikan) — perusahaan diganti → diganti kontak pelanggan barunya
        (dulu kontak PT A ikut ke penawaran & data PT B) */
     f.upAuto = f.up; f.emailAuto = f.email;
+    f.keGrup = !!q.kepada_grup;   /* #58: dicek ulang saat pratinjau (masih anggota grup?) */
     if (q.top && TOP_PILIHAN.indexOf(q.top) < 0) { f.top = "Lainnya"; f.topLain = q.top; } else f.top = q.top || "";
     f.berlaku_hari = q.berlaku_hari == null ? "" : String(q.berlaku_hari);
     var hilang = 0;
