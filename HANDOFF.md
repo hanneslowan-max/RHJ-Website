@@ -228,6 +228,35 @@ persen saat menyetujui harga (boleh 0, maks 50%).
    lama yang lolos cek tanpa pelanggan (sejak #37/#50 cek Vonny menautkan pelanggan, jadi Tempelkan PO pada SP yang
    sudah berpelanggan beda ditolak). SP dari PO biasa (bukan menyusul) tanpa lampiran tetap bisa diloloskan seperti
    sebelumnya; Vonny melihat "belum ada lampiran PO" di laci.
+   **Review adversarial 135** (2 pemeriksa + verifikator; 6 terkonfirmasi, 1 dibantah — DEV `135b`): (1) Tempelkan PO
+   oleh Vonny/GM/owner tidak menggugurkan cek yang sudah lolos (sp_vonny_gugur_kepala melewati peran pemeriksa; DEV ada
+   kandidat nyata SP 44 016/MCE/IX) → `tautkan_po_sp` sendiri memanggil `gugurkan_cek_vonny` bila penanda baru terpasang
+   & PO tanpa lampiran; (2) pesan sukses dulu "Invoice sudah boleh diterbitkan" → kini memberi tahu SP menunggu
+   lampiran; (3) pesan lampiran_po menyebut pemegang PO (atau owner/GM/staff bila PO tanpa sales), bukan sales SP;
+   (4) data lama: SP batal ikut ditandai, SP bertanda yang sudah lolos cek & belum dikirim & PO tanpa lampiran
+   dikembalikan ke Double Check (gugurkan_cek_vonny dengan trigger); (5) laci cek Vonny basi bila PO ditempel sesudah
+   daftar dimuat (kotak PO & tombol lampiran tak pernah muncul, kotak HP/alamat & catatan PO menyusul basi) → laci
+   membaca ulang baris SP saat dibuka & "Periksa ulang" dan digambar ulang bila PO/pelanggan/lampiran berubah;
+   (6) baca ulang tidak lagi saat mengetik No. HP/alamat. Isi fungsi DEV = berkas (md5). Uji DEV rollback: Vonny & GM
+   menempel PO ke SP yang sudah lolos tanpa pelanggan → vonny_ok kosong, 'menunggu vonny', pesan lampiran; cek
+   menyebut "Sales Arie (pemegang PO) atau owner/GM/staff"; PO tanpa sales → owner/GM/staff; pesan putuskan; isi data
+   lama → ditandai & digugurkan; PO berlampiran → pesan biasa, cek ok. Layar uji_lampiran 23/23 (+ baris basi,
+   tidak menggambar ulang berulang); regresi uji_vonny 32/32, uji_vonny2 16/16, uji119 36/36, uji_hp 35/35,
+   uji_nama 12/12, uji_segar 34/34.
+   **Cek PROD sebelum rilis 135** (baca-saja; laporkan hasilnya ke Hannes/GM):
+   ```sql
+   select s.id, s.no_sp, sr.nama sales, s.batal, s.vonny_ok, s.no_surat_jalan,
+          exists (select 1 from public.so_kirim k where k.so_id = s.id) dikirim, p.no_po, p.lampiran is not null ada_lampiran,
+          a.pada, a.oleh_email
+     from public.sales_orders s
+     join public.audit_log a on a.tabel = 'sales_orders' and a.aksi = 'UPDATE' and a.baris_id = s.id
+          and (a.sebelum->>'customer_id') is null and (a.sesudah->>'customer_id') is not null
+          and (a.sebelum->>'po_id') is null and (a.sesudah->>'po_id') is not null
+     left join public.purchase_orders p on p.id = s.po_id
+     left join public.sales_reps sr on sr.id = s.sales_rep_id
+    order by a.pada;
+   -- Tempelkan PO yang terjadi SEBELUM audit_log sales_orders mulai mencatat tidak terdeteksi (DEV: audit mulai 10 Sep).
+   ```
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):

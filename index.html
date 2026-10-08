@@ -12076,14 +12076,14 @@ function bantuIndustriLama(s){
   return t ? "Catatan sheet lama: <b>" + esc(t) + "</b>" : "";
 }
 /* #36: kotak PO customer di laci cek Vonny. Berkas 135: SP yang pelanggannya diisi dari PO menyusul ditahan sampai
-   PO berlampiran — sesudah sales mengunggah, "Periksa ulang" membaca ulang lampirannya supaya Vonny bisa melihatnya
-   sebelum meloloskan. */
+   PO berlampiran — laci membaca ulang barisnya (segarkanBarisVonny) supaya Vonny melihat PO & lampirannya sebelum
+   meloloskan. */
 function htmlPoVonny(po){
   return '<div class="flag"><span class="f-ico">📄</span><div><b>PO customer: ' + esc(po.no_po) + '</b>'
     + (po.tanggal ? ' · ' + esc(tglTampil(po.tanggal)) : '')
     + (po.lampiran
         ? ' · <button type="button" class="btn kecil" id="btn-vc-lampiran">📎 Lihat lampiran PO</button>'
-        : ' · <span class="muted">belum ada lampiran PO — minta sales mengunggahnya di tab Upload PO</span>')
+        : ' · <span class="muted">belum ada lampiran PO — minta sales pemegang PO mengunggahnya di tab Upload PO</span>')
     + '</div></div>';
 }
 function formCekVonny(s){
@@ -12168,15 +12168,21 @@ function formCekVonny(s){
     if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
   }
   pasangTombolLampiran();
-  /* Berkas 135: lampiran yang baru diunggah sales terbaca tanpa menutup laci. */
-  function segarkanLampiranPo(){
-    if (!po || po.lampiran || !s.po_id) return;
-    api("GET", "/purchase_orders?select=lampiran&id=eq." + Number(s.po_id)).then(function(r){
+  /* Berkas 135: baris di daftar bisa basi — PO bisa ditempel / lampirannya diunggah sales SESUDAH daftar dimuat.
+     Dibaca ulang saat laci dibuka & "Periksa ulang" (bukan saat mengetik No. HP/alamat); bila PO, pelanggan, atau
+     lampirannya berubah, laci digambar ulang dari baris segar (ringkasan nilai dari baris lama tetap dipakai) —
+     supaya Vonny melihat PO & lampirannya sebelum meloloskan, dan kotak HP/alamat / catatan PO menyusul tidak basi. */
+  function segarkanBarisVonny(){
+    api("GET", VONNY_KOLOM + "&id=eq." + Number(s.id)).then(function(r){
       var x = Array.isArray(r) ? r[0] : r;
-      if (!x || !x.lampiran || !$("vc-po") || !btnOk.isConnected) return;
-      po.lampiran = x.lampiran;
-      $("vc-po").innerHTML = htmlPoVonny(po);
-      pasangTombolLampiran();
+      if (!x || !btnOk.isConnected) return;
+      var poBaru = Array.isArray(x.purchase_orders) ? x.purchase_orders[0] : x.purchase_orders;
+      var beda = (x.po_id || null) !== (s.po_id || null) || (x.customer_id || null) !== (s.customer_id || null)
+              || ((poBaru && poBaru.lampiran) || null) !== ((po && po.lampiran) || null);
+      if (!beda) return;
+      var segar = Object.assign({}, s, x);
+      if (Array.isArray(V.baris)) V.baris = V.baris.map(function(b){ return b.id === s.id ? segar : b; });
+      formCekVonny(segar);
     }).catch(function(){});
   }
   /* #50: tombol loloskan dikunci selama SP belum bisa diloloskan; No. HP / alamat yang diketik diperiksa langsung
@@ -12206,7 +12212,7 @@ function formCekVonny(s){
         var k = (Array.isArray(r) ? r[0] : r) || null;
         if (!ketik && V.kelayakan && k) V.kelayakan[s.id] = k;   /* keadaan server (tanpa ketikan laci) → daftar ikut segar */
         pasangKelayakan(k);
-        segarkanLampiranPo();
+        if (!ketik) segarkanBarisVonny();
       })
       .catch(function(e){
         if (g !== giliranCek || !btnOk.isConnected) return;

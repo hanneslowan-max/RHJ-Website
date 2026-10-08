@@ -21,6 +21,18 @@
 --  (4) Data lama: SP hidup yang belum dikirim dan pelanggannya pernah diisi bersamaan dengan PO yang ditempel
 --      (riwayat audit: customer_id & po_id kosong → terisi dalam satu UPDATE) diberi penanda; tanpa trigger
 --      (session_replication_role = replica), dicatat di audit_log ('migrasi 135'). DEV: 0 SP.
+--  (5) Hasil review adversarial (DEV: migrasi 135b):
+--      · Tempelkan PO oleh Vonny/GM/owner tidak menggugurkan cek Vonny yang sudah lolos (sp_vonny_gugur_kepala
+--        melewati peran pemeriksa) → SP lama yang lolos tanpa pelanggan bisa dikirim tanpa lampiran. Kini
+--        tautkan_po_sp sendiri menggugurkan cek (gugurkan_cek_vonny) bila penanda baru terpasang & PO tanpa lampiran,
+--        dan pesannya memberi tahu bahwa SP menunggu lampiran (dulu "Invoice sudah boleh diterbitkan").
+--      · Pesan lampiran_po menyebut pemegang PO (sales PO itu) atau owner/GM/staff bila PO tanpa sales — dulu sales SP,
+--        yang bisa saja tidak bisa membuka PO itu.
+--      · Data lama: SP batal ikut ditandai (bisa dihidupkan lagi), dan SP bertanda yang sudah lolos cek tetapi belum
+--        dikirim & PO-nya tanpa lampiran dikembalikan ke Double Check (gugurkan_cek_vonny, dengan trigger → status &
+--        audit ikut). Tempelkan PO sebelum audit_log mulai mencatat tidak terdeteksi (cek PROD di HANDOFF).
+--      · Layar: laci cek Vonny membaca ulang baris SP saat dibuka & "Periksa ulang" (bukan saat mengetik) dan
+--        menggambar ulang bila PO / pelanggan / lampirannya berubah sesudah daftar dimuat.
 -- Bila PO menyusul ditempel SETELAH barang dikirim (alur PO menyusul yang biasa), cek Vonny sudah lewat dan tidak
 -- diulang — penahanan ini tidak berlaku (dicatat di HANDOFF sebagai sisa).
 -- Tidak menyentuh objek EHC/komisi. Tidak ada objek yang dibuang.
@@ -142,7 +154,7 @@ create or replace trigger so_jaga_a_pelanggan
 -- tautkan_po_sp: definisi 134 + penanda
 create or replace function public.tautkan_po_sp(p_so bigint, p_po bigint)
 returns text language plpgsql security definer set search_path = public as $$
-declare v_so record; v_po record; v_sp numeric; v_nilai numeric; v_lain text;
+declare v_so record; v_po record; v_sp numeric; v_nilai numeric; v_lain text; v_tahan boolean;
 begin
   if not public.boleh_input_po() then
     raise exception 'Anda tidak berwenang menempelkan PO ke Surat Pesanan.'
@@ -246,6 +258,16 @@ begin
    where id = p_so;
   perform set_config('rhj.tautkan_po', '', true);
 
+  -- 135b: pelanggan baru diisi dari PO ini & PO tanpa lampiran → cek Vonny yang sudah lolos digugurkan untuk SEMUA
+  -- peran (trigger so_vonny_gugur melewati Vonny/GM/owner), dan pemanggil diberi tahu SP menunggu lampiran.
+  v_tahan := v_so.customer_id is null and v_po.customer_id is not null and not coalesce(v_so.pelanggan_dari_po, false)
+             and coalesce(btrim(v_po.lampiran), '') = '';
+  if v_tahan then
+    perform public.gugurkan_cek_vonny(p_so);
+    return 'PO ' || v_po.no_po || ' menempel ke Surat Pesanan ' || v_so.no_sp || '. Pelanggannya diisi dari PO ini, '
+           || 'jadi SP baru bisa diloloskan cek Vonny setelah PO ' || v_po.no_po || ' berlampiran — unggah berkas PO '
+           || 'customer di tab Upload PO (daftar PO › + unggah).';
+  end if;
   return 'PO ' || v_po.no_po || ' menempel ke Surat Pesanan ' || v_so.no_sp
          || '. Invoice sudah boleh diterbitkan.';
 end $$;
@@ -270,6 +292,7 @@ declare
   v_po_nama  text;
   v_po_no    text;
   v_lampiran text;
+  v_sales_po text;
 begin
   if not public.boleh_konfirmasi_kirim() then
     raise exception 'Hanya owner, GM, atau Vonny yang boleh memeriksa kelayakan SP.' using errcode = '42501';
@@ -308,13 +331,18 @@ begin
     -- 135 · pelanggan diisi dari PO yang ditempel menyusul ("Tempelkan PO") → PO wajib berlampiran
     --       (keputusan Hannes 8 Okt, temuan #8: PO buatan sendiri untuk pelanggan berharga khusus)
     if s.pelanggan_dari_po and s.po_id is not null then
-      select p.no_po, p.lampiran into v_po_no, v_lampiran from public.purchase_orders p where p.id = s.po_id;
+      select p.no_po, p.lampiran, sr.nama into v_po_no, v_lampiran, v_sales_po
+        from public.purchase_orders p left join public.sales_reps sr on sr.id = p.sales_rep_id
+       where p.id = s.po_id;
       if coalesce(btrim(v_lampiran), '') = '' then
-        kode := 'lampiran_po'; siapa := 'sales';
+        kode := 'lampiran_po';
+        siapa := case when v_sales_po is not null then 'sales' else 'owner/GM/staff' end;
         pesan := 'Pelanggan SP ini diisi dari PO ' || coalesce(v_po_no, '#' || s.po_id)
               || ' yang ditempel menyusul, tetapi PO itu belum berlampiran.';
-        tindakan := 'Sales ' || coalesce(v_sales_sp, '') || ' mengunggah berkas PO customer di tab Upload PO (daftar PO › '
-                 || '+ unggah); sesudah itu Vonny memeriksa lampirannya lalu meloloskan.';
+        tindakan := case when v_sales_po is not null then 'Sales ' || v_sales_po || ' (pemegang PO) atau owner/GM/staff'
+                         else 'Owner/GM/staff' end
+                 || ' mengunggah berkas PO customer di tab Upload PO (daftar PO › + unggah); sesudah itu Vonny '
+                 || 'memeriksa lampirannya lalu meloloskan.';
         return next; continue;
       end if;
     end if;
@@ -488,7 +516,8 @@ begin
      and not exists (select 1 from public.purchase_orders p
                       where p.id = v.po_id and coalesce(btrim(p.lampiran), '') <> '') then
     raise exception 'Surat Pesanan % belum bisa diloloskan: pelanggannya diisi dari PO yang ditempel menyusul, tetapi PO itu '
-                    'belum berlampiran. Sales mengunggah berkas PO customer di tab Upload PO dulu.', v.no_sp
+                    'belum berlampiran. Pemegang PO (sales PO itu) atau owner/GM/staff mengunggah berkas PO customer di '
+                    'tab Upload PO dulu.', v.no_sp
       using errcode='22023';
   end if;
   if p_ok is false and coalesce(btrim(p_alasan),'') = '' then
@@ -503,15 +532,16 @@ begin
   return 'Surat Pesanan ' || v.no_sp || (case when p_ok then ' dinyatakan layak diproses.' else ' DITAHAN Vonny.' end);
 end $function$;
 
--- (4) data lama
+-- (4) data lama — penanda tanpa trigger (+ audit); SP bertanda yang sudah lolos cek, belum dikirim, dan PO-nya tanpa
+--     lampiran dikembalikan ke Double Check lewat gugurkan_cek_vonny DENGAN trigger (status & audit ikut).
 do $$
-declare r record; n int := 0;
+declare r record; n int := 0; g int := 0;
 begin
-  set local session_replication_role = replica;   -- tanpa trigger: status/gugur Vonny/audit otomatis tidak tersentuh
+  set local session_replication_role = replica;   -- penanda saja: status/gugur Vonny/audit otomatis tidak tersentuh
   for r in
     select s.id, to_jsonb(s) as lama
       from public.sales_orders s
-     where not s.pelanggan_dari_po and not s.batal and s.po_id is not null and s.customer_id is not null
+     where not s.pelanggan_dari_po and s.po_id is not null and s.customer_id is not null   -- 135b: batal ikut
        and s.no_surat_jalan is null and not exists (select 1 from public.so_kirim k where k.so_id = s.id)
        and exists (select 1 from public.audit_log a
                     where a.tabel = 'sales_orders' and a.aksi = 'UPDATE' and a.baris_id = s.id
@@ -525,7 +555,16 @@ begin
     n := n + 1;
   end loop;
   set local session_replication_role = origin;
-  raise notice '135: % SP diberi penanda pelanggan_dari_po', n;
+  for r in
+    select s.id from public.sales_orders s join public.purchase_orders p on p.id = s.po_id
+     where s.pelanggan_dari_po and s.vonny_ok is true and not s.batal and s.no_surat_jalan is null
+       and not exists (select 1 from public.so_kirim k where k.so_id = s.id)
+       and coalesce(btrim(p.lampiran), '') = ''
+  loop
+    perform public.gugurkan_cek_vonny(r.id);
+    g := g + 1;
+  end loop;
+  raise notice '135: % SP diberi penanda pelanggan_dari_po; % SP dikembalikan ke Double Check (PO tanpa lampiran)', n, g;
 end $$;
 
 do $$ begin
