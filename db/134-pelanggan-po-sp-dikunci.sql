@@ -28,6 +28,18 @@
 --      Kepada SP tanpa PO yang menunjuk pelanggan tetap wajib nama pelanggan itu.
 --  (4) tautkan_po_sp: sales hanya untuk SP miliknya — SP sales lain dijawab "tidak ditemukan" (sama dengan SP yang
 --      tidak ada), diperiksa sebelum pesan apa pun yang menyebut isi SP.
+--  (5) Hasil review adversarial (DEV: migrasi 134b):
+--      · Urutan trigger: jaga_po_menyusul (so_jaga_menyusul) dulu menyala lebih awal dan menjawab "PO … milik pelanggan
+--        lain" untuk PO sales lain → sales bisa menebak PO mana yang ada & pelanggannya. Trigger ini kini bernama
+--        so_jaga_a_pelanggan (menyala sebelum so_jaga_menyusul): PO sales lain selalu "PO #… tidak ditemukan".
+--      · "Satu PO satu SP" hanya dijaga tautkan_po_sp — INSERT SP lewat REST bisa memakai PO yang sudah dipakai SP
+--        hidup / PO batal, dan SP batal yang dihidupkan lagi bisa menggandakan PO (PO dikirim, ditagih & dikomisikan
+--        dua kali). Kini: INSERT (selain owner/GM/Vonny) menolak PO batal / PO yang sudah dipakai (sama dengan daftar
+--        po_belum_sp di layar), dan indeks unik so_po_satu_sp (po_id, SP tidak batal) menjaga semua jalur & peran.
+--      · Pesan Kepada menyebut "pilih ulang pelanggannya" (nama pelanggan mungkin baru diubah); layar membaca ulang
+--        nama pelanggan sebelum nomor SP diambil.
+--      · BELUM ditutup (menunggu keputusan Hannes, pertanyaan 9 — ubah nama pelanggan): sales bisa mengganti nama
+--        pelanggannya sementara (atau menanam nama_lama) supaya Kepada lolos, lalu mengembalikannya.
 -- Tidak diubah: RLS, lengkapi_pelanggan_sp, putuskan_ubah, objek EHC/komisi. Tidak ada data yang diubah; tidak ada
 -- objek yang dibuang. SP lama yang Kepada-nya tidak sama dengan nama pelanggannya tidak disentuh (hanya diperiksa
 -- bila Kepada / pelanggannya diubah oleh peran selain owner/GM/Vonny).
@@ -39,6 +51,9 @@ declare
   v_po_id bigint;
   v_po_cust bigint;
   v_po_rep bigint;
+  v_po_no text;
+  v_po_batal boolean;
+  v_lain text;
   v_tautkan boolean := coalesce(current_setting('rhj.tautkan_po', true), '') = '1';
   v_nama text;
   v_lama text;
@@ -49,7 +64,7 @@ begin
 
   if tg_op = 'INSERT' then
     if new.po_id is not null then
-      select p.id, p.customer_id, p.sales_rep_id into v_po_id, v_po_cust, v_po_rep
+      select p.id, p.customer_id, p.sales_rep_id, p.no_po, p.batal into v_po_id, v_po_cust, v_po_rep, v_po_no, v_po_batal
         from public.purchase_orders p where p.id = new.po_id;
       -- (1) PO milik sales itu (jawaban sama dengan PO yang tidak ada)
       if v_po_id is null
@@ -57,6 +72,16 @@ begin
              and not (public.pelanggan_saya(v_po_cust)
                       and (v_po_rep is null or v_po_rep = public.sales_rep_saya()))) then
         raise exception 'PO #% tidak ditemukan.', new.po_id using errcode = 'P0002';
+      end if;
+      -- (5) satu PO satu SP — sama dengan daftar po_belum_sp di layar dan tautkan_po_sp
+      if v_po_batal then
+        raise exception 'PO % sudah dibatalkan — tidak bisa dipakai Surat Pesanan baru.', v_po_no using errcode = '22023';
+      end if;
+      select s.no_sp into v_lain from public.sales_orders s
+       where s.po_id = new.po_id and (not s.batal or s.batal_karena_barang) limit 1;
+      if v_lain is not null then
+        raise exception 'PO % sudah dipakai Surat Pesanan %. Satu PO hanya untuk satu SP.', v_po_no, v_lain
+          using errcode = '23505';
       end if;
       if new.customer_id is null then
         new.customer_id := v_po_cust;   -- SP dari PO = pelanggan PO (layar memang mengirim pelanggan PO)
@@ -106,8 +131,9 @@ begin
      and (v_lama is null
           or public.kunci_nama_pelanggan(new.kepada) is distinct from public.kunci_nama_pelanggan(v_lama)) then
     raise exception
-      'Kepada pada Surat Pesanan % harus nama pelanggan yang dipilih dari daftar (%). Untuk nama lain, kosongkan '
-      'pilihan pelanggannya lalu isi No. HP & alamat — Vonny menautkannya saat cek.',
+      'Kepada pada Surat Pesanan % harus nama pelanggan yang dipilih dari daftar (%). Bila nama pelanggannya baru '
+      'diubah, pilih ulang pelanggannya dari daftar; untuk nama lain, kosongkan pilihan pelanggannya lalu isi No. HP & '
+      'alamat — Vonny menautkannya saat cek.',
       coalesce(new.no_sp, '(baru)'), v_nama
       using errcode = '42501';
   end if;
@@ -115,11 +141,31 @@ begin
 end $$;
 revoke all on function public.jaga_pelanggan_sp_sales() from public, anon, authenticated;
 
--- urutan BEFORE (abjad): sesudah so_jaga_menyusul, sebelum so_jaga_pembuat / so_y_hanya_gm / so_yy_hp_wajib — pesan
--- yang muncul pesan yang paling jelas; pelanggan yang diisi dari PO ikut diperiksa penjaga sesudahnya & RLS.
-create or replace trigger so_jaga_pelanggan
+-- urutan BEFORE (abjad): sesudah so_a_* / so_audit_ins / so_cash_jaga, SEBELUM so_jaga_menyusul (pemilik PO diperiksa
+-- sebelum pesan apa pun yang menyebut pelanggan PO — review 134b) dan sebelum so_y_hanya_gm / so_yy_hp_wajib;
+-- pelanggan yang diisi dari PO ikut diperiksa penjaga sesudahnya & RLS. (DEV: nama lama so_jaga_pelanggan diganti.)
+do $$ begin
+  if exists (select 1 from pg_trigger where tgrelid = 'public.sales_orders'::regclass and tgname = 'so_jaga_pelanggan') then
+    alter trigger so_jaga_pelanggan on public.sales_orders rename to so_jaga_a_pelanggan;
+  end if;
+end $$;
+create or replace trigger so_jaga_a_pelanggan
   before insert or update of customer_id, po_id, kepada on public.sales_orders
   for each row execute function public.jaga_pelanggan_sp_sales();
+
+-- (5) satu PO satu SP hidup — semua jalur & peran (INSERT, hidupkan SP batal, Tempelkan PO, PATCH owner/GM).
+-- SP yang sah tidak pernah berbagi PO: tiap SP wajib = grand total PO (periksa_total_sp).
+do $$
+declare v text;
+begin
+  select string_agg(x.no_po || ' (' || x.n || ' SP)', ', ') into v
+    from (select s.po_id, p.no_po, count(*) n from public.sales_orders s join public.purchase_orders p on p.id = s.po_id
+           where not s.batal group by s.po_id, p.no_po having count(*) > 1) x;
+  if v is not null then
+    raise exception '134: PO dipakai lebih dari satu SP hidup: % — bereskan dulu (laporkan ke Hannes/GM).', v;
+  end if;
+end $$;
+create unique index if not exists so_po_satu_sp on public.sales_orders (po_id) where po_id is not null and not batal;
 
 -- (4) tautkan_po_sp: definisi DEV sebelum 134 + pemilik SP (sales) + bendera rhj.tautkan_po
 create or replace function public.tautkan_po_sp(p_so bigint, p_po bigint)
@@ -232,8 +278,10 @@ end $$;
 
 do $$ begin
   if not exists (select 1 from pg_trigger where tgrelid = 'public.sales_orders'::regclass
-                  and tgname = 'so_jaga_pelanggan' and tgenabled = 'O') then
-    raise exception '134: trigger so_jaga_pelanggan tidak terpasang';
+                  and tgname = 'so_jaga_a_pelanggan' and tgenabled = 'O')
+     or exists (select 1 from pg_trigger where tgrelid = 'public.sales_orders'::regclass
+                  and tgname = 'so_jaga_pelanggan') then
+    raise exception '134: trigger so_jaga_a_pelanggan tidak terpasang tepat satu kali';
   end if;
   if has_function_privilege('anon', 'public.jaga_pelanggan_sp_sales()', 'execute') then
     raise exception '134: jaga_pelanggan_sp_sales masih bisa dijalankan anon';

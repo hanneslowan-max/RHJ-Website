@@ -8196,6 +8196,21 @@ function spBarisPerluKhusus(f){
    menunjuk SP yang memicunya. Kalau pengajuannya gagal, SP-nya tetap ada
    dan orangnya diberi tahu — lebih baik daripada membatalkan SP yang
    barangnya sudah mau disiapkan. */
+/* #8 (berkas 134): Kepada SP tanpa PO yang menunjuk pelanggan wajib = nama pelanggan itu (dijaga DB). Nama pelanggan
+   bisa diubah orang lain selama form terbuka — dibaca ulang SEBELUM nomor SP diambil, supaya nomornya tidak hangus.
+   Kepada di form selalu = nama yang dipilih (nama yang diketik ulang melepas pelanggannya), jadi aman disesuaikan. */
+function cekNamaPelangganSp(f){
+  if (!f.customer_id || f.po_id) return Promise.resolve();
+  return api("GET", "/customers?select=nama,nama_lama&id=eq." + Number(f.customer_id)).then(function(r){
+    var c = Array.isArray(r) ? r[0] : r;
+    if (!c || !c.nama) throw new Error("Pelanggan yang dipilih tidak lagi bisa dipakai untuk SP ini — pilih ulang pelanggannya dari daftar.");
+    var k = kunciNamaPelanggan(f.kepada);
+    if (k === kunciNamaPelanggan(c.nama) || (c.nama_lama && k === kunciNamaPelanggan(c.nama_lama))) return;
+    f.kepada = c.nama; f.namaTerpilih = c.nama;
+    panelSp();
+    throw new Error('Nama pelanggan ini baru saja diubah menjadi "' + c.nama + '" — Kepada sudah disesuaikan. Periksa lalu simpan lagi.');
+  });
+}
 function simpanSp(khusus){
   var f = ALUR.spForm;
   if (khusus && khusus.type) khusus = null;   /* dipanggil dari event klik */
@@ -8289,9 +8304,12 @@ function simpanSp(khusus){
   /* #50 lanjutan (berkas 131): No. HP yang sudah tercatat di data pelanggan ditolak database — diperiksa SEBELUM
      usulan & nomor SP diambil, supaya nomornya tidak hangus. Database tanpa berkas 131 → dilewati. */
   var hpCek = perluCekHpSp(f) ? hpNormal(String(f.telp).trim()) : null;
-  (hpCek ? api("POST", "/rpc/hp_terdaftar", { p_hp: hpCek })
-             .catch(function(e){ if (rpcBelumAda(e)) return false; throw e; })
-         : Promise.resolve(false))
+  cekNamaPelangganSp(f)
+  .then(function(){
+    return hpCek ? api("POST", "/rpc/hp_terdaftar", { p_hp: hpCek })
+                     .catch(function(e){ if (rpcBelumAda(e)) return false; throw e; })
+                 : false;
+  })
   .then(function(ada){
     if (hpCek) SP_HP_TERDAFTAR[hpCek] = ada === true;
     if (ada === true) { segarkanHpSp(f); throw new Error(PESAN_HP_TERDAFTAR); }
@@ -8395,6 +8413,8 @@ function simpanSp(khusus){
        toast sekilas terlalu sempit untuk kalimat yang menyebut jalan
        keluarnya. */
     if (petunjukRls(e.message)) tampilPesan(galatKotak(e));
+    else if (/so_po_satu_sp/.test(String(e.message)))   /* berkas 134: satu PO satu SP (mis. dua orang menyimpan bersamaan) */
+      toast("PO ini sudah dipakai Surat Pesanan lain — satu PO hanya untuk satu SP. Muat ulang daftar PO.", true);
     else toast(e.message, true);
   })
   .then(function(){ sibuk(false); });

@@ -249,6 +249,29 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    itu (uji L4: menunggu gm → menunggu vonny). Penjaganya kini hanya PO/lampiran yang dilihat Vonny. Opsi: (a) pelanggan
    patokan harga khusus dibekukan saat SP dibuat (so_baris_hitung — area komisi, perlu sesi EHC); (b) cek Vonny menahan
    SP yang pelanggannya datang dari PO menyusul bila PO-nya tanpa lampiran.
+   **Review adversarial 134** (2 pemeriksa + verifikator per temuan; 4 terkonfirmasi — DEV `134b`):
+   (1, tinggi — BELUM ditutup, ikut pertanyaan 9) sales bisa mengganti nama pelanggannya sementara (UI biasa: ubah
+   nama → buat SP pilih pelanggan itu dengan Kepada nama palsu → kembalikan nama), atau menanam alias permanen di
+   nama_lama (customers_rapi_nama mengisi nama_lama dari ketikan saat nama_lama kosong & nama dirapikan; tak bisa
+   dihapus lewat REST) → Kepada lolos, harga khusus pelanggan itu dipakai, gerbang GM & cek HP/alamat Vonny terlewati;
+   alias juga menyetir pencocokan nama Vonny (#37). DEV: 733 pelanggan nama_lama kosong, 2.678 belum bertuan (bisa
+   diganti namanya oleh semua sales), 3 pelanggan berharga khusus; customers tidak punya audit_log. Usul (menunggu
+   jawaban pertanyaan 9): ganti nama pelanggan yang punya transaksi / harga khusus hanya owner/GM/staff, nama_lama
+   tidak diisi dari ubahan sales, audit_log untuk customers; opsional cek Vonny menahan SP tanpa PO yang Kepada-nya
+   ≠ nama pelanggan. (2, sedang) "satu PO satu SP" hanya dijaga tautkan_po_sp — INSERT lewat REST memakai PO yang
+   sudah dipakai / PO batal, dan SP batal dihidupkan lagi → dua SP hidup pada satu PO (dikirim, ditagih, dikomisikan
+   dua kali) → INSERT menolak PO batal / sudah dipakai (sama dengan po_belum_sp) + indeks unik `so_po_satu_sp`
+   (po_id, SP tidak batal; semua jalur & peran; pemeriksaan data ganda sebelum indeks dibuat). (3, rendah) urutan
+   trigger membocorkan PO sales lain & pelanggannya lewat pesan jaga_po_menyusul → trigger diganti nama
+   `so_jaga_a_pelanggan` (menyala sebelum so_jaga_menyusul): PO sales lain selalu "PO #… tidak ditemukan".
+   (4, rendah) nama pelanggan diubah selama form SP terbuka → SP ditolak & nomor hangus → layar membaca ulang nama
+   pelanggan sebelum nomor diambil, menyesuaikan Kepada, dan minta simpan lagi; pesan DB menyebut "pilih ulang".
+   Uji DEV rollback: PO sales lain + pelanggan lain / PO tak ada → sama "tidak ditemukan"; PO sudah dipakai, PO batal
+   ditolak; hidupkan SP lama & GM SP kedua → indeks; PO baru belum dipakai lolos. Layar: uji_nama 12/12 (+ uji_set
+   mock nama), regresi uji_hp 35/35, uji_set 46/46, uji12 29/29, uji_komisi 33/33, uji_nomor 10/10, uji_segar 34/34,
+   uji_segar2 14/14, uji58 25/25, uji_vonny 32/32, uji_vonny2 16/16, uji119 36/36, uji59b 16/16, uji60b 28/28.
+   **Cek PROD sebelum rilis 134:** `select po_id, count(*) from sales_orders where po_id is not null and not batal
+   group by 1 having count(*) > 1;` — bila ada baris, migrasi berhenti dengan pesan; laporkan ke Hannes/GM.
 9. **Tanggal SP tidak dijaga**: sales bisa INSERT/PATCH `sales_orders.tanggal` mundur (juga SP lunas). Snapshot price list
    (`isi_harga_list`) memakai tanggal itu → tier naik & gerbang GM terlewati (uji: SP tgl 12 Agu 'menunggu vonny' vs hari
    ini 'menunggu gm'). → **SELESAI berkas 133 (DEV 8 Okt)** + FE (tanggal tidak lagi dikirim layar):
