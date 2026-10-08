@@ -269,7 +269,31 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
       and coalesce(pr.peran, '') not in ('owner','gm');
    -- + SP tanpa baris audit INSERT (lebih tua dari audit) ditinjau manual;
    -- + nomor yang bukan bentuk baku: select no_sp from sales_orders where no_sp !~ '^[0-9]{3,}/MCE/[IVX]+/[0-9]{4}$';
+   -- + tanggal SP yang pernah DIUBAH oleh selain owner/GM (peran = peran sekarang, bukan saat perubahan):
+   select a.baris_id, s.no_sp, a.pada, a.oleh_email, pr.peran, a.sebelum->>'tanggal' lama, a.sesudah->>'tanggal' baru
+     from public.audit_log a join public.sales_orders s on s.id = a.baris_id
+     left join public.profiles pr on pr.id = a.oleh
+    where a.tabel = 'sales_orders' and a.aksi = 'UPDATE'
+      and (a.sebelum->>'tanggal') is distinct from (a.sesudah->>'tanggal')
+      and coalesce(pr.peran, '') not in ('owner','gm')
+    order by a.baris_id, a.pada;
+   -- untuk SP yang muncul: cek baris yang harga_list-nya ≠ harga_list_pada(product, tanggal, dibuat_pada) (langkah 2
+   -- catatan rilis 130) dan baris yang disisipkan selama tanggalnya mundur.
    ```
+   **Review adversarial 133** (2 pemeriksa + verifikator per temuan; 4 terkonfirmasi, 1 dibantah — DEV `133b`):
+   (1, tinggi) baris yang ditambahkan BELAKANGAN ke SP lama dibekukan pada list tanggal SP itu — kepala SP kosong dibuat
+   dulu (draft, tak masuk antrean mana pun) lalu diisi sesudah list naik, atau baris ditambah ke SP lama yang masih
+   terbuka / dibuka lagi dengan PATCH catatan → list lama, gerbang GM terlewati (DEV: 388 @400.000 → list 298.000
+   'menunggu vonny' vs SP hari ini 517.600 'menunggu gm') → `jaga_tambah_baris_sp`: selain owner/GM, baris langsung
+   hanya oleh pembuat SP ≤ 15 menit sejak SP dibuat (layar mengirim baris tepat sesudah kepala); sesudahnya lewat Minta
+   ubah SP. Uji DEV: alur layar lolos, kepala lama / SP lama / orang lain ditolak, staff SP sendiri, GM & tanpa sesi
+   lolos. (2) nomor ≥ 1000 terpotong `lpad(…,3)` → `nomor_sp_angka()` (nomor_sp_baru & pemeriksaan). (3) cek PROD
+   ditambah perubahan tanggal lewat UPDATE (di atas). (4) SP tersimpan tepat saat bulan UTC berganti → layar mencoba
+   ulang sekali dengan nomor baru (uji layar 10/10; regresi uji_hp 35/35, uji_set 46/46, uji12 29/29, uji_komisi 33/33).
+   **Sisa yang diterima (rendah):** nomor tidak diikat ke pengambilnya — sales bisa memakai nomor yang sudah dikeluarkan
+   untuk orang lain tetapi belum tersimpan (orang itu cukup simpan ulang) atau nomor hangus. Barang BARU lewat Minta ubah
+   SP tetap dibekukan pada list tanggal SP (sesuai aturan 130; GM memutus usulannya) — bila ingin list hari ini untuk
+   barang baru, itu keputusan Hannes + putuskan_ubah milik sesi EHC.
 
 Bug/data non-keamanan yang dicatat:
 - **gm_pct harga vs telat** — DIPISAH di berkas 124 (`gm_pct_harga`). (a) sisa gm_pct lama → SELESAI berkas 128 (8 Okt).

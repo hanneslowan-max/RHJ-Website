@@ -8268,6 +8268,23 @@ function simpanSp(khusus){
     return;
   }
 
+  /* Kepala SP — dipakai sekali, atau dua kali bila nomornya ditolak karena bulan berganti (berkas 133). */
+  function kirimKepalaSp(no){
+    return api("POST", "/sales_orders", {
+      no_sp: no, po_id: f.po_id,
+      po_menyusul: !!f.menyusul,
+      po_menyusul_alasan: f.menyusul ? String(f.alasanMenyusul).trim() : null,
+      customer_id: f.customer_id, sales_rep_id: f.sales_rep_id ? Number(f.sales_rep_id) : null,
+      kepada: f.kepada.trim(), alamat: f.alamat || null, up: f.up || null,
+      telp: f.telp || null, no_seri: f.no_seri || null, ppn_kena: modePpnDok(f) !== "non", mode_ppn: modePpnDok(f),   /* #30 */
+      /* Klaim sales, bukan fakta. cash_ok sengaja tidak dikirim dari sini:
+         yang menaikkan komisi adalah kolom itu, dan hanya finance yang
+         boleh menyentuhnya. */
+      cash_minta: !!f.cash_minta || repCashOnly(spRepEfektif(f)),   /* #22: DB tetap memaksa */
+      catatan: f.catatan || null   /* #17 */
+    }, "return=representation");
+  }
+
   sibuk(true);
   /* #50 lanjutan (berkas 131): No. HP yang sudah tercatat di data pelanggan ditolak database — diperiksa SEBELUM
      usulan & nomor SP diambil, supaya nomornya tidak hangus. Database tanpa berkas 131 → dilewati. */
@@ -8292,20 +8309,13 @@ function simpanSp(khusus){
   .then(function(){ return api("POST", "/rpc/nomor_sp_baru", {}); })
   .then(function(no){
     /* Tanggal SP tidak dikirim: diisi database (default hari ini; berkas 133 memaksanya untuk selain owner/GM) —
-       jam perangkat bisa salah, dan tanggal SP menentukan price list beku, komisi, dan gerbang GM. */
-    return api("POST", "/sales_orders", {
-      no_sp: no, po_id: f.po_id,
-      po_menyusul: !!f.menyusul,
-      po_menyusul_alasan: f.menyusul ? String(f.alasanMenyusul).trim() : null,
-      customer_id: f.customer_id, sales_rep_id: f.sales_rep_id ? Number(f.sales_rep_id) : null,
-      kepada: f.kepada.trim(), alamat: f.alamat || null, up: f.up || null,
-      telp: f.telp || null, no_seri: f.no_seri || null, ppn_kena: modePpnDok(f) !== "non", mode_ppn: modePpnDok(f),   /* #30 */
-      /* Klaim sales, bukan fakta. cash_ok sengaja tidak dikirim dari sini:
-         yang menaikkan komisi adalah kolom itu, dan hanya finance yang
-         boleh menyentuhnya. */
-      cash_minta: !!f.cash_minta || repCashOnly(spRepEfektif(f)),   /* #22: DB tetap memaksa */
-      catatan: f.catatan || null   /* #17 */
-    }, "return=representation");
+       jam perangkat bisa salah, dan tanggal SP menentukan price list beku, komisi, dan gerbang GM.
+       Berkas 133 juga menolak nomor bulan lain: nomor yang diambil tepat sebelum pergantian bulan (07.00 WIB
+       tanggal 1) lalu tersimpan sesudahnya dicoba ulang SEKALI dengan nomor baru. */
+    return kirimKepalaSp(no).catch(function(e){
+      if (!/Nomor Surat Pesanan .* tidak sesuai/.test(String(e && e.message))) throw e;
+      return api("POST", "/rpc/nomor_sp_baru", {}).then(kirimKepalaSp);
+    });
   })
   .then(function(r){
     var so = Array.isArray(r) ? r[0] : r;
