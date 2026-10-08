@@ -101,8 +101,8 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 | 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 | 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
 | 56 | Dokumen penawaran (pratinjau & detail) kini punya kolom **Spesifikasi** tersendiri (baris baru dipertahankan); isian spesifikasi jadi textarea multi-baris (dulu input 1 baris membuang Enter dari spesifikasi master) | **selesai (FE)** |
-| 57 | Tampilan SET di SP, data tetap per pcs (keputusan Hannes 7 Okt a/b/c). **Berkas 126**: kolom penanda `sales_order_lines.set_grup/set_nama/set_qty/set_isi` + CHECK `sol_set_lengkap`; trigger `sol_set_usul` (BEFORE INSERT, hanya saat `rhj.usul='on'`) membawa penanda ketika putuskan_ubah menyisipkan ulang baris SP — dari nilai_baru (layar baru mengirim kuncinya) atau nilai_lama (usulan dari layar lama); putuskan_ubah sendiri TIDAK diubah (alat MCP menolak SQL yang memuat teks "delete"; sesi EHC sudah diberi tahu). Data lama: SP dari PO ditandai hanya bila barisnya persis hasil pemecahan set (urutan produk komponen + Σ qty), diisi dengan `SET LOCAL session_replication_role = replica` (tanpa trigger → harga_list/status/total/audit tidak tersentuh). FE: judul "N set · nama · 1 set = … · @harga/set" di form SP (qty roda terkunci di SP dari PO), detail SP (+ terkirim x/y pcs, batal), Minta ubah SP (penanda ikut terkirim), Double Check Vonny, Pengiriman bertahap, laci harga GM; "set (sudah diubah)" bila isi tak sesuai; SP manual: set yang diubah susunannya kembali jadi baris biasa; kolom set hanya dikirim bila ada baris set (SP tanpa set tetap jalan sebelum berkas 126) | **selesai (DB 126 + FE)**; uji DEV rollback: pencocokan 5 skenario (2 set inline+master, set diubah, produk kembar, biaya di tengah, SP 155), putuskan_ubah 3 skenario (tanpa kunci / eksplisit / nilai aneh); sidik md5 baris & so_ringkas identik, audit_log tak bertambah; layar 35/35 + regresi 231/231 |
-| 58 | Indo Kida (Iwan, 2604) vs Garuda Metalindo (Hendri, 2354) — menabrak #48 | tanya: opsi A ganti nama / B induk / C gabung |
+| 57 | Tampilan SET di SP, data tetap per pcs (keputusan Hannes 7 Okt a/b/c). **Berkas 126**: kolom penanda `sales_order_lines.set_grup/set_nama/set_qty/set_isi` + CHECK `sol_set_lengkap`; trigger `sol_set_usul` (BEFORE INSERT, hanya saat `rhj.usul='on'`) membawa penanda ketika putuskan_ubah menyisipkan ulang baris SP — dari nilai_baru (layar baru mengirim kuncinya) atau nilai_lama (usulan dari layar lama); putuskan_ubah sendiri TIDAK diubah (alat MCP menolak SQL yang memuat teks "delete"; sesi EHC sudah diberi tahu). Data lama: SP dari PO ditandai hanya bila barisnya persis hasil pemecahan set (urutan produk komponen + Σ qty), diisi dengan `SET LOCAL session_replication_role = replica` (tanpa trigger → harga_list/status/total/audit tidak tersentuh). FE: judul "N set · nama · 1 set = … · @harga/set" di form SP (qty roda terkunci di SP dari PO), detail SP (+ terkirim x/y pcs, batal), Minta ubah SP (penanda ikut terkirim), Double Check Vonny, Pengiriman bertahap, laci harga GM; "set (sudah diubah)" bila isi tak sesuai; SP manual: set yang diubah susunannya kembali jadi baris biasa; kolom set hanya dikirim bila ada baris set (SP tanpa set tetap jalan sebelum berkas 126) | **selesai (DB 126 + FE)**; uji DEV rollback: pencocokan 5 skenario (2 set inline+master, set diubah, produk kembar, biaya di tengah, SP 155), putuskan_ubah 3 skenario (tanpa kunci / eksplisit / nilai aneh); sidik md5 baris & so_ringkas identik, audit_log tak bertambah; layar 35/35 + regresi 231/231 · **Review adversarial** (3 pemeriksa + verifikator per temuan, 7 terkonfirmasi, semuanya diperbaiki): pengisi data lama dijadikan fungsi `tandai_set_sp_lama()` dengan pencocokan BERJANGKAR (dulu bisa menandai roda lepas yang kebetulan sama) + menyalin penanda ke nilai_lama usulan SP yang masih menunggu, `revoke` kedua fungsi dari public/anon/authenticated (DEV: migrasi `126b_set_di_sp_perbaikan`); harga per set = nett + EHC (= harga set PO, "termasuk EHC"); SP manual: set yang qty-nya salah ketik tampil "sudah diubah" dan baru dilepas saat disimpan, qty semua roda × bulat → jumlah set ikut; laci GM tidak lagi ketumpahan jawaban lambat dari SP lain (juga konteks HPP). Uji DEV rollback 10 skenario pencocokan; layar 46/46 |
+| 58 | Grup pelanggan (usulan 7 Okt): grup + anggota (pemegang tetap), penawaran boleh ditujukan "Grup — Divisi X" tapi tercatat milik divisi, sales melihat anggota grup & pemegangnya (tanpa harga), owner/GM total per grup. **8 Okt: PO dikirim oleh masing-masing divisi** (tidak ada PO pusat campuran) → komisi tetap per pelanggan/divisi | antre (sesudah #60 & lanjutan #50/#51) |
 | 59 | Form penawaran menawarkan "+ Pakai … sebagai item baru"; item diusulkan (`usulkan_produk`) saat penawaran disimpan, lalu disahkan owner/GM/staff; dokumen tanpa "(usulan)" | **inti selesai (FE)**; tanya: tombol "Buang" usulan yang tak jadi order |
 | 60 | UP, e-mail, diskon, TOP belum ada | tanya: bentuk diskon/TOP/UP |
 | 61 | → sesi EHC/komisi (menunggu konfirmasi) | — |
@@ -145,7 +145,21 @@ persen saat menyetujui harga (boleh 0, maks 50%).
   tetap masuk antrean GM untuk harga di bawah list (komisi tetap flat 1%); penggolongan baris DIBEKUKAN (price list / harga
   khusus yang disahkan sesudah SP dibuat tidak mengubah komisi/gerbang SP itu).
 - 16–19 (harga_ok direset saat baris berubah, Tolak telat, kosongkan gm_pct lama di PROD, klaim pelanggan belum bertuan):
-  Hannes minta dijelaskan ulang (7 Okt) → menunggu jawaban.
+  Hannes minta dijelaskan ulang (7 Okt) → dijawab 8 Okt (di bawah).
+
+## Jawaban Hannes 8 Okt
+1. RHAJA: ROLLER PHINOLIQ 1" & 2" H/R (grey rubber) tetap di RHAJA Series — sudah termasuk di berkas 125, tidak ada perubahan.
+2. #58: PO dari grup dikirim oleh **masing-masing divisi** → pertanyaan 2b (komisi PO pusat) gugur.
+3. (16) SP kembali ke antrean persetujuan harga GM bila sesudah "Minta ubah SP" masih ada baris di bawah / tanpa list →
+   dikerjakan sesi EHC/komisi di tahap #54 (sudah diberi tahu 8 Okt).
+4. (17) Tombol Tolak pada keputusan invoice telat DIHAPUS; GM mengisi 0% bila tanpa komisi; keputusan telat hanya menulis
+   `gm_pct` (dulu "Setujui" telat ikut menulis harga_ok = true, "Tolak" = false) → **selesai (FE)**, layar 5/5, uji DEV
+   rollback: SP telat + 0% → keluar antrean telat, komisi_hitung 0, harga_ok tetap.
+5. (18) gm_pct lama dikosongkan → **berkas 128** (data): SP belum telat & belum diklaim; persen harga sudah di gm_pct_harga;
+   setiap perubahan dicatat di audit_log ('migrasi 128'). DEV: 8 SP; sidik so_ringkas, komisi_hitung, komisi_belum_klaim,
+   antrean_gm, status sama sebelum-sesudah. **Diterapkan di DEV 8 Okt.** PROD: dijalankan bersama paket rilis.
+6. (19) Pelanggan belum bertuan tetap hanya diklaim lewat PO (dicatat di ATURAN B › Akses).
+7. #55: contoh penawaran menyusul dari Hannes.
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
@@ -171,10 +185,8 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    ini 'menunggu gm'). Usul: tanggal := current_date untuk selain owner/GM + kolom dijaga jaga_kolom_sales.
 
 Bug/data non-keamanan yang dicatat:
-- **gm_pct harga vs telat** — DIPISAH di berkas 124 (`gm_pct_harga`). Sisa: (a) SP yang disetujui SEBELUM 124 masih punya
-  gm_pct (dari keputusan harga) → bila kelak telat, tidak masuk antrean telat & persen itu dipakai untuk seluruh SP (perilaku
-  lama). Usul untuk PROD: kosongkan gm_pct SP yang tidak telat & belum diklaim sesudah 124 (dijalankan owner/GM; perlu
-  keputusan Hannes). (b) Laci keputusan telat masih menulis harga_ok (Tolak telat = "harga ditolak") — area sesi EHC/komisi.
+- **gm_pct harga vs telat** — DIPISAH di berkas 124 (`gm_pct_harga`). (a) sisa gm_pct lama → SELESAI berkas 128 (8 Okt).
+  (b) laci keputusan telat menulis harga_ok → SELESAI (FE 8 Okt: tanpa Tolak, hanya gm_pct).
   (c) Untuk SP telat komisi_hitung = total × gm_pct sedangkan so_ringkas per baris — laporan_komisi diperbaiki sesi EHC.
 - ajukan_ubah tidak memeriksa No. HP SP (hanya trigger saat diterapkan + validasi layar): usulan tak sah dari tab lama/REST
   ditolak saat GM menyetujui dan GM perlu menolaknya manual.

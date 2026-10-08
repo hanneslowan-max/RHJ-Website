@@ -4825,12 +4825,35 @@ function spBarisDariPo(l){
 }
 /* #57: baris form SP yang roda/jenisnya diganti tidak lagi bagian dari set-nya. */
 function lepasTandaSet(b){ if (b) { delete b.setGrup; delete b.setNama; delete b.setQty; delete b.setIsi; delete b.setPcs; } }
+/* #57 review: SP manual — qty SEMUA roda sebuah set dinaikkan/diturunkan dengan kelipatan bulat yang sama (mis. set master
+   1 set → qty tiap roda ×3) → jumlah set ikut (3 set), bukan "sudah diubah". */
+function sesuaikanJumlahSet(f, i){
+  var s0 = setBaris(f.baris[i] || {}); if (!s0 || !spManual(f)) return;
+  var anggota = f.baris.filter(function(b){ var s = setBaris(b); return s && s.grup === s0.grup; });
+  var per = {}, k = null, ok = true;
+  anggota.forEach(function(b){
+    var s = setBaris(b), kunci = String(pidBaris(b));
+    if (!per[kunci]) per[kunci] = { isi: s.isi, jml: 0 };
+    per[kunci].jml += keSen(b.qty);
+  });
+  Object.keys(per).forEach(function(kunci){
+    var c = per[kunci], isiSen = keSen(c.isi);
+    if (!(isiSen > 0) || c.jml % isiSen !== 0) { ok = false; return; }
+    var kk = c.jml / isiSen;
+    if (k === null) k = kk; else if (kk !== k) ok = false;
+  });
+  if (!ok || !(k >= 1)) return;
+  var pcs = anggota[0].setPcs;
+  if (pcs !== undefined && anggota.reduce(function(a, b){ return a + keSen(b.qty); }, 0) !== keSen(k * pcs)) return;
+  anggota.forEach(function(b){ b.setQty = k; });
+}
 /* #57: jumlah roda per set (semua komponen) — hanya di form, untuk mengenali komponen yang hilang seluruhnya. */
 function pcsPerSetKomp(komp){
   return (komp || []).reduce(function(a, c){ return a + (Number(c.qty) || 0); }, 0);
 }
 /* #57: SP manual — kelompok set yang isinya tidak lagi sesuai susunan set (qty roda diubah, baris dihapus, roda
-   diganti) kembali jadi baris biasa sebelum disimpan; SP baru tidak pernah tersimpan sebagai "set (sudah diubah)". */
+   diganti) kembali jadi baris biasa SAAT DISIMPAN; SP baru tidak pernah tersimpan sebagai "set (sudah diubah)".
+   Selama form masih diisi, judulnya menulis "set (sudah diubah)" supaya salah ketik masih bisa dibetulkan. */
 function rapikanSetForm(f){
   if (!spManual(f)) return;
   kelompokSetSp(f.baris).forEach(function(k){
@@ -5998,27 +6021,36 @@ function rincianSetSp(st){
     return angkaTeks(c.isi) + '× ' + (pp ? (pp.kode || pp.nama || ('#' + c.pid)) : ('#' + c.pid));
   }).join(", ");
 }
-/* Judul set (HTML). opsi.nilai = Σ qty × nett barang kelompok itu (tanpa EHC) → "@harga/set = total" bila utuh;
-   opsi.ekor = HTML tambahan (progres kirim/batal). */
+/* Judul set (HTML). opsi.nilai = Σ qty × (nett + EHC) kelompok itu (= kolom Total, = nilai set di PO) → "@harga/set =
+   total" bila utuh; opsi.ehc = bagian EHC-nya (ditulis "termasuk EHC" bila ada); opsi.ekor = HTML tambahan
+   (progres kirim/batal); opsi.catatan = keterangan tambahan untuk set yang tidak lagi utuh. */
 function judulSetHtml(st, opsi){
   opsi = opsi || {};
   var nama = st.nama ? esc(st.nama) : "Set";
   if (!st.utuh)
     return '<span class="pill p-sebagian">set (sudah diubah)</span> <b>' + nama + '</b>'
-      + ' <span class="muted">· isinya tidak lagi sesuai susunan set — rincian per roda di bawah</span>'
+      + ' <span class="muted">· ' + (opsi.catatan || 'isinya tidak lagi sesuai susunan set — rincian per roda di bawah') + '</span>'
       + (opsi.ekor || "");
   var harga = "";
   if (opsi.nilai !== undefined && opsi.nilai !== null && st.qty > 0) {
     var sen = keSen(opsi.nilai), pas = sen % st.qty === 0;
-    harga = ' · @ ' + (pas ? '' : '≈ ') + rp(sen / st.qty / 100) + '/set = ' + rp(opsi.nilai);
+    harga = ' · @ ' + (pas ? '' : '≈ ') + rp(sen / st.qty / 100) + '/set = ' + rp(opsi.nilai)
+      + (keSen(opsi.ehc) > 0 ? ' (termasuk EHC ' + rp(opsi.ehc) + ')' : '');
   }
   return '<span class="pill p-lunas">set</span> <b>' + angkaTeks(st.qty) + ' set · ' + nama + '</b>'
     + ' <span class="muted">· 1 set = ' + esc(rincianSetSp(st)) + harga + '</span>'
     + (opsi.ekor || "");
 }
-/* Σ qty × nett (rupiah, eksak lewat kali1e4) baris-baris sebuah kelompok. */
-function nilaiKelompokSp(baris, nettDari){
-  return baris.reduce(function(a, l){ return a + kali1e4(l.qty, nettDari(l)); }, 0) / 10000;
+/* Nilai kelompok set: Σ qty × (nett + EHC) dan bagian EHC-nya (rupiah, eksak lewat kali1e4) — sama dengan kolom Total
+   dan dengan nilai baris set di PO (#57 review: dulu tanpa EHC, sehingga harga per set tidak cocok dengan PO bila
+   sales mengisi EHC lalu menurunkan nett). Baris database (harga_nett/ehc_item) maupun baris form (nett/ehc). */
+function nilaiSetSp(baris){
+  var nett = 0, ehc = 0;
+  baris.forEach(function(l){
+    nett += kali1e4(l.qty, l.harga_nett !== undefined ? l.harga_nett : l.nett);
+    ehc  += kali1e4(l.qty, l.ehc_item !== undefined ? l.ehc_item : l.ehc);
+  });
+  return { nilai: (nett + ehc) / 10000, ehc: ehc / 10000 };
 }
 /* Penanda set yang dikirim ke database (simpanSp / Minta ubah) — null semua bila bukan baris set. */
 function kolomSetSp(b){
@@ -6056,7 +6088,7 @@ function barisSpDetailHtml(lines, info, bisaBatal, bisaPulih){
       var ekor = (info && kirimSet ? ' <span class="muted">· terkirim ' + fmtQty(kirimSet / 100) + '/' + fmtQty(pesanSet / 100) + ' pcs</span>' : '')
         + (batalSet ? ' <span class="pill ' + (batalSet >= pesanSet ? 'p-belum' : 'p-sebagian') + '">batal ' + fmtQty(batalSet / 100) + ' pcs</span>' : '');
       h += '<tr class="set-kepala-tr"><td class="l" colspan="' + (aksi ? 9 : 8) + '">'
-        + judulSetHtml(k.set, { nilai: nilaiKelompokSp(k.baris, function(l){ return l.harga_nett; }), ekor: ekor }) + '</td></tr>';
+        + judulSetHtml(k.set, Object.assign(nilaiSetSp(k.baris), { ekor: ekor })) + '</td></tr>';
     }
     k.baris.forEach(function(l){ barisSatu(l, !!k.set); });
   });
@@ -6216,7 +6248,7 @@ function formMintaUbah(jenis, id){
     var namaItem = adaSet(l) ? (l.deskripsi || "Set") : (pr ? pr.kode + (pr.nama ? " · " + pr.nama : "") : (l.deskripsi || "?"));   /* #28 */
     var sU = isPoU ? null : setBaris(l);
     if (kepalaSetU[i]) h += '<tr class="set-kepala-tr"><td colspan="4">'
-      + judulSetHtml(kepalaSetU[i].set, { nilai: nilaiKelompokSp(kepalaSetU[i].baris, function(x){ return x.harga_nett; }) }) + '</td></tr>';
+      + judulSetHtml(kepalaSetU[i].set, nilaiSetSp(kepalaSetU[i].baris)) + '</td></tr>';
     h += '<tr' + (sU ? ' class="dalam-set"' : '') + '><td>' + esc(namaItem)
       + (adaSet(l) ? ' <span class="pill p-lunas">set</span>' : '')
       + (sU ? '<input type="hidden" class="uu-sg" value="' + esc(sU.grup) + '">'
@@ -7419,8 +7451,9 @@ function spHitungLokal(f){
            sub:x.dpp + biaya, ppn:x.ppn, grand: mode === "exclude" ? dasar + biaya + x.ppn : dasar + biaya, bawah:bawah };
 }
 function spBarisHtml(f){
-  /* #57: judul set di atas baris pertama tiap kelompok set; qty roda dalam set dari PO dikunci */
-  rapikanSetForm(f);
+  /* #57: judul set di atas baris pertama tiap kelompok set; qty roda dalam set dari PO dikunci. Set di SP manual
+     yang susunannya tidak lagi utuh TIDAK dilepas saat menggambar (salah ketik bisa dibetulkan) — baru dilepas
+     saat disimpan (rapikanSetForm di simpanSp). */
   var kepalaSet = {};
   kelompokSetSp(f.baris).forEach(function(k){
     if (k.set) kepalaSet[k.idx[0]] = k;
@@ -7430,7 +7463,8 @@ function spBarisHtml(f){
     var tandaSet = setBaris(b), kunciQtySet = !!tandaSet && !spManual(f);
     var kSet = kepalaSet[i];
     var judulSet = kSet
-      ? '<div class="set-kepala">' + judulSetHtml(kSet.set, { nilai: nilaiKelompokSp(kSet.baris, function(x){ return x.nett; }) })
+      ? '<div class="set-kepala">' + judulSetHtml(kSet.set, Object.assign(nilaiSetSp(kSet.baris), spManual(f)
+            ? { catatan: 'qty roda tidak lagi sesuai susunan set — betulkan qty-nya, atau set ini disimpan sebagai baris biasa' } : {}))
         + (kSet.set.utuh && !spManual(f) ? ' <span class="muted">· qty roda mengikuti jumlah set di PO</span>' : '') + '</div>'
       : '';
     var p = biaya ? null : produkById(b.kode);
@@ -7589,7 +7623,7 @@ function pasangSpIsi(f){
   Array.prototype.forEach.call(document.querySelectorAll("#p-sp .sp-qty, #p-sp .sp-nett, #p-sp .sp-ehc"), function(inp){
     inp.addEventListener("change", function(){
       var i = +inp.dataset.i, v = angkaAlur(inp.value);
-      if (inp.classList.contains("sp-qty"))       f.baris[i].qty  = v;
+      if (inp.classList.contains("sp-qty"))       { f.baris[i].qty  = v; sesuaikanJumlahSet(f, i); }   /* #57 */
       else if (inp.classList.contains("sp-nett")) { f.baris[i].nett = v; f.baris[i].nettAutoList = null; }   /* #30: diketik */
       else                                        f.baris[i].ehc  = v;
       gambarUlangAman(panelSp);   /* klik Simpan sesudah mengetik tidak hilang */
@@ -11502,9 +11536,8 @@ function formCekVonny(s){
         if (!tampil.length) return "";
         var batalSet = k.set ? k.baris.reduce(function(a, l){ return a + keSen(qtyBatal(l)); }, 0) : 0;
         return (k.set
-            ? '<tr class="set-kepala-tr"><td class="l" colspan="5">' + judulSetHtml(k.set, {
-                nilai: nilaiKelompokSp(k.baris, function(l){ return l.harga_nett; }),
-                ekor: batalSet ? ' <span class="pill p-sebagian">batal ' + fmtQty(batalSet / 100) + ' pcs</span>' : "" }) + '</td></tr>'
+            ? '<tr class="set-kepala-tr"><td class="l" colspan="5">' + judulSetHtml(k.set, Object.assign(nilaiSetSp(k.baris), {
+                ekor: batalSet ? ' <span class="pill p-sebagian">batal ' + fmtQty(batalSet / 100) + ' pcs</span>' : "" })) + '</td></tr>'
             : '')
           + tampil.map(function(l){ var pr = produkById(l.product_id);
               var nama = pr ? (pr.kode + (pr.brand ? " · " + esc(pr.brand) : "")) : (l.deskripsi || "—");
@@ -14606,9 +14639,10 @@ function persenTampil(n){
     : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
 }
 function muatKonteksHpp(jenis, ref, jenisDok){
+  var box = $("gm-hpp"); if (!box) return;   /* #57 review: diambil sebelum permintaan — jawaban lambat tidak menulis ke laci lain */
   api("POST", "/rpc/gm_konteks_keputusan", { p_jenis: jenis, p_ref: Number(ref) })
-    .then(function(rows){ var box = $("gm-hpp"); if (box) gambarKonteksHpp(box, rows || [], jenisDok || "sp"); })
-    .catch(function(e){ var box = $("gm-hpp"); if (box) box.innerHTML = '<span class="muted">HPP tak bisa dimuat: ' + esc(e.message) + '</span>'; });
+    .then(function(rows){ if (box.isConnected) gambarKonteksHpp(box, rows || [], jenisDok || "sp"); })
+    .catch(function(e){ if (box.isConnected) box.innerHTML = '<span class="muted">HPP tak bisa dimuat: ' + esc(e.message) + '</span>'; });
 }
 function gambarKonteksHpp(box, rows, jenisDok){
   if (!rows.length) { box.innerHTML = ""; return; }
@@ -14714,15 +14748,18 @@ function pasangPratinjauKomisiGm(soId){
 /* #57 (berkas 126): keputusan harga tetap per roda — tapi GM perlu tahu roda mana yang harganya hasil pembagian
    harga SET, supaya "di bawah list" per roda dibaca bersama harga per set-nya. */
 function muatSetGm(soId){
+  /* kotaknya diambil SEBELUM permintaan: jawaban yang terlambat untuk laci yang sudah ditutup/diganti tidak boleh
+     menulis ke laci SP lain (#57 review) */
+  var box = $("gm-set-sp"); if (!box) return;
   api("GET", "/sales_order_lines?so_id=eq." + Number(soId) + "&set_grup=not.is.null"
-             + "&select=urut,product_id,qty,harga_nett,jenis,set_grup,set_nama,set_qty,set_isi&order=urut")
+             + "&select=urut,product_id,qty,harga_nett,ehc_item,jenis,set_grup,set_nama,set_qty,set_isi&order=urut")
     .then(function(r){
-      var box = $("gm-set-sp"); if (!box || !box.isConnected) return;
+      if (!box.isConnected) return;
       var kel = kelompokSetSp(r || []).filter(function(k){ return !!k.set; });
       box.innerHTML = kel.length
         ? '<div class="flag" style="margin-top:8px"><span class="f-ico">i</span><div><b>SP ini berisi set.</b> '
           + 'Keputusan tetap per roda; harga roda di tabel adalah hasil pembagian harga set:<br>'
-          + kel.map(function(k){ return judulSetHtml(k.set, { nilai: nilaiKelompokSp(k.baris, function(l){ return l.harga_nett; }) }); }).join("<br>")
+          + kel.map(function(k){ return judulSetHtml(k.set, nilaiSetSp(k.baris)); }).join("<br>")
           + '</div></div>'
         : "";
     })
@@ -14763,8 +14800,11 @@ function formGmPutus(jenis, ref){
       + '<div id="gm-set-sp"></div>';   /* #57 */
   }
   if (jenis === "telat") {
+    /* Keputusan Hannes 8 Okt: tanpa tombol Tolak — GM menetapkan persen (isi 0 bila tanpa komisi). Dulu Tolak
+       menulis harga_ok = false sehingga komisi baris di bawah list ikut hilang dan klaimnya tertahan selamanya. */
     h += field({ nama:"gm_pct", label:"Komisi yang ditetapkan (%)", jenis:"angka", wajib:true,
-                 bantu:"Invoice lewat 120 hari — GM menetapkan komisinya secara eksplisit." });
+                 bantu:"Invoice lewat 120 hari — GM menetapkan komisinya secara eksplisit, untuk seluruh SP. "
+                     + "Isi 0 bila tanpa komisi. Maksimal 50%." });
   }
   if (jenis === "transfer") {
     /* Yang diputuskan di sini adalah UANG KELUAR. Keterangannya sudah
@@ -14811,6 +14851,8 @@ function formGmPutus(jenis, ref){
   $("laci-kaki").innerHTML = jenis === "kirim"
     ? '<button class="btn bahaya" id="btn-gm-tolak" type="button">Tahan</button> '
       + '<button class="btn utama" id="btn-gm-setuju" type="button">Izinkan kirim</button>'
+    : jenis === "telat"   /* keputusan Hannes 8 Okt: tanpa Tolak */
+    ? '<button class="btn utama" id="btn-gm-setuju" type="button">Tetapkan komisi</button>'
     : '<button class="btn" id="btn-gm-tolak" type="button">Tolak</button> '
       + '<button class="btn utama" id="btn-gm-setuju" type="button">Setujui</button>';
   bukaLaci((jenis === "kirim" ? "Konfirmasi kirim — " : "Keputusan GM — ") + j.l);
@@ -14877,7 +14919,11 @@ function formGmPutus(jenis, ref){
       if (setuju && pct !== null && (pct < 0 || pct > 50)) {
         sibuk(false); tampilPesan("Persen komisi harus antara 0 dan 50%."); return;
       }
-      var badan = { harga_ok: setuju, gm_pada: new Date().toISOString() };
+      /* Keputusan telat hanya menulis persen telat (gm_pct) — tidak menyentuh persetujuan HARGA (harga_ok); dulu
+         "Setujui" telat ikut menulis harga_ok = true dan "Tolak" telat menulis harga_ok = false (keputusan Hannes 8 Okt). */
+      if (jenis === "telat" && !setuju) { sibuk(false); return; }
+      var badan = jenis === "telat" ? { gm_pada: new Date().toISOString() }
+                                    : { harga_ok: setuju, gm_pada: new Date().toISOString() };
       /* #51 (berkas 124): persen keputusan HARGA ditulis ke gm_pct_harga (baris di bawah / tanpa list); gm_pct tetap
          KHUSUS persen telat >120 hari — dulu satu kolom, sehingga SP yang harganya disetujui tidak pernah masuk
          antrean telat dan persen harga diam-diam dipakai untuk seluruh SP. Tolak tidak menulis persen. */
@@ -14885,7 +14931,7 @@ function formGmPutus(jenis, ref){
       janji = api("PATCH", "/sales_orders?id=eq." + ref, badan, "return=representation");
     }
     janji.then(function(){
-      tutupLaci(); toast(setuju ? "Disetujui." : "Ditolak.");
+      tutupLaci(); toast(jenis === "telat" ? "Komisi invoice telat ditetapkan." : (setuju ? "Disetujui." : "Ditolak."));
       LANJUT.gm.dimuat = false; LANJUT.kirim.dimuat = false; LANJUT.lunas.dimuat = false;
       LANJUT.khusus.dimuat = false;
       LANJUT.vonnycek.dimuat = false; ALUR.dimuatSp = false;   /* #8: 'menunggu gm' → 'menunggu vonny' */
@@ -14895,7 +14941,7 @@ function formGmPutus(jenis, ref){
     .then(function(){ sibuk(false); });
   }
   $("btn-gm-setuju").addEventListener("click", function(){ kirim(true); });
-  $("btn-gm-tolak").addEventListener("click", function(){ kirim(false); });
+  if ($("btn-gm-tolak")) $("btn-gm-tolak").addEventListener("click", function(){ kirim(false); });
 }
 
 
