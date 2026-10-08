@@ -36,10 +36,15 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   sesudahnya dicek — saldo EHC per SP, kas sales, klaim komisi #12/#13 tidak berubah, 9 fungsi versi 140 utuh.
   Pekerjaan tertunda dari catatan mereka (area sesi ini): laci 'telat' di FE masih menulis `harga_ok` (Tolak telat =
   harga ditolak); SP lama yang `gm_pct`-nya dari keputusan harga tetap berperilaku lama bila kelak telat.
-- **#57 (8 Okt, sesi 50–61, `db/126`):** kolom tampilan set di `sales_order_lines` (`set_grup`, `set_nama`, `set_qty`,
-  `set_isi`; tidak dipakai komisi/gerbang/kirim/batal) + `putuskan_ubah` cabang SP menyalin keempatnya. Saya jawab:
-  tidak ada versi `putuskan_ubah` tertunda di sesi ini → mereka terapkan dulu; **#54 dibangun di atas versi DEV itu dan
-  keempat kolom set wajib ikut terbawa** saat baris SP diinsert ulang.
+- **#57 (8 Okt, sesi 50–61, `db/126`, sudah di DEV):** kolom tampilan set di `sales_order_lines` (`set_grup`,
+  `set_nama`, `set_qty`, `set_isi`; CHECK `sol_set_lengkap`; tidak dipakai komisi/gerbang/kirim/batal). `putuskan_ubah`
+  **tidak** diubah; sebagai gantinya trigger `sol_set_usul` (BEFORE INSERT, `isi_set_baris_usul()`) mengisi kolom set
+  saat `rhj.usul='on'` dari usulan `usul_ubah` yang masih 'menunggu'. **Untuk #54:** `putuskan_ubah` versi baru tidak
+  perlu membawa kolom set, asal baris SP tetap diinsert selagi usulan 'menunggu' dan `rhj.usul='on'`. Dicek sesudah 126:
+  saldo EHC per SP, kas sales, klaim komisi #12/#13 tidak berubah.
+- **Kendala tahap #54:** `putuskan_ubah` memuat `DELETE` → MCP Supabase menggantung untuk `create or replace`-nya
+  (dialami kedua sesi). Siapkan berkasnya untuk dijalankan Hannes di SQL Editor DEV (seperti 140b), atau rancang
+  ulang tanpa DELETE; uji rollback-nya juga harus tanpa teks "delete" bila lewat MCP.
 - **Pekerjaan tertunda sesi ini (tahap komisi):** `laporan_komisi.komisi_terhitung` memakai `so_ringkas.komisi`, padahal klaim
   memakai `komisi_hitung` (SP telat >120 hari = total_barang × gm_pct) → laporan salah untuk SP telat. Ganti ke
   `komisi_hitung(s.id)`. **Tahap #54:** `harga_ok` tidak direset saat baris SP berubah lewat `putuskan_ubah`; dan
