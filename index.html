@@ -1400,6 +1400,7 @@ function hpNormal(v){
   if (!v) return null;
   var a = String(v).replace(/\D/g, "");
   if (!a || a.length < 8) return null;
+  if (a.slice(0,3) === "620") return "62" + a.slice(3);   /* "+62 (0)812…" = 0812… (= hp_baku, berkas 131) */
   if (a.slice(0,2) === "62") return a;
   if (a.charAt(0) === "0")   return "62" + a.slice(1);
   if (a.charAt(0) === "8")   return "62" + a;
@@ -6379,6 +6380,9 @@ function formMintaUbah(jenis, id){
       kepala.up = nilaiForm("u_up") || "";
       kepala.telp = nilaiForm("u_telp") || "";
       kepala.alamat = nilaiForm("u_alamat") || "";
+      /* #50 lanjutan (review 131): <textarea> membuang baris baru di depan — alamat yang tidak diubah dikirim apa
+         adanya, supaya persetujuan tidak ditolak karena alamat lama berisi enter saja. */
+      if (kepala.alamat.trim() === String(d.alamat || "").trim()) kepala.alamat = d.alamat || "";
       if (!d.po_id) {   /* #30: SP dengan PO ikut PO — tidak dikirim */
         kepala.mode_ppn = nilaiForm("u_mode_ppn") || modePpnDok(d);
         kepala.ppn_kena = kepala.mode_ppn !== "non";
@@ -7295,9 +7299,19 @@ function panelSp(){
                 + 'Price list, komisi, harga khusus, dan margin dihitung dari DPP-nya (÷ 1,11).</p>'
               : '');
         h += '<div id="sp-komisi">' + kotakKomisiSpHtml(f) + '</div>';   /* #51 (berkas 123) */
-        /* #51: sales komisi flat (Riksa/Michael, Office) tidak ke antrean GM — baris di bawah list tetap flat. */
-        var flatSp = (function(r){ return r && r.komisi_flat_pct !== null && r.komisi_flat_pct !== undefined; })(repAlurById(spRepEfektif(f)));
-        if (tt.bawah && !flatSp) {
+        /* #51 lanjutan (berkas 130): Office (flat 0%, sp_hanya_gm) tidak ke antrean GM; Riksa/Michael (flat) MASUK
+           gerbang GM untuk baris di bawah list, komisinya tetap flat. */
+        var repSpR = repAlurById(spRepEfektif(f))
+                  || ((repSayaAlur() && String(repSayaAlur().id) === String(spRepEfektif(f))) ? repSayaAlur() : null);
+        var officeSp = !!(repSpR && (repSpR.sp_hanya_gm || Number(repSpR.komisi_flat_pct) === 0)
+                          && repSpR.komisi_flat_pct !== null && repSpR.komisi_flat_pct !== undefined);
+        var flatSp = repFlatId(spRepEfektif(f));
+        if (tt.bawah && flatSp) {
+          h += '<div class="flag" style="margin-top:12px"><span class="f-ico">!</span><div>'
+            + '<b>' + tt.bawah + ' baris di bawah price list.</b> SP tetap bisa disimpan, tapi surat jalan & klaim '
+            + 'menunggu persetujuan harga GM. Komisinya tetap flat ' + esc(pctTeks(repSpR.komisi_flat_pct))
+            + ' (GM tidak menetapkan persen).</div></div>';
+        } else if (tt.bawah && !officeSp) {
           h += '<div class="flag" style="margin-top:12px"><span class="f-ico">!</span><div>'
             + '<b>' + tt.bawah + ' baris di bawah price list.</b> SP tetap bisa disimpan dan dikirim ke '
             + 'gudang, tapi harganya menunggu keputusan GM. Komisi baris itu memakai persen yang '
@@ -7379,10 +7393,13 @@ function panelSp(){
             + '<b>tidak perlu diajukan lagi</b> untuk ' + esc(f.kepada || 'perusahaan ini') + ': '
             + (menunggu
                 ? (sudah.length - menunggu ? (sudah.length - menunggu) + ' sudah punya harga khusus '
-                    + 'yang disetujui GM, dan ' : '')
-                  + menunggu + ' masih menunggu keputusan GM.'
-                : 'harga khususnya sudah disetujui GM dan harga di SP ini masih di atas batasnya.')
-            + ' Komisinya memakai persentase harga khusus itu, bukan tier biasa.</p>';
+                    + 'yang disetujui GM (komisinya memakai persentase harga khusus itu), dan ' : '')
+                  /* #51 lanjutan (review 130): penggolongan beku — permintaan yang masih menunggu (dari SP lain) tidak
+                     menutup SP ini walau kelak disetujui; SP ini diputus GM lewat persetujuan harganya sendiri. */
+                  + menunggu + ' sedang diajukan harga khususnya dari SP lain (menunggu GM) — harga khusus yang disetujui '
+                  + 'sesudah SP ini disimpan tidak berlaku untuk SP ini, jadi harga baris itu diputus GM bersama SP ini.</p>'
+                : 'harga khususnya sudah disetujui GM dan harga di SP ini masih di atas batasnya. '
+                  + 'Komisinya memakai persentase harga khusus itu, bukan tier biasa.</p>');
         }
         if (SP_KHUSUS.galat && f.customer_id) {
           h += '<div class="flag bad" style="margin-top:8px"><span class="f-ico">!</span><div>'
@@ -7964,12 +7981,12 @@ function komisiBarisHtml(f, i){
     case "flat":   return Number(e.pct) === 0 ? "Office — tanpa komisi" : "komisi flat " + pctTeks(e.pct) + " · " + rp(e.komisi)
                      /* #51 lanjutan (berkas 130): sales flat — di bawah list tetap ke persetujuan harga GM, komisinya tetap */
                      + (e.perlu_gm ? ' · <span class="tunggu">di bawah price list — SP menunggu persetujuan harga GM'
-                                     + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan" : "") + '</span>' : "");
+                                     + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan dari SP lain — SP ini tetap diputus GM" : "") + '</span>' : "");
     case "khusus": return "komisi " + pctTeks(e.pct) + " harga khusus · " + rp(e.komisi);
     case "tier":   return "komisi " + pctTeks(e.pct) + " · " + rp(e.komisi) + cash;
     case "bawah_list":
       return '<span class="tunggu">di bawah price list — komisi memakai persen yang ditetapkan GM'
-        + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan" : "") + "</span>";
+        + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan dari SP lain — SP ini tetap diputus GM" : "") + "</span>";
     case "tanpa_list":   /* #51 lanjutan (berkas 130): penggolongan beku saat SP dibuat */
       return '<span class="tunggu">belum ada price list — komisi diputus GM (price list yang disahkan sesudah SP disimpan tidak mengubahnya)</span>';
     default: return "";
@@ -8036,7 +8053,9 @@ function komisiSpSel(o, panjang){
           : k.menunggu_gm ? (repFlatId(o.sales_rep_id) ? 'menunggu persetujuan harga GM — komisi flat tetap'   /* #51 lanjutan */
                                                        : 'belum termasuk baris yang menunggu GM')
           : (o.harga_ok === false && (Number(k.n_bawah_list) || 0) + (Number(k.n_tanpa_list) || 0) > 0)
-            ? 'harga ditolak GM — baris di bawah / tanpa price list tanpa komisi'   /* berkas 124: bukan "menunggu" */
+            ? (repFlatId(o.sales_rep_id)   /* #51 lanjutan (review 130): flat — komisinya tetap, SP & klaim yang tertahan */
+                 ? 'harga ditolak GM — SP & klaim tertahan sampai harganya diubah lewat "Minta ubah SP"; komisi flat tetap'
+                 : 'harga ditolak GM — baris di bawah / tanpa price list tanpa komisi')   /* berkas 124: bukan "menunggu" */
           : k.telat ? 'invoice telat — persen dari GM' : '';
   return '<b>' + rp(k.komisi) + '</b>'
     + (ket ? (panjang ? ' <span class="muted">(' + ket + ')</span>' : '<div class="muted" style="font-size:11px">' + ket + '</div>') : '')
@@ -15390,8 +15409,9 @@ function panelKhusus(){
     + 'Yang lebih rendah kembali ke antrean GM — itulah gunanya batas.<br>'
     + 'Harga khusus yang disetujui, diubah, atau dinonaktifkan <b>sesudah sebuah SP dibuat</b> tidak mengubah SP itu '
     + '(kecuali SP yang mengajukannya) — penggolongan baris SP beku sejak SP dibuat (#51).<br>'
-    + 'Kolom <b>Dipakai</b> menghitung berapa baris SP yang harganya masuk ke dalam batas ini, '
-    + 'termasuk SP lama. Angkanya membantu menilai akibat sebelum sesuatu diubah.<br>'
+    + 'Kolom <b>Dipakai</b> menghitung baris SP pelanggan & barang ini yang harganya masuk ke dalam batas (riwayat, '
+    + 'termasuk SP lama). Mengubah atau menonaktifkan harga khusus hanya berlaku untuk SP yang dibuat sesudahnya — '
+    + 'baris SP yang sudah ada tidak berubah.<br>'
     + 'Yang dipakai perhitungan komisi adalah baris berstatus <b>aktif</b> saja; '
     + 'nonaktif dan ditolak disimpan sebagai riwayat, bukan sebagai aturan.'
     + (bolehApprove() ? '' : '<br><br><b>Peran Anda tidak boleh mengubah.</b> Daftarnya tetap '
@@ -15424,7 +15444,7 @@ function formUbahKhusus(id){
     + '</b> · ' + esc(x.kode_produk || "—")
     + (x.ket_produk ? ' <span class="muted">' + esc(x.ket_produk) + '</span>' : '')
     + '<br>Price list saat ini: <b>' + rp(x.harga_list) + '</b>'
-    + '<br>Sudah dipakai <b>' + (x.dipakai_baris || 0) + '</b> baris SP.'
+    + '<br>Sudah dipakai <b>' + (x.dipakai_baris || 0) + '</b> baris SP (riwayat — SP yang sudah ada tidak berubah bila harga ini diubah).'
     + (x.alasan ? '<br><span class="muted">Alasan permintaan: ' + esc(x.alasan) + '</span>' : '')
     + '</div></div>'
     + field({ nama:"uk_harga", label:"Batas bawah harga nett", jenis:"angka", wajib:true,

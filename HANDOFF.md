@@ -166,8 +166,36 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 - FE: label & validasi alamat, cek HP terdaftar saat mengetik & sebelum nomor SP diambil, Minta ubah SP; pratinjau
   komisi flat "menunggu persetujuan harga GM", laci GM tanpa persen untuk SP sales flat, kolom Komisi Anda (flat),
   teks aturan harga khusus. Layar 22/22 + regresi.
-- **Rilis PROD**: 130 & 131 bersama FE. Sebelum 130, hitung dampak di PROD (baris yang harga_list kosong padahal price
-  list kini ada; SP yang akan kembali "menunggu gm") dan kabarkan Hannes — SP yang sudah di gudang bisa tertahan.
+- **Review adversarial** (4 pemeriksa + verifikator per temuan; 15 terkonfirmasi, semuanya diperbaiki — DEV:
+  `130b_komisi_beku_perbaikan`, `131b_alamat_hp_perbaikan`; berkas 130/131 = versi PROD lengkap):
+  · [tinggi] patokan beku `sales_orders.dibuat_pada` bisa dikirim sales lewat REST (price list lama / harga khusus yang
+    sudah dinonaktifkan dipakai lagi, gerbang GM terlewati) → trigger `so_a_dibuat_kini` mengisi now() saat INSERT
+    (impor tanpa sesi apa adanya; owner/GM masih bisa mengubahnya lewat UPDATE — jaga_pembuat_sp);
+  · price list yang diubah di tempat (upsert tanggal berlaku sama / edit massal) atau dihapus sesudah SP dibuat →
+    `harga_list_pada()` merekonstruksi dari audit_log;
+  · gerbang flat tidak surut ke SP yang sudah dikirim (surat jalan / so_kirim); persetujuan flat tanpa persen gugur
+    bila sales diganti ke non-flat (`so_zz_flat_gm_gugur`);
+  · permintaan harga khusus menunggu hanya menahan SP pengajunya dari antrean 'harga' (antrean_gm + h.so_id = s.id);
+    `ajukan_harga_khusus` tidak lagi memindahkan so_id dari SP pengaju pertama; layar SP tidak lagi menjanjikan
+    komisi harga khusus untuk permintaan dari SP lain;
+  · No. HP "+62 (0)812…" lolos penolakan & bisa membuat pelanggan ganda → `hp_baku` (620→62), trigger
+    `customers_hp_baku`, FE hpNormal; alamat berisi enter/tab dianggap kosong (alamat lama "\n" tidak menggagalkan
+    Minta ubah — FE juga mengirim alamat yang tidak diubah apa adanya);
+  · FE: peringatan form SP untuk sales flat ("surat jalan & klaim menunggu persetujuan harga GM, komisi tetap flat"),
+    kolom Komisi Anda untuk SP flat yang harganya ditolak, teks Harga Special ("Dipakai" = riwayat).
+  Uji DEV rollback R1–R9; layar 29/29 + regresi 12 berkas (uji_komisi A2 disesuaikan: sales flat kini diberi
+  peringatan).
+- **Rilis PROD**: 130 & 131 bersama FE. Sebelum 130, jalankan (baca saja) dan kabarkan Hannes:
+  1. baris yang harga_list kosong padahal price list sudah ada saat SP dibuat (akan diisi backfill);
+  2. baris yang harga_list-nya TERISI dari price list yang dibuat sesudah SP dibuat (temuan review 5 — tidak diubah
+     130; SP setara diperlakukan berbeda):
+     `select l.id, s.no_sp, s.status, l.harga_list, public.harga_list_pada(l.product_id, s.tanggal, s.dibuat_pada) beku
+      from sales_order_lines l join sales_orders s on s.id = l.so_id where l.product_id is not null
+      and l.harga_list is not null and l.harga_list is distinct from public.harga_list_pada(l.product_id, s.tanggal, s.dibuat_pada);`
+     (jalankan sesudah fungsi harga_list_pada dibuat, mis. dalam transaksi yang dibatalkan);
+  3. SP yang akan kembali "menunggu gm" (bandingkan status_sp_hitung sebelum/sesudah) — termasuk SP Riksa/Michael yang
+     belum dikirim dengan harga di bawah list & harga_ok kosong, dipisah per status/lunas/diklaim.
+  SP yang sudah di gudang bisa tertahan sampai GM memutus.
 - 16–19 (harga_ok direset saat baris berubah, Tolak telat, kosongkan gm_pct lama di PROD, klaim pelanggan belum bertuan):
   Hannes minta dijelaskan ulang (7 Okt) → dijawab 8 Okt (di bawah).
 

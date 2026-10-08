@@ -34,10 +34,70 @@
 --     price list disahkan belakangan kembali 'menunggu gm' (DEV: 018/IX, 011/X; 008/X sudah lunas → tetap lunas,
 --     klaim komisinya menunggu keputusan GM).
 --
+-- (6) Hasil review adversarial (DEV: migrasi 130b):
+--     · Patokan beku = sales_orders.dibuat_pada — kini DIISI SISTEM saat INSERT (trigger so_a_dibuat_kini; dulu
+--       sales bisa mengirim dibuat_pada lampau lewat REST → price list lama / harga khusus yang sudah dinonaktifkan
+--       dipakai lagi, gerbang GM terlewati). Impor/migrasi tanpa sesi (auth.uid() kosong) apa adanya.
+--     · Price list per saat SP dibuat direkonstruksi dari audit_log (harga_list_pada): baris price_list yang
+--       DIUBAH di tempat (upsert tanggal berlaku sama, edit massal) atau dihapus sesudah SP dibuat dibaca dengan
+--       nilai sebelum perubahan (dulu nilai hasil edit ikut dipakai baris yang disisipkan belakangan).
+--     · Gerbang flat tidak berlaku surut ke SP yang barangnya sudah keluar (surat jalan / kirim bertahap) — SP lama
+--       Riksa/Michael yang sudah dikirim, ditagih, atau lunas tidak tertahan ulang (dan Tolak tidak bisa
+--       mengunci klaim komisi flat-nya).
+--     · Persetujuan harga GM tanpa persen pada SP sales flat GUGUR bila sales SP diganti ke sales non-flat (trigger
+--       so_zz_flat_gm_gugur) — SP kembali ke antrean supaya GM menetapkan persen (dulu diam-diam 0%).
+--     · Permintaan harga khusus yang masih menunggu hanya menahan SP PENGAJUnya dari antrean 'harga' (antrean_gm:
+--       + h.so_id = s.id); SP lain untuk pasangan yang sama langsung tampil untuk diputus GM (harga khusus yang
+--       disetujui sesudah SP itu dibuat tidak berlaku untuknya). ajukan_harga_khusus: pengajuan ulang untuk
+--       pasangan yang masih menunggu TIDAK lagi memindahkan so_id dari SP pengaju pertama.
+--
 -- Objek bersama sesi EHC/komisi: so_ringkas & antrean_gm diubah HANYA lewat penggantian teks "b.pct IS NULL" →
--- "b.perlu_gm" pada definisi hidup (gagal bila jumlah kemunculannya tidak sesuai), cabang lain tidak disentuh.
+-- "b.perlu_gm" (dan predikat permintaan harga khusus yang menunggu) pada definisi hidup (gagal bila jumlah
+-- kemunculannya tidak sesuai), cabang lain tidak disentuh.
 -- Tidak ada DROP. Ketiga view tetap security_invoker (diperiksa di akhir).
 -- ═══════════════════════════════════════════════════════════════════════
+
+-- ── (6) patokan beku: dibuat_pada diisi sistem saat SP dibuat ──────────────
+create or replace function public.isi_dibuat_pada_sp()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null then new.dibuat_pada := now(); end if;   -- impor/migrasi tanpa sesi: apa adanya
+  return new;
+end $$;
+revoke all on function public.isi_dibuat_pada_sp() from public, anon, authenticated;
+create or replace trigger so_a_dibuat_kini
+  before insert on public.sales_orders
+  for each row execute function public.isi_dibuat_pada_sp();
+
+-- ── (3)+(6) price list per saat SP dibuat, direkonstruksi dari audit_log ──────
+-- Keadaan setiap baris price_list (yang masih ada, atau sudah dihapus sesudah p_waktu) pada p_waktu = "sebelum" dari
+-- perubahan pertamanya sesudah p_waktu (catat_perubahan menyimpan to_jsonb(old)), atau isinya sekarang bila tidak
+-- berubah sejak itu. Yang dipakai: berlaku pada p_tgl dan sudah tercatat pada p_waktu.
+create or replace function public.harga_list_pada(p_product bigint, p_tgl date, p_waktu timestamptz)
+returns numeric language sql stable security definer set search_path = public as $$
+  with calon as (
+    select pl.id from public.price_list pl where pl.product_id = p_product
+    union
+    select a.baris_id from public.audit_log a
+     where a.tabel = 'price_list' and a.aksi not in ('INSERT', 'UPDATE') and a.pada > p_waktu
+       and a.sebelum ->> 'product_id' = p_product::text
+  ), keadaan as (
+    select coalesce(
+             (select a.sebelum from public.audit_log a
+               where a.tabel = 'price_list' and a.baris_id = c.id and a.aksi <> 'INSERT' and a.pada > p_waktu
+               order by a.pada, a.id limit 1),
+             (select to_jsonb(pl) from public.price_list pl where pl.id = c.id)) as r
+      from calon c
+  )
+  select (k.r ->> 'harga')::numeric
+    from keadaan k
+   where k.r is not null and k.r ->> 'product_id' = p_product::text
+     and (k.r ->> 'berlaku_dari')::date <= p_tgl
+     and (k.r ->> 'dibuat_pada')::timestamptz <= p_waktu
+   order by (k.r ->> 'berlaku_dari')::date desc, (k.r ->> 'id')::bigint desc
+   limit 1
+$$;
+revoke all on function public.harga_list_pada(bigint, date, timestamptz) from public, anon, authenticated;
 
 -- ── (3) harga_list beku ─────────────────────────────────────────────────
 create or replace function public.beku_harga_list_baris()
@@ -50,13 +110,9 @@ begin
   end if;
   select so.tanggal, so.dibuat_pada into v_tgl, v_dibuat from public.sales_orders so where so.id = new.so_id;
   if not found then return new; end if;   -- FK yang menolak
-  -- price list per saat SP DIBUAT: berlaku pada tanggal SP dan sudah tercatat ketika SP dibuat
-  new.harga_list := (select pl.harga from public.price_list pl
-                      where pl.product_id = new.product_id
-                        and pl.berlaku_dari <= v_tgl
-                        and pl.dibuat_pada <= v_dibuat
-                      order by pl.berlaku_dari desc, pl.id desc
-                      limit 1);
+  -- price list per saat SP DIBUAT: berlaku pada tanggal SP dan sudah tercatat ketika SP dibuat (nilai saat itu)
+  new.harga_list := case when new.product_id is null then null
+                         else public.harga_list_pada(new.product_id, v_tgl, v_dibuat) end;
   -- Minta ubah SP: putuskan_ubah menyisipkan ulang semua baris → produk yang sudah ada membawa harga_list lamanya
   if tg_op = 'INSERT' and new.product_id is not null
      and coalesce(current_setting('rhj.usul', true), '') = 'on' then
@@ -93,10 +149,7 @@ begin
     select l.id, to_jsonb(l) as lama, x.harga
       from public.sales_order_lines l
       join public.sales_orders s on s.id = l.so_id
-      cross join lateral (select pl.harga from public.price_list pl
-                           where pl.product_id = l.product_id and pl.berlaku_dari <= s.tanggal
-                             and pl.dibuat_pada <= s.dibuat_pada
-                           order by pl.berlaku_dari desc, pl.id desc limit 1) x
+      cross join lateral (select public.harga_list_pada(l.product_id, s.tanggal, s.dibuat_pada) as harga) x
      where l.harga_list is null and l.product_id is not null and x.harga is not null
      order by l.id
        for update of l
@@ -161,7 +214,10 @@ create or replace view public.so_baris_hitung with (security_invoker = on) as
              AND (k.pct IS NULL
                   OR (rep.komisi_flat_pct IS NOT NULL AND NOT COALESCE(rep.sp_hanya_gm, false)
                       AND hk.id IS NULL AND COALESCE(l.harga_list, 0::numeric) > 0::numeric
-                      AND d.nett_dpp < l.harga_list)), false) AS perlu_gm
+                      AND d.nett_dpp < l.harga_list
+                      AND s.no_surat_jalan IS NULL
+                      AND NOT (EXISTS ( SELECT 1 FROM so_kirim kk WHERE kk.so_id = s.id))   -- tidak surut ke SP yang sudah dikirim
+                      )), false) AS perlu_gm
    FROM sales_order_lines l
      LEFT JOIN products p ON p.id = l.product_id
      LEFT JOIN sales_orders s ON s.id = l.so_id
@@ -239,8 +295,16 @@ begin
   if v_n <> 1 then
     raise exception '130: antrean_gm memuat "b.pct IS NULL" % kali (diharapkan 1: cabang harga) — periksa definisinya dulu.', v_n;
   end if;
-  execute 'create or replace view public.antrean_gm with (security_invoker = on) as '
-          || replace(v_def, 'b.pct IS NULL', 'b.perlu_gm');
+  v_def := replace(v_def, 'b.pct IS NULL', 'b.perlu_gm');
+  -- (6) permintaan harga khusus yang menunggu hanya menahan SP pengajunya
+  v_n := (length(v_def) - length(replace(v_def, '(h.customer_id = s.customer_id) AND (h.product_id = b.product_id)', '')))
+         / length('(h.customer_id = s.customer_id) AND (h.product_id = b.product_id)');
+  if v_n <> 1 then
+    raise exception '130: antrean_gm memuat predikat harga khusus menunggu % kali (diharapkan 1) — periksa definisinya dulu.', v_n;
+  end if;
+  v_def := replace(v_def, '(h.customer_id = s.customer_id) AND (h.product_id = b.product_id)',
+                          '(h.customer_id = s.customer_id) AND (h.product_id = b.product_id) AND (h.so_id = s.id)');
+  execute 'create or replace view public.antrean_gm with (security_invoker = on) as ' || v_def;
 end $$;
 
 -- ── (4) pratinjau_komisi_sp: aturan (1) + (2) untuk form SP ──────────────────────────────────────────────
@@ -394,6 +458,112 @@ begin
 end $$;
 revoke all on function public.pratinjau_komisi_sp(bigint, bigint, text, boolean, jsonb, bigint) from public, anon;
 grant execute on function public.pratinjau_komisi_sp(bigint, bigint, text, boolean, jsonb, bigint) to authenticated;
+
+-- ── (6) persetujuan harga flat tanpa persen gugur bila sales diganti ke non-flat ──────────────────────────
+create or replace function public.gugur_setuju_flat_gm()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_lama_flat boolean; v_baru_flat boolean;
+begin
+  if new.sales_rep_id is not distinct from old.sales_rep_id
+     or new.harga_ok is not true or new.gm_pct_harga is not null then
+    return new;
+  end if;
+  select (r.komisi_flat_pct is not null and not coalesce(r.sp_hanya_gm, false)) into v_lama_flat
+    from public.sales_reps r where r.id = old.sales_rep_id;
+  select (r.komisi_flat_pct is not null) into v_baru_flat
+    from public.sales_reps r where r.id = new.sales_rep_id;
+  if coalesce(v_lama_flat, false) and not coalesce(v_baru_flat, false)
+     and not exists (select 1 from public.komisi_klaim k where k.so_id = new.id) then
+    -- GM menyetujui harga tanpa persen karena komisinya flat; untuk sales non-flat persennya harus diputus
+    new.harga_ok := null; new.gm_pada := null; new.gm_oleh := null;
+  end if;
+  return new;
+end $$;
+revoke all on function public.gugur_setuju_flat_gm() from public, anon, authenticated;
+create or replace trigger so_zz_flat_gm_gugur
+  before update of sales_rep_id on public.sales_orders
+  for each row execute function public.gugur_setuju_flat_gm();
+
+-- ── (6) ajukan_harga_khusus: pengajuan ulang tidak memindahkan so_id dari SP pengaju pertama ──────────────
+create or replace function public.ajukan_harga_khusus(p_customer bigint, p_items jsonb, p_alasan text, p_so bigint default null)
+returns integer language plpgsql security definer set search_path = public as $$
+declare x jsonb; v_n int := 0; v_nett numeric; v_prod bigint; v_ada public.harga_khusus;
+begin
+  if not public.boleh_alur_jual() then
+    raise exception 'Anda tidak berhak mengajukan harga khusus.';
+  end if;
+  if coalesce(btrim(p_alasan), '') = '' then
+    raise exception 'Alasan permintaan harga khusus wajib diisi.';
+  end if;
+  if p_customer is null then
+    raise exception 'Harga khusus menempel pada satu perusahaan — pilih customernya dulu.';
+  end if;
+  if not public.pic_pelanggan_saya(p_customer) then
+    raise exception 'Pelanggan ini bukan pelanggan Anda. Harga khusus menempel pada '
+                    'perusahaannya, jadi hanya sales yang memegangnya yang boleh '
+                    'mengajukan.' using errcode = '42501';
+  end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array'
+     or jsonb_array_length(p_items) = 0 then
+    raise exception 'Tidak ada item yang diajukan.';
+  end if;
+
+  for x in select * from jsonb_array_elements(p_items) loop
+    v_prod := nullif(x->>'product_id', '')::bigint;
+    v_nett := nullif(x->>'harga_nett', '')::numeric;
+    if v_prod is null then raise exception 'Ada item tanpa product_id.'; end if;
+    if v_nett is null or v_nett <= 0 then
+      raise exception 'Harga nett untuk item % belum diisi.', v_prod;
+    end if;
+
+    select * into v_ada from public.harga_khusus
+     where customer_id = p_customer and product_id = v_prod
+       and status in ('menunggu','aktif');
+
+    if found and v_ada.status = 'aktif' and v_nett >= v_ada.harga_nett then
+      -- Sudah pernah diputuskan dan harganya masih di atas batas. Tidak
+      -- perlu antre lagi — itu justru inti fitur ini.
+      continue;
+    end if;
+    if found and v_ada.status = 'menunggu' then
+      -- Permintaan yang sama masih menggantung. Harganya diturunkan ke
+      -- yang paling rendah supaya GM cukup memutuskan sekali.
+      -- 130: so_id SP pengaju PERTAMA dipertahankan — harga khusus yang disetujui berlaku untuk SP pengajunya
+      -- (penggolongan beku); dulu pengajuan ulang memindahkannya sehingga SP pengaju pertama tertahan.
+      update public.harga_khusus
+         set harga_nett = least(harga_nett, v_nett),
+             ehc_item   = coalesce(nullif(x->>'ehc_item','')::numeric, ehc_item),
+             alasan     = btrim(p_alasan),
+             so_id      = coalesce(so_id, p_so),
+             diajukan_pada = now(), diajukan_oleh = auth.uid()
+       where id = v_ada.id;
+      v_n := v_n + 1;
+      continue;
+    end if;
+    if found and v_ada.status = 'aktif' then
+      -- Aktif, tapi yang diminta lebih rendah dari batasnya. Yang lama
+      -- dinonaktifkan dan diganti permintaan baru — dua baris hidup untuk
+      -- pasangan yang sama akan membuat "mana yang berlaku" jadi tebakan.
+      update public.harga_khusus set status = 'nonaktif',
+             diputus_oleh = auth.uid(), diputus_pada = now()
+       where id = v_ada.id;
+      insert into public.harga_khusus_log
+        (harga_khusus_id, lama_harga, lama_ehc, lama_pct, lama_status,
+         harga_nett, ehc_item, komisi_pct, status, catatan, diubah_oleh)
+      values (v_ada.id, v_ada.harga_nett, v_ada.ehc_item, v_ada.komisi_pct, 'aktif',
+              v_ada.harga_nett, v_ada.ehc_item, v_ada.komisi_pct, 'nonaktif',
+              'Diganti permintaan harga yang lebih rendah', auth.uid());
+    end if;
+
+    insert into public.harga_khusus
+      (customer_id, product_id, harga_nett, ehc_item, alasan, so_id, diajukan_oleh)
+    values (p_customer, v_prod, v_nett,
+            coalesce(nullif(x->>'ehc_item','')::numeric, 0),
+            btrim(p_alasan), p_so, auth.uid());
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end $$;
 
 -- ── (5) status tersimpan dihitung ulang (jalur yang sama dengan trigger so_sesudah_ubah) ──────────────────
 do $$
