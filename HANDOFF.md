@@ -62,7 +62,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   PO/SP/penawaran/lead; Office belum punya SP/klaim komisi → tidak ada angka lama yang bergeser.
 - **Catatan alat:** perintah `DROP …` lewat MCP Supabase menunggu konfirmasi "destruktif" yang tidak muncul di
   sesi ini lalu timeout 60 detik (transaksinya batal, tidak ada yang berubah). Pakai `create or replace trigger`
-  (PG 17) — jangan `drop trigger if exists` + `create trigger`.
+  (PG 17) — jangan `drop trigger if exists` + `create trigger`. **8 Okt:** teks `delete` juga memicunya — termasuk
+  `delete from` di DALAM badan fungsi (execute_sql & apply_migration: timeout / "cancelled", tidak ada yang berubah).
+  Fungsi yang memuat `delete` (mis. `putuskan_ubah`) tidak bisa di-create-or-replace dari sesi ini; #57 memakai trigger.
+- **Rilis #57:** layar memuat kolom `set_*` di daftar SP / Double Check / Pengiriman → unggah index.html bersama
+  berkas 126 (sebelum 126 dijalankan, daftar SP menampilkan galat "jalankan 126-set-di-sp.sql"; simpan SP tanpa set
+  tetap jalan).
 - **Perlu keputusan Hannes:** pelanggan belum bertuan hanya diklaim lewat **PO** (jalur lama, berkas 79) —
   penawaran dan SP tanpa PO tidak mengklaim. Ini berlaku juga untuk ±2.470 pelanggan lain yang belum bertuan.
   Bila "memakai" juga berarti membuat penawaran, perlu revisi terpisah.
@@ -96,7 +101,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 | 54 | → sesi EHC/komisi (menunggu konfirmasi) | — |
 | 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
 | 56 | Dokumen penawaran (pratinjau & detail) kini punya kolom **Spesifikasi** tersendiri (baris baru dipertahankan); isian spesifikasi jadi textarea multi-baris (dulu input 1 baris membuang Enter dari spesifikasi master) | **selesai (FE)** |
-| 57 | Set dipecah per pcs di SP sesuai ATURAN; usul tampilan berkelompok + kolom penanda set | tanya: "set (sudah diubah)" & kunci qty |
+| 57 | Tampilan SET di SP, data tetap per pcs (keputusan Hannes 7 Okt a/b/c). **Berkas 126**: kolom penanda `sales_order_lines.set_grup/set_nama/set_qty/set_isi` + CHECK `sol_set_lengkap`; trigger `sol_set_usul` (BEFORE INSERT, hanya saat `rhj.usul='on'`) membawa penanda ketika putuskan_ubah menyisipkan ulang baris SP — dari nilai_baru (layar baru mengirim kuncinya) atau nilai_lama (usulan dari layar lama); putuskan_ubah sendiri TIDAK diubah (alat MCP menolak SQL yang memuat teks "delete"; sesi EHC sudah diberi tahu). Data lama: SP dari PO ditandai hanya bila barisnya persis hasil pemecahan set (urutan produk komponen + Σ qty), diisi dengan `SET LOCAL session_replication_role = replica` (tanpa trigger → harga_list/status/total/audit tidak tersentuh). FE: judul "N set · nama · 1 set = … · @harga/set" di form SP (qty roda terkunci di SP dari PO), detail SP (+ terkirim x/y pcs, batal), Minta ubah SP (penanda ikut terkirim), Double Check Vonny, Pengiriman bertahap, laci harga GM; "set (sudah diubah)" bila isi tak sesuai; SP manual: set yang diubah susunannya kembali jadi baris biasa; kolom set hanya dikirim bila ada baris set (SP tanpa set tetap jalan sebelum berkas 126) | **selesai (DB 126 + FE)**; uji DEV rollback: pencocokan 5 skenario (2 set inline+master, set diubah, produk kembar, biaya di tengah, SP 155), putuskan_ubah 3 skenario (tanpa kunci / eksplisit / nilai aneh); sidik md5 baris & so_ringkas identik, audit_log tak bertambah; layar 35/35 + regresi 231/231 |
 | 58 | Indo Kida (Iwan, 2604) vs Garuda Metalindo (Hendri, 2354) — menabrak #48 | tanya: opsi A ganti nama / B induk / C gabung |
 | 59 | Form penawaran menawarkan "+ Pakai … sebagai item baru"; item diusulkan (`usulkan_produk`) saat penawaran disimpan, lalu disahkan owner/GM/staff; dokumen tanpa "(usulan)" | **inti selesai (FE)**; tanya: tombol "Buang" usulan yang tak jadi order |
 | 60 | UP, e-mail, diskon, TOP belum ada | tanya: bentuk diskon/TOP/UP |
