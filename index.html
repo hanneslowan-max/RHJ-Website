@@ -4687,6 +4687,27 @@ function habisSen(x){
   var s = (Number(x) || 0) * 100;
   return Math.abs(s - Math.round(s)) <= Math.max(1e-6, Math.abs(s) * 1e-13);
 }
+/* #60 review: tipe diskon diganti % → Rp — kotak Rp menampilkan 2 desimal, jadi nilai persen yang lebih halus
+   (mis. 7,125) DIBULATKAN ke sen di sini dan diberitahukan, bukan tampil "7,13" lalu ditolak saat simpan
+   ("paling banyak 2 angka di belakang koma"). Angkanya dipertahankan (orang sering mengetik dulu baru memilih tipe). */
+function diskonIkutTipe(b){
+  var d = Number(b.diskon) || 0;
+  if (b.diskon_tipe !== "persen" && d && !habisSen(d)) {
+    b.diskon = keSen(d) / 100;
+    toast("Diskon Rp dibulatkan ke sen: " + rp(b.diskon) + " — periksa angkanya.");
+  }
+}
+/* #60 review: potongan diskon % habis dalam sen — EKSAK dengan bilangan bulat, cermin CHECK *_diskon_sen
+   (qty × harga × diskon / 100 = trunc(…, 2)). habisSen() bertoleransi relatif, sehingga potongan puluhan juta dengan
+   persen 4 desimal bisa lolos di layar lalu ditolak database saat simpan. qty & harga ≤ 2 desimal, persen ≤ 4 desimal
+   (kotak isiannya); di luar itu kembali ke habisSen. */
+function persenHabisSen(qty, harga, persen){
+  var q = Number(qty) || 0, h = Number(harga) || 0, d = Number(persen) || 0;
+  var qc = Math.round(q * 100), hc = Math.round(h * 100), dd = Math.round(d * 10000);
+  if (Math.abs(q * 100 - qc) > 1e-6 || Math.abs(h * 100 - hc) > 1e-6 || Math.abs(d * 10000 - dd) > 1e-6)
+    return habisSen(q * h * d / 100);
+  return BigInt(qc) * BigInt(hc) * BigInt(dd) % BigInt(100000000) === BigInt(0);   /* potongan (sen) = qc·hc·dd / 10⁸ */
+}
 /* #7: batas diskon — cermin CHECK po_lines_diskon_maks/_sen & po_lines_set_qty_bulat (berkas 94).
    Hasil: pesan galat, atau null bila sah. */
 function cekDiskonPo(b, no){
@@ -4713,9 +4734,9 @@ function cekDiskonPo(b, no){
     return no + "qty " + ribu(q) + " pecahan — nilai sesudah diskon/pembulatan tidak bisa dibagi rata ke qty itu. "
       + "Pakai qty bilangan bulat atau ubah totalnya.";
   if (b.diskon_tipe === "persen") {
-    if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
-    if (!habisSen(bruto * d / 100))
-      return no + "diskon " + ribu(d) + "% menghasilkan potongan Rp "
+    if (d > 100) return no + "diskon " + angkaTeks(d, 4) + "% melebihi 100%.";
+    if (!persenHabisSen(q, h, d))   /* #60 review: eksak, = CHECK po_lines_diskon_sen */
+      return no + "diskon " + angkaTeks(d, 4) + "% menghasilkan potongan Rp "
         + (bruto * d / 100).toLocaleString("id-ID", { maximumFractionDigits: 6 })
         + " — tidak habis dalam sen. Ubah persennya atau pakai diskon Rp.";
   } else {
@@ -6730,7 +6751,9 @@ function pasangBarisPoAsli(){
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-diskon-tipe"), function(sel){   /* #7: mode Rp / % */
     sel.addEventListener("change", function(){
-      f.baris[+sel.dataset.i].diskon_tipe = sel.value; f.baris[+sel.dataset.i].penyesuaian = 0; panelPo();   /* #34 */
+      f.baris[+sel.dataset.i].diskon_tipe = sel.value; f.baris[+sel.dataset.i].penyesuaian = 0;   /* #34 */
+      diskonIkutTipe(f.baris[+sel.dataset.i]);   /* #60 review */
+      panelPo();
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-po .po-hapus"), function(b){
@@ -8371,7 +8394,7 @@ var GALAT_BERKAS = [
     berkas:"39-schema-batal-po-sp.sql" },
   { pola:/edit_massal_timpa/i,
     berkas:"38-schema-massal-tanggal-sama.sql" },
-  { pola:/quotes(_\d+)?\.(up|email|top)\b|quote_lines(_\d+)?\.diskon|customers(_\d+)?\.email|'(up|email|top)' column of 'quotes'|'(diskon|diskon_tipe)' column of 'quote_lines'|quotes_jaga_top|quote_lines_diskon/i,   /* #60 */
+  { pola:/quotes(_\d+)?\.(up|email|top)\b|quote_lines(_\d+)?\.diskon|customers(_\d+)?\.email|'email' column of 'customers'|'(up|email|top)' column of 'quotes'|'(diskon|diskon_tipe)' column of 'quote_lines'|quotes_jaga_top|quote_lines_diskon/i,   /* #60 */
     berkas:"129-penawaran-up-email-top-diskon.sql" },
   { pola:/sales_order_lines(_\d+)?\.set_(grup|nama|qty|isi)|'set_(grup|nama|qty|isi)' column of 'sales_order_lines'|sol_set_lengkap/i,   /* #57: penanda set di SP (embed PostgREST: sales_order_lines_1.…) */
     berkas:"126-set-di-sp.sql" },
@@ -9303,8 +9326,9 @@ function formPelangganTab(c){
     +   field({ nama:"plc_pic", label:"Nama PIC", nilai:c.pic, mati:kunci })
     +   field({ nama:"plc_cabang", label:"Cabang", nilai:c.cabang, mati:kunci })
     + '</div>'
-    + field({ nama:"plc_email", label:"E-mail", nilai:c.email, mati:kunci,   /* #60 (berkas 129) */
-              bantu:"Terisi otomatis dari penawaran bila masih kosong. Dipakai sebagai e-mail penawaran berikutnya." })
+    + field({ nama:"plc_email", label:"E-mail", nilai:c.email, mati:kunci || !PEL_EMAIL,   /* #60 (berkas 129) */
+              bantu: PEL_EMAIL ? "Terisi otomatis dari penawaran bila masih kosong. Dipakai sebagai e-mail penawaran berikutnya."
+                               : "Aktif sesudah berkas db/129 dijalankan." })
     + '<div class="baris2">'
     +   field({ nama:"plc_industri", label:"Industri", jenis:"select", nilai:c.industri || "", mati:kunci,
                 pilihan:[{v:"",l:"— belum ditentukan —"},{v:"Otomotif",l:"Otomotif"},
@@ -9411,7 +9435,8 @@ function simpanPelangganTab(c, baru){
   if (emailPlc && (emailPlc.length > 200 || !EMAIL_POLA.test(emailPlc))) {
     tampilPesan('E-mail "' + esc(emailPlc) + '" tidak valid — contoh: nama@perusahaan.co.id.'); return;
   }
-  if (emailPlc || (c && Object.prototype.hasOwnProperty.call(c, "email"))) badan.email = emailPlc || null;
+  /* #60 review: database tanpa kolom email (PEL_EMAIL false) → tidak pernah dikirim */
+  if (PEL_EMAIL && (emailPlc || (c && Object.prototype.hasOwnProperty.call(c, "email")))) badan.email = emailPlc || null;
   /* Hanya dikirim kalau memang boleh diubah. Mengirimnya selalu berarti
      peran yang tidak berwenang tetap menembakkan kolom itu ke database dan
      ditolak trigger — pesannya membingungkan, padahal ia cuma menyimpan
@@ -9439,7 +9464,7 @@ function simpanPelangganTab(c, baru){
     if (m.indexOf("customers_hp_uniq") > -1)
       tampilPesan("Nomor HP itu sudah dipakai pelanggan lain. Cari dulu nomornya di daftar — "
         + "kemungkinan besar perusahaan ini sudah ada dengan nama yang ditulis berbeda.");
-    else tampilPesan(esc(m));
+    else tampilPesan(esc(m) + petunjukBerkas(m));   /* #60 review: galat skema → berkas migrasinya */
   });
 }
 
@@ -9498,18 +9523,20 @@ function cekDiskonPnw(b, no){
   if (d < 0) return no + "diskon tidak boleh negatif.";
   if (!habisSen(bruto)) return no + "qty × harga tidak habis dalam sen, tidak bisa diberi diskon.";
   if (b.diskon_tipe === "persen") {
-    if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
-    if (!habisSen(bruto * d / 100))
-      return no + "diskon " + ribu(d) + "% menghasilkan potongan yang tidak habis dalam sen — ubah persennya atau pakai diskon Rp.";
+    if (d > 100) return no + "diskon " + angkaTeks(d, 4) + "% melebihi 100%.";
+    if (!persenHabisSen(b.qty, b.harga, d))
+      return no + "diskon " + angkaTeks(d, 4) + "% menghasilkan potongan yang tidak habis dalam sen — ubah persennya atau pakai diskon Rp.";
   } else {
     if (d * 100 > bruto * 100 + 1e-6) return no + "diskon " + rp(d) + " melebihi nilai baris " + rp(bruto) + ".";
     if (!habisSen(d)) return no + "diskon Rp paling banyak 2 angka di belakang koma.";
   }
   return null;
 }
+/* #60 review: persen ditulis sampai 4 desimal (= kotak isiannya, = detail PO) — dulu 2 desimal, sehingga dokumen bisa
+   menulis "33,33%" padahal Jumlah dihitung dari 33,3333%. */
 function teksDiskonPnw(b){
   var d = Number(b.diskon) || 0;
-  return d ? (b.diskon_tipe === "persen" ? ribu(d) + "%" : rp(d)) : "—";
+  return d ? (b.diskon_tipe === "persen" ? angkaTeks(d, 4) + "%" : rp(d)) : "—";
 }
 /* #60: TOP (termin pembayaran) — keterangan dokumen saja; sales cash-only terkunci Cash (DB: quotes_jaga_top). */
 var TOP_PILIHAN = ["Cash", "7 hari", "14 hari", "30 hari", "45 hari", "60 hari"];
@@ -10276,6 +10303,7 @@ function pasangPenawaran(){
       toast("Pelanggan " + f.kepada + " dipegang sales " + (namaRepAlur(f.customer_rep) || "lain")
         + " — pilih pelanggan milik sales yang diwakili.", true);
       f.customer_id = null; f.customer_rep = null; f.kepada = "";
+      lepasKontakPnw(f);   /* #60 review */
     }
     segarkanSpekPenawaran(f);   /* #40 */
     ulang();
@@ -10286,7 +10314,11 @@ function pasangPenawaran(){
     $("pnw-baru-lokasi").addEventListener("input", function(){ f.baru.lokasi = this.value; });
     $("pnw-baru-batal").addEventListener("click", function(){ f.baru = null; f.kepada = ""; ulang(); });
   } else {
-    $("pnw-cust").addEventListener("input", function(){ f.kepada = this.value; f.customer_id = null; f.customer_rep = null; });
+    $("pnw-cust").addEventListener("input", function(){
+      f.kepada = this.value;
+      if (f.customer_id) lepasKontakPnw(f);   /* #60 review: kontak otomatis pelanggan yang dilepas */
+      f.customer_id = null; f.customer_rep = null;
+    });
     pasangCariPelanggan("pnw-cust", "pnw-cust-hasil", function(c){
       f.customer_id = c.id; f.kepada = c.nama; f.customer_rep = c.sales_rep_id || null;
       /* #11 #48: pelanggan bertuan → penawaran atas nama pemegangnya. */
@@ -10305,6 +10337,7 @@ function pasangPenawaran(){
       tampilSales: true,
       tawarBaru: function(q){   /* #41 */
         f.baru = { nama: q, hp: "", lokasi: "" }; f.customer_id = null; f.customer_rep = null; f.kepada = q;
+        lepasKontakPnw(f);   /* #60 review */
         ulang();
         if ($("pnw-baru-hp")) $("pnw-baru-hp").focus();
       },
@@ -10390,7 +10423,12 @@ function pasangPenawaran(){
     inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].diskon = n === null ? 0 : n; ulang0(); });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-dtipe"), function(sel){   /* #60: Rp / % */
-    sel.addEventListener("change", function(){ var b = f.baris[Number(sel.dataset.i)]; b.diskon_tipe = sel.value === "persen" ? "persen" : "rp"; ulang(); });
+    sel.addEventListener("change", function(){
+      var b = f.baris[Number(sel.dataset.i)];
+      b.diskon_tipe = sel.value === "persen" ? "persen" : "rp";
+      diskonIkutTipe(b);   /* #60 review: kotak Rp 2 desimal = nilai yang disimpan */
+      ulang();
+    });
   });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-spek"), function(inp){   /* #3 */
     inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].spesifikasi = inp.value; });
@@ -10427,17 +10465,29 @@ function pasangPenawaran(){
   }
 }
 
+/* #60 review: pelanggan dilepas (nama diketik ulang, "+ Pelanggan baru", sales diganti) → UP & e-mail yang terisi
+   OTOMATIS dari pelanggan sebelumnya dibuang (ketikan orang tetap). Dulu kontak PT A ikut tercetak di penawaran
+   pelanggan baru dan menempel permanen ke datanya lewat quotes_kontak_pelanggan. */
+function lepasKontakPnw(f){
+  if (f.upAuto && f.up === f.upAuto) { f.up = ""; if ($("pnw-up")) $("pnw-up").value = ""; }
+  if (f.emailAuto && f.email === f.emailAuto) { f.email = ""; if ($("pnw-email")) $("pnw-email").value = ""; }
+  f.upAuto = ""; f.emailAuto = "";
+}
 /* #60: UP & e-mail dari data pelanggan (Nama PIC / e-mail). Isian yang diketik orang tidak ditimpa; isian otomatis
-   pelanggan sebelumnya diganti. DB sebelum berkas 129 (tanpa customers.email) → PIC saja. */
-function isiKontakPnw(f, custId){
+   pelanggan sebelumnya diganti. DB sebelum berkas 129 (tanpa customers.email) → PIC saja.
+   opsi.kosongSaja (#60 review, salin penawaran): hanya mengisi kotak yang masih kosong. */
+function isiKontakPnw(f, custId, opsi){
+  var kosongSaja = !!(opsi && opsi.kosongSaja);
   api("GET", "/customers?select=pic,email&id=eq." + Number(custId))
     .catch(function(){ return api("GET", "/customers?select=pic&id=eq." + Number(custId)); })
     .then(function(r){
       var c = (r || [])[0];
       if (!c || LANJUT.penawaran.form !== f || String(f.customer_id) !== String(custId)) return;
       var up = String(c.pic || "").trim(), em = String(c.email || "").trim();
-      if (!String(f.up || "").trim() || f.up === f.upAuto) { f.up = up; f.upAuto = up; if ($("pnw-up")) $("pnw-up").value = up; }
-      if (!String(f.email || "").trim() || f.email === f.emailAuto) { f.email = em; f.emailAuto = em; if ($("pnw-email")) $("pnw-email").value = em; }
+      if (!String(f.up || "").trim() || (!kosongSaja && f.up === f.upAuto)) {
+        f.up = up; f.upAuto = up; if ($("pnw-up")) $("pnw-up").value = up; }
+      if (!String(f.email || "").trim() || (!kosongSaja && f.email === f.emailAuto)) {
+        f.email = em; f.emailAuto = em; if ($("pnw-email")) $("pnw-email").value = em; }
     })
     .catch(function(){ /* isian otomatis saja — kegagalan tidak menahan penawaran */ });
 }
@@ -10462,7 +10512,10 @@ function periksaPenawaran(f){
     if (salah) return;
     var ketik = String(b.ketikan || "").trim();
     var terpilih = !!(b.kode || b.set_id || b.setInline || b.usulanTeks);   /* #28; #59 item baru */
-    if (!terpilih && !ketik && !String(b.qty || "").trim() && !String(b.harga == null ? "" : b.harga).trim()) return;
+    /* #60 review: diskon yang sudah diketik juga berarti baris terisi — dulu baris berisi diskon saja dibuang diam-diam
+       padahal di form ia mengurangi total. */
+    if (!terpilih && !ketik && !String(b.qty || "").trim() && !String(b.harga == null ? "" : b.harga).trim()
+        && !(Number(b.diskon) > 0)) return;
     if (!terpilih) { salah = "Baris " + (i + 1) + ": pilih barangnya dari daftar pencarian (atau hapus barisnya)."; return; }
     if (!(Number(b.qty) > 0)) { salah = "Baris " + (i + 1) + ": qty belum diisi atau bukan angka."; return; }
     if (b.setInline && Number(b.qty) !== Math.floor(Number(b.qty))) { salah = "Baris " + (i + 1) + ": jumlah set harus bilangan bulat."; return; }   /* #28 */
@@ -10549,6 +10602,9 @@ function pratinjauPenawaran(){
     .then(function(nama){ sibuk(false); gambarPratinjauPenawaran(f, cek, nama); });
 }
 function gambarPratinjauPenawaran(f, cek, kepada){
+  /* #60 review: kepala (UP, e-mail, TOP) dibekukan saat pratinjau digambar — sama dengan barisnya (cek.isi). Dulu
+     isian otomatis UP/e-mail yang datang sesudah pratinjau tampil ikut tersimpan tanpa pernah terlihat. */
+  var kepala = { up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f) };
   $("laci-form").innerHTML = '<div class="flag" style="margin-bottom:10px"><span class="f-ico">i</span><div>'
     + 'Periksa sekali lagi sebelum disimpan. Nomor penawaran diberikan database saat disimpan.'
     + (f.baru ? ' <b>' + esc(kepada) + '</b> ikut disimpan sebagai pelanggan baru (HP ' + esc(hpTampil(hpNormal(f.baru.hp)))
@@ -10557,18 +10613,20 @@ function gambarPratinjauPenawaran(f, cek, kepada){
     + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: kepada,
         alamat: f.baru ? String(f.baru.lokasi).trim() : "", sales: namaSalesPnw(f), berlaku_hari: f.berlaku_hari,
         mode_ppn: f.mode_ppn, catatan: String(f.catatan || "").trim(),
-        up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f),   /* #60 */
+        up: kepala.up, email: kepala.email, top: kepala.top,   /* #60 */
         baris: cek.isi.map(function(b){ return barisDokPenawaran(b, f.mode_ppn); }) });
   $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-pnw-simpan-akhir" type="button">Simpan penawaran</button> '
     + '<button class="btn" id="btn-pnw-kembali" type="button">Kembali ubah</button>';
   bukaLaci("Pratinjau penawaran");
   $("btn-pnw-kembali").addEventListener("click", tutupLaci);
-  $("btn-pnw-simpan-akhir").addEventListener("click", function(){ simpanPenawaran(cek.isi); });
+  $("btn-pnw-simpan-akhir").addEventListener("click", function(){ simpanPenawaran(cek.isi, kepala); });
 }
 
-function simpanPenawaran(isi){
+function simpanPenawaran(isi, kepala){
   var f = LANJUT.penawaran.form;
   if (!isi) { var cek = periksaPenawaran(f); if (cek.salah) { toast(cek.salah, true); return; } isi = cek.isi; }
+  /* #60 review: yang disimpan = yang tampil di pratinjau */
+  kepala = kepala || { up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f) };
 
   /* Satu panggilan: (pelanggan baru +) nomor + kepala + baris dalam satu transaksi database
      (berkas 87/109). Gagal di tengah = tidak ada yang tersimpan, nomor tidak
@@ -10584,8 +10642,8 @@ function simpanPenawaran(isi){
       berlaku_hari: (String(f.berlaku_hari).trim() === "" || isNaN(Number(f.berlaku_hari))) ? null : Number(f.berlaku_hari),   /* #5: kosong = tanpa batas */
       kepada: f.kepada || null, catatan: f.catatan || null,
       mode_ppn: f.mode_ppn || "exclude",   /* #42 */
-      up: String(f.up || "").trim() || null, email: String(f.email || "").trim().toLowerCase() || null,   /* #60 (berkas 129) */
-      top: topNilaiPnw(f),
+      up: kepala.up || null, email: kepala.email || null,   /* #60 (berkas 129) */
+      top: kepala.top,
       pelanggan_baru: f.baru ? { nama: String(f.baru.nama).trim(), hp: hpNormal(f.baru.hp), lokasi: String(f.baru.lokasi).trim() } : null,   /* #41 */
       sales_rep_id: peranSales() ? null : f.sales_rep_id   /* #11: sales = dirinya, diisi database */
     },
@@ -10760,6 +10818,9 @@ function salinPenawaran(q){
     f.catatan = q.catatan || "";
     /* #60: UP, e-mail, TOP ikut disalin (diskon per baris di bawah) */
     f.up = q.up || ""; f.email = q.email || "";
+    /* #60 review: salinan = isian otomatis (bukan ketikan) — perusahaan diganti → diganti kontak pelanggan barunya
+       (dulu kontak PT A ikut ke penawaran & data PT B) */
+    f.upAuto = f.up; f.emailAuto = f.email;
     if (q.top && TOP_PILIHAN.indexOf(q.top) < 0) { f.top = "Lainnya"; f.topLain = q.top; } else f.top = q.top || "";
     f.berlaku_hari = q.berlaku_hari == null ? "" : String(q.berlaku_hari);
     var hilang = 0;
@@ -10782,6 +10843,8 @@ function salinPenawaran(q){
     if (hilang) catatan.push(hilang + " baris tidak disalin karena barang/set-nya sudah tidak ada di master");
     if (!f.baris.length) f.baris = [pnwBarisBaru()];
     P.form = f;
+    /* #60 review: penawaran lama (sebelum berkas 129) tanpa UP/e-mail → kotak yang kosong diisi dari data pelanggan */
+    if (f.customer_id && (!String(f.up).trim() || !String(f.email).trim())) isiKontakPnw(f, f.customer_id, { kosongSaja: true });
     P.pesan = "Disalin dari penawaran " + q.nomor + " — periksa harga & qty, lalu simpan sebagai penawaran baru"
       + (catatan.length ? " (" + catatan.join("; ") + ")" : "") + ".";
     tutupLaci();
@@ -20441,6 +20504,8 @@ window.__segar = {
   panel: function(t){ var f = PANEL_LANJUT[t]; if (f) f(); else gambar(); },
   mintaUbah: function(j, id){ formMintaUbah(j, id); },   /* #50: uji laci Minta ubah SP */
   gmPutus: function(j, ref){ formGmPutus(j, ref); },      /* #51: uji laci keputusan GM */
+  cekDiskonPnw: function(b, no){ return cekDiskonPnw(b, no); },   /* #60 review: cek persen eksak */
+  cekDiskonPo: function(b, no){ return cekDiskonPo(b, no); },
   detailSp: function(row){ formDetailDoc("sp", row); },    /* #51: uji detail SP */
   cekVonny: function(row){ formCekVonny(row); },            /* #57: uji laci Double Check */
   kirimPartial: function(s, l, k){ gambarKirimPartial(s, l, k); }   /* #57: uji Pengiriman bertahap */
