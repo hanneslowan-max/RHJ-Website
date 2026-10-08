@@ -232,6 +232,23 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    #50 meloloskan SP tanpa tautan.
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
+   → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada
+   palsu lewat REST): trigger `so_jaga_pelanggan` (`jaga_pelanggan_sp_sales`, BEFORE INSERT / UPDATE OF customer_id,
+   po_id, kepada; selain owner/GM/Vonny & tanpa sesi) — INSERT dari PO: pelanggan = pelanggan PO (kosong → diisi), PO
+   belum tertaut + pelanggan → tolak, sales hanya PO miliknya (jawaban "PO tidak ditemukan"); SP tanpa PO berpelanggan:
+   Kepada = nama/nama_lama pelanggan (`kunci_nama_pelanggan`); UPDATE: po_id & customer_id hanya lewat `tautkan_po_sp`
+   (bendera transaksi `rhj.tautkan_po`, hanya SP yang belum ber-PO, pelanggan kosong → pelanggan PO). `tautkan_po_sp`:
+   sales hanya SP miliknya ("SP tidak ditemukan", sebelum pesan yang menyebut isi SP). FE tidak berubah (tidak ada PATCH
+   customer_id/po_id/kepada; form memilih pelanggan → Kepada = nama). Uji DEV rollback: serangan K1–K10 ditolak (PATCH
+   pelanggan SP61/157/163, lepas/ganti PO, INSERT PO belum tertaut + pelanggan, INSERT PO sales lain, INSERT 1666 +
+   Kepada "Bp Uji Delapan", ubah Kepada SP berpelanggan, tautkan PO ke SP Iwan, staff); sah L1–L7 diterima (pilih
+   pelanggan tanpa HP, nama lama, dari PO belum tertaut, dari PO tertaut → diisi, PO menyusul + Tempelkan PO →
+   pelanggan terisi & bendera kosong lagi, Vonny lengkapi → 3813, GM ganti, PATCH nilai sama).
+   **Sisa (perlu keputusan Hannes, belum dikerjakan):** lewat alur sah "PO menyusul", sales bisa membuat PO untuk
+   pelanggan berharga khusus dengan total sama lalu Tempelkan PO → baris 'menunggu gm' pindah ke harga khusus pelanggan
+   itu (uji L4: menunggu gm → menunggu vonny). Penjaganya kini hanya PO/lampiran yang dilihat Vonny. Opsi: (a) pelanggan
+   patokan harga khusus dibekukan saat SP dibuat (so_baris_hitung — area komisi, perlu sesi EHC); (b) cek Vonny menahan
+   SP yang pelanggannya datang dari PO menyusul bila PO-nya tanpa lampiran.
 9. **Tanggal SP tidak dijaga**: sales bisa INSERT/PATCH `sales_orders.tanggal` mundur (juga SP lunas). Snapshot price list
    (`isi_harga_list`) memakai tanggal itu → tier naik & gerbang GM terlewati (uji: SP tgl 12 Agu 'menunggu vonny' vs hari
    ini 'menunggu gm'). → **SELESAI berkas 133 (DEV 8 Okt)** + FE (tanggal tidak lagi dikirim layar):
