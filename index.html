@@ -8291,8 +8291,10 @@ function simpanSp(khusus){
      satu sumber supaya dua sales tidak dapat nomor yang sama. */
   .then(function(){ return api("POST", "/rpc/nomor_sp_baru", {}); })
   .then(function(no){
+    /* Tanggal SP tidak dikirim: diisi database (default hari ini; berkas 133 memaksanya untuk selain owner/GM) —
+       jam perangkat bisa salah, dan tanggal SP menentukan price list beku, komisi, dan gerbang GM. */
     return api("POST", "/sales_orders", {
-      no_sp: no, tanggal: new Date().toISOString().slice(0,10), po_id: f.po_id,
+      no_sp: no, po_id: f.po_id,
       po_menyusul: !!f.menyusul,
       po_menyusul_alasan: f.menyusul ? String(f.alasanMenyusul).trim() : null,
       customer_id: f.customer_id, sales_rep_id: f.sales_rep_id ? Number(f.sales_rep_id) : null,

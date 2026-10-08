@@ -234,7 +234,25 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
 9. **Tanggal SP tidak dijaga**: sales bisa INSERT/PATCH `sales_orders.tanggal` mundur (juga SP lunas). Snapshot price list
    (`isi_harga_list`) memakai tanggal itu → tier naik & gerbang GM terlewati (uji: SP tgl 12 Agu 'menunggu vonny' vs hari
-   ini 'menunggu gm'). Usul: tanggal := current_date untuk selain owner/GM + kolom dijaga jaga_kolom_sales.
+   ini 'menunggu gm'). → **SELESAI berkas 133 (DEV 8 Okt)** + FE (tanggal tidak lagi dikirim layar):
+   trigger `so_a_tanggal_kini` (`jaga_tanggal_sp`, BEFORE INSERT / UPDATE OF tanggal, no_sp) — selain owner/GM & tanpa
+   sesi: tanggal := `(now() at time zone 'UTC')::date` (tidak ikut header `Prefer: timezone`), nomor wajib bentuk baku
+   bulan itu dan ≤ `sp_counter.terakhir`; sesudah dibuat tanggal & nomor hanya owner/GM. `nomor_sp_baru(p_tanggal)`:
+   p_tanggal hanya dipakai owner/GM. Tidak menyentuh jaga_kolom_sales / putuskan_ubah / objek EHC. Uji DEV rollback 18
+   kasus (sales tanggal mundur → list 517.600 'menunggu gm'; TimeZone Kiritimati; nomor VIII / 999 / 0015 / teks / 000
+   ditolak; PATCH tanggal & nomor SP lunas ditolak, nilai sama lolos; upsert ditolak; GM PATCH & INSERT bebas lolos;
+   tanpa sesi lolos; staff dipaksa & ditolak). Layar: uji_hp 35/35, uji_komisi 33/33, uji_set 46/46, uji12 29/29.
+   **Cek PROD sebelum rilis 133** (baca-saja; bila ada baris → laporkan ke Hannes/GM, pembetulan bukan otomatis):
+   ```sql
+   select s.id, s.no_sp, s.tanggal, a.pada as dicatat_pada, a.oleh_email, pr.peran
+     from public.sales_orders s
+     join public.audit_log a on a.tabel = 'sales_orders' and a.aksi = 'INSERT' and a.baris_id = s.id
+     left join public.profiles pr on pr.id = a.oleh
+    where s.tanggal not in ((a.pada at time zone 'UTC')::date, (a.pada at time zone 'Asia/Jakarta')::date)
+      and coalesce(pr.peran, '') not in ('owner','gm');
+   -- + SP tanpa baris audit INSERT (lebih tua dari audit) ditinjau manual;
+   -- + nomor yang bukan bentuk baku: select no_sp from sales_orders where no_sp !~ '^[0-9]{3,}/MCE/[IVX]+/[0-9]{4}$';
+   ```
 
 Bug/data non-keamanan yang dicatat:
 - **gm_pct harga vs telat** — DIPISAH di berkas 124 (`gm_pct_harga`). (a) sisa gm_pct lama → SELESAI berkas 128 (8 Okt).
