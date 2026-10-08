@@ -40,6 +40,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   50–61 — tidak lagi menulis `harga_ok`. (18) `gm_pct` lama dikosongkan untuk SP non-telat tanpa klaim komisi
   (`db/128`, data saja); tidak berdampak ke klaim karena `jaga_gerbang_komisi` hanya mengisi `pct_gm` untuk SP telat.
   (19) Pelanggan belum bertuan tetap hanya diklaim lewat PO. #58: PO grup dikirim per divisi, komisi tetap per divisi.
+- **`db/130` (#51 lanjutan, sesi 50–61, diterapkan 8 Okt):** `so_baris_hitung` + kolom `perlu_gm` (baris yang menahan
+  SP di gerbang GM; flat Riksa/Michael juga bila di bawah list beku), `harga_list` hanya dari baris (tanpa fallback
+  `harga_berlaku()`), harga khusus dibaca per saat SP dibuat; `so_ringkas.ada_bawah_list/n_*` dari `perlu_gm`;
+  `antrean_gm` cabang 'harga' memakai `b.perlu_gm`; trigger baru `sol_zz_list_beku`. **Untuk #54:** bangun
+  `so_baris_hitung` dari `pg_get_viewdef` DEV sesudah 130 (pertahankan `perlu_gm` & lateral harga khusus baru);
+  gerbang membaca `so_ringkas.ada_bawah_list`.
 - **#57 (8 Okt, sesi 50–61, `db/126`, sudah di DEV):** kolom tampilan set di `sales_order_lines` (`set_grup`,
   `set_nama`, `set_qty`, `set_isi`; CHECK `sol_set_lengkap`; tidak dipakai komisi/gerbang/kirim/batal). `putuskan_ubah`
   **tidak** diubah; sebagai gantinya trigger `sol_set_usul` (BEFORE INSERT, `isi_set_baris_usul()`) mengisi kolom set
