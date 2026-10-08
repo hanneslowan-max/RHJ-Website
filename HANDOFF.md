@@ -59,6 +59,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   `current_date` (ikut TimeZone sesi, bisa diatur klien lewat header `Prefer: timezone`) → ganti `hari_ini_wib()`
   (objek 140 sudah memakai `hari_ini_wib()`). **#8 (menunggu Hannes):** bila dipilih "bekukan pelanggan patokan harga
   khusus saat SP dibuat", itu perubahan `so_baris_hitung` di area sesi ini.
+  **Susulan (8 Okt):** trigger 134 kini bernama `so_jaga_a_pelanggan`; indeks unik `so_po_satu_sp` (satu PO hanya
+  untuk satu SP hidup — berlaku juga untuk fungsi definer); `db/133b` `jaga_tambah_baris_sp` (selain owner/GM dan
+  selain `rhj.usul='on'`, baris SP hanya disisipkan pembuat SP ≤ 15 menit sejak dibuat — bawa syarat ini bila
+  fungsinya dibuat ulang). **Untuk #54/16 (reset `harga_ok`):** barang BARU lewat Minta ubah dibekukan pada price
+  list tanggal SP (aturan 130) → bisa lolos gerbang bila list lama lebih rendah dari list hari ini; putuskan perlakuannya
+  saat merancang #54.
 - **#57 (8 Okt, sesi 50–61, `db/126`, sudah di DEV):** kolom tampilan set di `sales_order_lines` (`set_grup`,
   `set_nama`, `set_qty`, `set_isi`; CHECK `sol_set_lengkap`; tidak dipakai komisi/gerbang/kirim/batal). `putuskan_ubah`
   **tidak** diubah; sebagai gantinya trigger `sol_set_usul` (BEFORE INSERT, `isi_set_baris_usul()`) mengisi kolom set
