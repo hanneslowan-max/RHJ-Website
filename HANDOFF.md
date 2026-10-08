@@ -34,8 +34,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   kolom baru `sales_orders.gm_pct_harga` (CHECK 0–0,5; trigger `so_jaga_gm_pct_harga`); `gm_pct` kembali murni persen
   SP telat. `pct_berlaku` = `coalesce(gm_pct_harga, 0)` bila `harga_ok`. Di DEV urutan terapan: 140 lalu 120–124;
   sesudahnya dicek — saldo EHC per SP, kas sales, klaim komisi #12/#13 tidak berubah, 9 fungsi versi 140 utuh.
-  Pekerjaan tertunda dari catatan mereka (area sesi ini): laci 'telat' di FE masih menulis `harga_ok` (Tolak telat =
-  harga ditolak); SP lama yang `gm_pct`-nya dari keputusan harga tetap berperilaku lama bila kelak telat.
+- **Keputusan Hannes 8 Okt (dikabarkan sesi 50–61):** (16) `harga_ok` **direset** saat baris SP berubah lewat Minta
+  ubah — SP kembali ke antrean harga GM bila masih ada baris di bawah/tanpa price list → **tahap #54 sesi ini**
+  (`putuskan_ubah`). (17) Tombol "Tolak" pada keputusan telat dihapus (GM isi 0%); laci telat FE dikerjakan sesi
+  50–61 — tidak lagi menulis `harga_ok`. (18) `gm_pct` lama dikosongkan untuk SP non-telat tanpa klaim komisi
+  (`db/128`, data saja); tidak berdampak ke klaim karena `jaga_gerbang_komisi` hanya mengisi `pct_gm` untuk SP telat.
+  (19) Pelanggan belum bertuan tetap hanya diklaim lewat PO. #58: PO grup dikirim per divisi, komisi tetap per divisi.
 - **#57 (8 Okt, sesi 50–61, `db/126`, sudah di DEV):** kolom tampilan set di `sales_order_lines` (`set_grup`,
   `set_nama`, `set_qty`, `set_isi`; CHECK `sol_set_lengkap`; tidak dipakai komisi/gerbang/kirim/batal). `putuskan_ubah`
   **tidak** diubah; sebagai gantinya trigger `sol_set_usul` (BEFORE INSERT, `isi_set_baris_usul()`) mengisi kolom set
