@@ -12075,6 +12075,17 @@ function bantuIndustriLama(s){
   var t = s && s.customers && s.customers.industri_lama;
   return t ? "Catatan sheet lama: <b>" + esc(t) + "</b>" : "";
 }
+/* #36: kotak PO customer di laci cek Vonny. Berkas 135: SP yang pelanggannya diisi dari PO menyusul ditahan sampai
+   PO berlampiran — sesudah sales mengunggah, "Periksa ulang" membaca ulang lampirannya supaya Vonny bisa melihatnya
+   sebelum meloloskan. */
+function htmlPoVonny(po){
+  return '<div class="flag"><span class="f-ico">📄</span><div><b>PO customer: ' + esc(po.no_po) + '</b>'
+    + (po.tanggal ? ' · ' + esc(tglTampil(po.tanggal)) : '')
+    + (po.lampiran
+        ? ' · <button type="button" class="btn kecil" id="btn-vc-lampiran">📎 Lihat lampiran PO</button>'
+        : ' · <span class="muted">belum ada lampiran PO — minta sales mengunggahnya di tab Upload PO</span>')
+    + '</div></div>';
+}
 function formCekVonny(s){
   if (!bolehKonfirmasiKirim()) { toast("Hanya owner, GM, atau Vonny yang boleh mengecek.", true); return; }
   var r = ringkasSo(s);
@@ -12091,14 +12102,7 @@ function formCekVonny(s){
     + tile("Sales", namaRepAlur(s.sales_rep_id) || "—", esc(s.kepada || ""))
     + '</div>'
     /* #36: nomor PO + lampirannya terbaca langsung di sini */
-    + (po
-        ? '<div class="flag"><span class="f-ico">📄</span><div><b>PO customer: ' + esc(po.no_po) + '</b>'
-          + (po.tanggal ? ' · ' + esc(tglTampil(po.tanggal)) : '')
-          + (po.lampiran
-              ? ' · <button type="button" class="btn kecil" id="btn-vc-lampiran">📎 Lihat lampiran PO</button>'
-              : ' · <span class="muted">belum ada lampiran PO — minta sales mengunggahnya di tab Upload PO</span>')
-          + '</div></div>'
-        : '')
+    + (po ? '<div id="vc-po">' + htmlPoVonny(po) + '</div>' : '')
     + (s.catatan ? '<div class="flag"><span class="f-ico">✎</span><div><b>Catatan sales:</b> ' + esc(s.catatan) + '</div></div>' : '')
     /* #8 #10: mode tanpa PO dinyatakan pembuat SP SEBELUM cek ini (berkas 88) — alasannya
        yang diperiksa Vonny, jadi harus terbaca di sini. */
@@ -12160,7 +12164,21 @@ function formCekVonny(s){
   $("laci-kaki").innerHTML = '<button class="btn" id="btn-vc-tutup" type="button">Tutup</button>';
   bukaLaci("Cek kelayakan Vonny — " + s.no_sp);
   $("btn-vc-tutup").addEventListener("click", tutupLaci);
-  if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
+  function pasangTombolLampiran(){
+    if ($("btn-vc-lampiran")) $("btn-vc-lampiran").addEventListener("click", function(){ bukaLampiranPo(po.lampiran); });   /* #36 */
+  }
+  pasangTombolLampiran();
+  /* Berkas 135: lampiran yang baru diunggah sales terbaca tanpa menutup laci. */
+  function segarkanLampiranPo(){
+    if (!po || po.lampiran || !s.po_id) return;
+    api("GET", "/purchase_orders?select=lampiran&id=eq." + Number(s.po_id)).then(function(r){
+      var x = Array.isArray(r) ? r[0] : r;
+      if (!x || !x.lampiran || !$("vc-po") || !btnOk.isConnected) return;
+      po.lampiran = x.lampiran;
+      $("vc-po").innerHTML = htmlPoVonny(po);
+      pasangTombolLampiran();
+    }).catch(function(){});
+  }
   /* #50: tombol loloskan dikunci selama SP belum bisa diloloskan; No. HP / alamat yang diketik diperiksa langsung
      (cek_kelayakan_vonny dengan isian laci) supaya Vonny tahu hasilnya SEBELUM menekan tombol.
      Review: laci memeriksa ULANG saat dibuka (tanda di daftar bisa basi — mis. GM baru memutuskan); hasil hanya
@@ -12188,6 +12206,7 @@ function formCekVonny(s){
         var k = (Array.isArray(r) ? r[0] : r) || null;
         if (!ketik && V.kelayakan && k) V.kelayakan[s.id] = k;   /* keadaan server (tanpa ketikan laci) → daftar ikut segar */
         pasangKelayakan(k);
+        segarkanLampiranPo();
       })
       .catch(function(e){
         if (g !== giliranCek || !btnOk.isConnected) return;

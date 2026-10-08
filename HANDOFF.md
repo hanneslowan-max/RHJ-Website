@@ -212,6 +212,22 @@ persen saat menyetujui harga (boleh 0, maks 50%).
    antrean_gm, status sama sebelum-sesudah. **Diterapkan di DEV 8 Okt.** PROD: dijalankan bersama paket rilis.
 6. (19) Pelanggan belum bertuan tetap hanya diklaim lewat PO (dicatat di ATURAN B › Akses).
 7. #55: contoh penawaran menyusul dari Hannes.
+8. (18) Sisa #8 "PO menyusul + PO buatan sendiri" → **opsi (b): cek Vonny menahan** → **SELESAI berkas 135 (DEV 8 Okt) + FE**:
+   kolom penanda `sales_orders.pelanggan_dari_po` (diisi `tautkan_po_sp` saat pelanggan SP yang kosong terisi dari
+   pelanggan PO; dijaga `so_jaga_a_pelanggan` — dipaksa false saat INSERT, tak bisa diubah selain lewat tautkan /
+   owner/GM/Vonny); `cek_kelayakan_vonny` kode `lampiran_po` (perlu: sales) & `putuskan_vonny_cek` menolak
+   meloloskan (semua peran) selama PO itu tanpa lampiran; Tahan tetap bisa. Data lama: SP hidup belum dikirim yang
+   pelanggan & PO-nya terisi bersamaan (riwayat audit) diberi penanda tanpa trigger + audit 'migrasi 135' (DEV 0).
+   FE: laci cek Vonny membaca ulang lampiran PO saat "Periksa ulang" → tombol "Lihat lampiran PO" muncul tanpa
+   menutup laci. Uji DEV rollback T0–T10 (INSERT kirim penanda → dipaksa false; Tempelkan PO → penanda & 'menunggu
+   vonny'; PATCH penanda ditolak; pelanggan dipilih sejak dibuat → tanpa penanda; cek → lampiran_po/sales; loloskan
+   ditolak; Tahan ok; sales lampirkan_po → cek ok → loloskan → 'di gudang'; GM boleh ubah penanda). Isi fungsi DEV =
+   berkas (md5). Layar uji_lampiran 17/17 (desktop + HP 390); regresi uji_vonny 32/32, uji_vonny2 16/16, uji119
+   36/36, uji_hp 35/35, uji_set 46/46, uji_nama 12/12, uji_nomor 10/10, uji12 29/29.
+   Sisa (dicatat): PO menyusul yang ditempel SESUDAH barang dikirim tidak lewat cek Vonny lagi — praktis hanya SP
+   lama yang lolos cek tanpa pelanggan (sejak #37/#50 cek Vonny menautkan pelanggan, jadi Tempelkan PO pada SP yang
+   sudah berpelanggan beda ditolak). SP dari PO biasa (bukan menyusul) tanpa lampiran tetap bisa diloloskan seperti
+   sebelumnya; Vonny melihat "belum ada lampiran PO" di laci.
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
@@ -244,7 +260,7 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    Kepada "Bp Uji Delapan", ubah Kepada SP berpelanggan, tautkan PO ke SP Iwan, staff); sah L1–L7 diterima (pilih
    pelanggan tanpa HP, nama lama, dari PO belum tertaut, dari PO tertaut → diisi, PO menyusul + Tempelkan PO →
    pelanggan terisi & bendera kosong lagi, Vonny lengkapi → 3813, GM ganti, PATCH nilai sama).
-   **Sisa (perlu keputusan Hannes, belum dikerjakan):** lewat alur sah "PO menyusul", sales bisa membuat PO untuk
+   **Sisa → DIPUTUS Hannes 8 Okt: opsi (b), SELESAI berkas 135 (lihat bawah).** Dulu: lewat alur sah "PO menyusul", sales bisa membuat PO untuk
    pelanggan berharga khusus dengan total sama lalu Tempelkan PO → baris 'menunggu gm' pindah ke harga khusus pelanggan
    itu (uji L4: menunggu gm → menunggu vonny). Penjaganya kini hanya PO/lampiran yang dilihat Vonny. Opsi: (a) pelanggan
    patokan harga khusus dibekukan saat SP dibuat (so_baris_hitung — area komisi, perlu sesi EHC); (b) cek Vonny menahan
