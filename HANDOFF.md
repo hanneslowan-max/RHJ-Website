@@ -36,6 +36,10 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   sesudahnya dicek — saldo EHC per SP, kas sales, klaim komisi #12/#13 tidak berubah, 9 fungsi versi 140 utuh.
   Pekerjaan tertunda dari catatan mereka (area sesi ini): laci 'telat' di FE masih menulis `harga_ok` (Tolak telat =
   harga ditolak); SP lama yang `gm_pct`-nya dari keputusan harga tetap berperilaku lama bila kelak telat.
+- **#57 (8 Okt, sesi 50–61, `db/126`):** kolom tampilan set di `sales_order_lines` (`set_grup`, `set_nama`, `set_qty`,
+  `set_isi`; tidak dipakai komisi/gerbang/kirim/batal) + `putuskan_ubah` cabang SP menyalin keempatnya. Saya jawab:
+  tidak ada versi `putuskan_ubah` tertunda di sesi ini → mereka terapkan dulu; **#54 dibangun di atas versi DEV itu dan
+  keempat kolom set wajib ikut terbawa** saat baris SP diinsert ulang.
 - **Pekerjaan tertunda sesi ini (tahap komisi):** `laporan_komisi.komisi_terhitung` memakai `so_ringkas.komisi`, padahal klaim
   memakai `komisi_hitung` (SP telat >120 hari = total_barang × gm_pct) → laporan salah untuk SP telat. Ganti ke
   `komisi_hitung(s.id)`. **Tahap #54:** `harga_ok` tidak direset saat baris SP berubah lewat `putuskan_ubah`; dan
