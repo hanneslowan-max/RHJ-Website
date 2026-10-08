@@ -3419,7 +3419,7 @@ function hitungProduk(){
                     ? labelUkuran(Number(p.diameter_mm))
                     : ukuranProduk(p.kode, p.kelompok)) || TAK_TERBACA;
     p._cari = (p.kode + " " + (p.brand||"") + " " + (p.kelompok||"") + " " + (p.kategori||"") + " " + (p.fungsi||"") + " " +   /* #26 */
-               p._bahan + " " + p._ukuran + " " +
+               p._bahan + " " + p._ukuran + " " + (p.usulan_teks || "") + " " +   /* #59 review: produk sah ditemukan dari teks usulan asalnya */
                p._kodePabrik.map(function(k){ return k.kode_pabrik; }).join(" "));
     p._cari = normalCari(p._cari);   /* #31: dibakukan sama dengan teks yang diketik */
   });
@@ -4582,7 +4582,7 @@ function adaFrasaProduk(q){
   if (!t) return true;
   return PRODUK.some(function(p){
     if (p.usulan) return false;
-    return ((p.kode || "") + " " + (p.nama || "") + " " + (p.brand || ""))
+    return ((p.kode || "") + " " + (p.nama || "") + " " + (p.brand || "") + " " + (p.usulan_teks || ""))   /* #59 review: teks usulan asal */
              .toLowerCase().replace(/\s+/g, " ").indexOf(t) > -1;
   });
 }
@@ -4596,7 +4596,14 @@ function cariUsulanAda(q){
     if (!p.usulan || p.aktif === false) return false;
     var idx = normalCari(p.usulan_teks || p.kode);
     return kata.every(function(w){ return idx.indexOf(w) > -1; });
+  }).sort(function(a, b){   /* review: teks yang sama persis selalu tampil (dulu bisa terpotong 5 teratas) */
+    return (normalCari(b.usulan_teks || b.kode) === t) - (normalCari(a.usulan_teks || a.kode) === t);
   }).slice(0, 5);
+}
+/* #59 review: ada usulan aktif dengan teks yang SAMA (seluruh PRODUK, bukan hanya 5 tampilan) → tanpa "+ Pakai … baru". */
+function adaUsulanSama(q){
+  var t = normalCari(q);
+  return !!t && PRODUK.some(function(p){ return p.usulan && p.aktif !== false && normalCari(p.usulan_teks || p.kode) === t; });
 }
 function produkById(id){
   return PRODUK.filter(function(p){ return String(p.id) === String(id); })[0] || null;
@@ -8364,6 +8371,8 @@ var GALAT_BERKAS = [
     berkas:"39-schema-batal-po-sp.sql" },
   { pola:/edit_massal_timpa/i,
     berkas:"38-schema-massal-tanggal-sama.sql" },
+  { pola:/quotes(_\d+)?\.(up|email|top)\b|quote_lines(_\d+)?\.diskon|customers(_\d+)?\.email|'(up|email|top)' column of 'quotes'|'(diskon|diskon_tipe)' column of 'quote_lines'|quotes_jaga_top|quote_lines_diskon/i,   /* #60 */
+    berkas:"129-penawaran-up-email-top-diskon.sql" },
   { pola:/sales_order_lines(_\d+)?\.set_(grup|nama|qty|isi)|'set_(grup|nama|qty|isi)' column of 'sales_order_lines'|sol_set_lengkap/i,   /* #57: penanda set di SP (embed PostgREST: sales_order_lines_1.…) */
     berkas:"126-set-di-sp.sql" },
   { pola:/pilihan_tipe_roda|quote_lines\.set_komponen|set_inline|label_set_inline/i,   /* #28 (sebelum pola 94: "set_komponen") */
@@ -8566,13 +8575,13 @@ function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): ket
        garis pemisah, jadi orang melihat "Gigi 4" sebelum memutuskan
        membuat yang baru. */
     var usulAda = usulkan ? cariUsulanAda(q) : [];   /* #59 opsi B */
-    var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q)
-                   && !usulAda.some(function(p){ return normalCari(p.usulan_teks || p.kode) === normalCari(q); }));
+    var tawaran = (usulkan && q.length >= 3 && !adaFrasaProduk(q) && !adaUsulanSama(q));
+    var mati = (!r.length && q) ? cariProdukNonaktif(q) : [];   /* #32: jelaskan, jangan diam (review #59: juga bila ada usulan) */
+    var ketMati = mati.length ? '<div class="cari-kosong">Produk yang cocok sudah <b>dinonaktifkan</b>: '
+        + mati.map(function(p){ return esc(p.kode); }).join(", ") + '. Hubungi owner bila masih dipakai.</div>' : '';
     if (!r.length && !tawaran && !usulAda.length) {
-      var mati = q ? cariProdukNonaktif(q) : [];   /* #32: jelaskan, jangan diam */
       if (!mati.length) { box.hidden = true; return; }
-      box.innerHTML = '<div class="cari-kosong">Produk yang cocok sudah <b>dinonaktifkan</b>: '
-        + mati.map(function(p){ return esc(p.kode); }).join(", ") + '. Hubungi owner bila masih dipakai.</div>';
+      box.innerHTML = ketMati;
       box.hidden = false; return;
     }
     var lebih = String(inp.value || "").trim() && cariProdukLokal.jumlah > r.length ? cariProdukLokal.jumlah - r.length : 0;   /* #31 */
@@ -8580,6 +8589,7 @@ function pasangCariProduk(inp, pilih, usulkan, ketUsul){   /* ketUsul (#59): ket
         return '<div class="cari-opsi" data-id="'+p.id+'"><b>'+esc(p.nama || p.kode)+'</b>'
           + '<span>'+esc(p.brand || "")+(p.kelompok ? ' · '+esc(p.kelompok) : '')+(p.kategori && p.kategori !== "Roda" ? ' · '+esc(p.kategori) : '')+'</span></div>'; }).join("")
       + (lebih ? '<div class="cari-kosong">+' + lebih + ' produk lain cocok — ketik lebih spesifik (mis. tambah ukuran atau fungsi).</div>' : '')
+      + ketMati
       + usulAda.map(function(p, k){
           return '<div class="cari-opsi cari-usul" data-usul-ada="' + k + '">'
             + '<b>Pakai usulan yang sudah ada: "' + esc(p.usulan_teks || p.kode) + '"</b>'
@@ -8868,6 +8878,7 @@ var KOLOM_URUT_PELANGGAN = { nama:["nama_urut"], hp:["hp"], pic:["pic"], cabang:
    diunggah lebih dulu. Kalau kolomnya ditolak, daftar dimuat ulang tanpa kolom itu — yang
    hilang hanya keterangan "sales lama (nonaktif)", bukan seluruh tab Pelanggan. */
 var PEL_SALES_LAMA = true;
+var PEL_EMAIL = true;   /* #60 (berkas 129): customers.email — dimundurkan bila database belum punya kolomnya */
 function muatPelanggan(){
   var P = LANJUT.pelanggan;
   if (P.memuat) return Promise.resolve();
@@ -8876,7 +8887,8 @@ function muatPelanggan(){
   var kol = "id,nama,hp,telp,pic,lokasi,industri,cabang,salesman_teks,sumber,"
           + "blacklist,alasan_blacklist,perlu_konfirmasi,alasan_konfirmasi,sales_rep_id,"
           + "industri_lama,nama_lama"   /* #25 / #20 */
-          + (PEL_SALES_LAMA ? ",sales_rep_lama_id" : "");
+          + (PEL_SALES_LAMA ? ",sales_rep_lama_id" : "")
+          + (PEL_EMAIL ? ",email" : "");
   var syarat = plKunci();
   var u = URUT_PELANGGAN[P.urut] || URUT_PELANGGAN.master;
   var q = u.q;
@@ -8902,6 +8914,10 @@ function muatPelanggan(){
     P.memuat = false;
     if (PEL_SALES_LAMA && String((e && e.message) || "").indexOf("sales_rep_lama_id") > -1) {
       PEL_SALES_LAMA = false;
+      return muatPelanggan();
+    }
+    if (PEL_EMAIL && /customers(_\d+)?\.email/.test(String((e && e.message) || ""))) {   /* #60 */
+      PEL_EMAIL = false;
       return muatPelanggan();
     }
     throw e;
@@ -9287,6 +9303,8 @@ function formPelangganTab(c){
     +   field({ nama:"plc_pic", label:"Nama PIC", nilai:c.pic, mati:kunci })
     +   field({ nama:"plc_cabang", label:"Cabang", nilai:c.cabang, mati:kunci })
     + '</div>'
+    + field({ nama:"plc_email", label:"E-mail", nilai:c.email, mati:kunci,   /* #60 (berkas 129) */
+              bantu:"Terisi otomatis dari penawaran bila masih kosong. Dipakai sebagai e-mail penawaran berikutnya." })
     + '<div class="baris2">'
     +   field({ nama:"plc_industri", label:"Industri", jenis:"select", nilai:c.industri || "", mati:kunci,
                 pilihan:[{v:"",l:"— belum ditentukan —"},{v:"Otomotif",l:"Otomotif"},
@@ -9387,6 +9405,13 @@ function simpanPelangganTab(c, baru){
     perlu_konfirmasi: konfirmasi,
     alasan_konfirmasi: konfirmasi ? alasan : null
   };
+  /* #60 (berkas 129): e-mail dikirim bila kolomnya sudah ada (baris pelanggan membawa kunci email) atau diisi —
+     database sebelum berkas 129 tidak punya kolom itu, dan simpan data lain tidak boleh ikut gagal. */
+  var emailPlc = String(nilaiForm("plc_email") || "").trim().toLowerCase();
+  if (emailPlc && (emailPlc.length > 200 || !EMAIL_POLA.test(emailPlc))) {
+    tampilPesan('E-mail "' + esc(emailPlc) + '" tidak valid — contoh: nama@perusahaan.co.id.'); return;
+  }
+  if (emailPlc || (c && Object.prototype.hasOwnProperty.call(c, "email"))) badan.email = emailPlc || null;
   /* Hanya dikirim kalau memang boleh diubah. Mengirimnya selalu berarti
      peran yang tidak berwenang tetap menembakkan kolom itu ke database dan
      ditolak trigger — pesannya membingungkan, padahal ia cuma menyimpan
@@ -9433,7 +9458,7 @@ function simpanPelangganTab(c, baru){
    produk) — dipakai untuk tahu apakah isian sudah diubah orangnya saat barangnya diganti (#43). */
 function pnwBarisBaru(){
   return { kode:null, set_id:null, setRinci:"", deskripsi:"", qty:"", harga:"", list:null, satuan:"pcs",
-           spesifikasi:"", spekAuto:null, spekAsal:"" };
+           spesifikasi:"", spekAuto:null, spekAsal:"", diskon:0, diskon_tipe:"rp" };   /* #60: diskon per baris */
 }
 /* #11: sales_rep_id = sales pemilik penawaran. Untuk sales diisi database
    (dirinya sendiri); Vonny/owner/GM/staff memilih sales yang diwakili.
@@ -9443,16 +9468,57 @@ function pnwBarisBaru(){
 function pnwFormBaru(repTetap){
   return { customer_id:null, customer_rep:null, sales_rep_id: repTetap || null, baru:null,
            kepada:"", tanggal:new Date().toISOString().slice(0,10), mode_ppn:"exclude",
-           berlaku_hari:"", catatan:"", baris:[pnwBarisBaru()] };  /* #5: masa berlaku default KOSONG (tanpa batas), tidak auto-14 */
+           berlaku_hari:"", catatan:"", baris:[pnwBarisBaru()],  /* #5: masa berlaku default KOSONG (tanpa batas), tidak auto-14 */
+           up:"", email:"", top:"", topLain:"", upAuto:"", emailAuto:"" };   /* #60 */
 }
+/* #60 (berkas 129): nilai baris penawaran SESUDAH diskon (Rp/%) — dihitung bulat dalam 1/10.000 Rp seperti baris PO
+   (poNilaiBaris1e4), tanpa pembulatan; diskon 0 = qty × harga persis seperti dulu. */
+function nilai1e4Pnw(b){
+  return poNilaiBaris1e4({ qty: b.qty, harga: b.harga, diskon: b.diskon, diskon_tipe: b.diskon_tipe, penyesuaian: 0 });
+}
+function nilaiBarisPnw(b){ return nilai1e4Pnw(b) / 10000; }
 function pnwTotal(f){
-  return f.baris.reduce(function(a, b){ return a + (Number(b.qty)||0) * (Number(b.harga)||0); }, 0);
+  return f.baris.reduce(function(a, b){ return a + nilai1e4Pnw(b); }, 0) / 10000;
 }
-/* Σ qty × harga — nilai "sesuai dokumen" (untuk include: sudah termasuk PPN). */
+/* Σ nilai baris sesudah diskon — nilai "sesuai dokumen" (untuk include: sudah termasuk PPN). */
 function jumlahPenawaran(q){
-  var l = q.quote_lines || [];
-  return l.reduce(function(a, b){ return a + (Number(b.qty)||0) * (Number(b.harga)||0); }, 0);
+  return (q.quote_lines || []).reduce(function(a, b){ return a + nilai1e4Pnw(b); }, 0) / 10000;
 }
+/* #60: "di bawah list" dari harga per unit SESUDAH diskon (pola poBawahList); include → dari DPP (#42). */
+function bawahListPnw(b, list, mode){
+  if (list === null || list === undefined || list === "" || !(Number(list) > 0)) return false;
+  var q = Number(b.qty) || 0;
+  return bandingList(q > 0 ? nilaiBarisPnw(b) / q : (Number(b.harga) || 0), list, mode) < 0;
+}
+/* #60: cermin CHECK quote_lines_diskon_* (berkas 129, = po_lines). Hasil: pesan galat atau null. */
+function cekDiskonPnw(b, no){
+  var d = Number(b.diskon) || 0;
+  if (!d) return null;
+  var bruto = (Number(b.qty) || 0) * (Number(b.harga) || 0);
+  if (d < 0) return no + "diskon tidak boleh negatif.";
+  if (!habisSen(bruto)) return no + "qty × harga tidak habis dalam sen, tidak bisa diberi diskon.";
+  if (b.diskon_tipe === "persen") {
+    if (d > 100) return no + "diskon " + ribu(d) + "% melebihi 100%.";
+    if (!habisSen(bruto * d / 100))
+      return no + "diskon " + ribu(d) + "% menghasilkan potongan yang tidak habis dalam sen — ubah persennya atau pakai diskon Rp.";
+  } else {
+    if (d * 100 > bruto * 100 + 1e-6) return no + "diskon " + rp(d) + " melebihi nilai baris " + rp(bruto) + ".";
+    if (!habisSen(d)) return no + "diskon Rp paling banyak 2 angka di belakang koma.";
+  }
+  return null;
+}
+function teksDiskonPnw(b){
+  var d = Number(b.diskon) || 0;
+  return d ? (b.diskon_tipe === "persen" ? ribu(d) + "%" : rp(d)) : "—";
+}
+/* #60: TOP (termin pembayaran) — keterangan dokumen saja; sales cash-only terkunci Cash (DB: quotes_jaga_top). */
+var TOP_PILIHAN = ["Cash", "7 hari", "14 hari", "30 hari", "45 hari", "60 hari"];
+function topNilaiPnw(f){
+  if (repCashOnly(repPenawaranForm(f))) return "Cash";
+  if (f.top === "Lainnya") return String(f.topLain || "").trim() || null;
+  return f.top || null;
+}
+var EMAIL_POLA = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 /* #42: grand total penawaran sesuai mode PPN-nya. */
 function nilaiPenawaran(q){ return hitungPpn(q.mode_ppn || "exclude", jumlahPenawaran(q), 0).grand; }
 /* #42: nilai tanpa PPN (DPP) — untuk kartu "Nilai penawaran" yang menjumlah banyak penawaran berbeda mode. */
@@ -9466,8 +9532,8 @@ function masaPenawaran(q){
   return { tanpaBatas:false, habis: b < new Date(), sampai: b.toISOString().slice(0,10) };
 }
 /* Kolom yang diminta untuk daftar, pencarian (#44), dan laci detail. */
-var PNW_SELECT = "id,nomor,tanggal,berlaku_hari,kepada,catatan,customer_id,sales_rep_id,lead_id,mode_ppn,"   /* #42 */
-  + "customers(nama,hp,sales_rep_id),quote_lines(id,urut,product_id,set_id,set_komponen,deskripsi,spesifikasi,qty,satuan,harga,harga_list)";   /* #28 #47 */
+var PNW_SELECT = "id,nomor,tanggal,berlaku_hari,kepada,catatan,customer_id,sales_rep_id,lead_id,mode_ppn,up,email,top,"   /* #42; #60 */
+  + "customers(nama,hp,sales_rep_id),quote_lines(id,urut,product_id,set_id,set_komponen,deskripsi,spesifikasi,qty,satuan,harga,harga_list,diskon,diskon_tipe)";   /* #28 #47 #60 */
 
 function muatPenawaran(){
   var P = LANJUT.penawaran;
@@ -9995,6 +10061,12 @@ function pnwFormHtml(f){
           + '</select>')
     + '</div>'
     + '<div style="margin-top:12px" id="pnw-pelanggan">' + pnwKotakPelanggan(f) + '</div>'   /* #41 */
+    /* #60: UP & e-mail (terisi dari data pelanggan, bisa diedit) + TOP */
+    + '<div class="baris2" style="margin-top:12px">'
+    +   medanAlur("UP <em>nama yang dituju — opsional</em>", '<input type="text" id="pnw-up" value="' + esc(f.up) + '" maxlength="120" autocomplete="off" placeholder="mis. Bpk Andi (Purchasing)">')
+    +   medanAlur("E-mail <em>opsional</em>", '<input type="email" id="pnw-email" value="' + esc(f.email) + '" maxlength="200" autocomplete="off" placeholder="nama@perusahaan.co.id">')
+    + '</div>'
+    + '<div class="baris2" style="margin-top:12px">' + pnwKotakTop(f) + '<div></div></div>'
     + '<h4 class="sec" style="margin-top:16px">Barang</h4>'
     + '<div id="pnw-baris">' + pnwBarisHtml(f) + '</div>'
     + '<div class="baris-alat" style="margin-top:10px">'
@@ -10007,6 +10079,19 @@ function pnwFormHtml(f){
     + '<div class="baris-alat" style="margin-top:14px;align-items:center;justify-content:flex-end">'
     +   '<button class="btn" id="pnw-kosongkan" type="button">Kosongkan</button>'
     +   '<button class="btn utama" id="pnw-simpan" type="button">Pratinjau &amp; simpan</button></div>';   /* #39 */
+}
+/* #60: kotak TOP. Sales cash-only (Riksa, Michael) → terkunci Cash. */
+function pnwKotakTop(f){
+  if (repCashOnly(repPenawaranForm(f)))
+    return '<div>' + medanAlur("TOP <em>termin pembayaran</em>", '<select id="pnw-top" disabled><option>Cash</option></select>')
+      + '<p class="muted" style="margin:6px 0 0;font-size:11.5px">Sales ini wajib cash — TOP terkunci Cash.</p></div>';
+  var lain = f.top === "Lainnya";
+  return '<div>' + medanAlur("TOP <em>termin pembayaran — opsional</em>",
+      '<select id="pnw-top"><option value="">— tidak dicantumkan —</option>'
+      + TOP_PILIHAN.map(function(t){ return '<option value="' + esc(t) + '"' + (f.top === t ? ' selected' : '') + '>' + esc(t) + '</option>'; }).join("")
+      + '<option value="Lainnya"' + (lain ? ' selected' : '') + '>Lainnya…</option></select>')
+    + (lain ? '<input type="text" id="pnw-top-lain" value="' + esc(f.topLain) + '" maxlength="120" placeholder="mis. DP 50%, sisa 30 hari" style="margin-top:6px;width:100%">' : '')
+    + '</div>';
 }
 /* #42: jumlahan sesuai mode PPN */
 function pnwJumlahIsi(mode, jumlah){
@@ -10081,8 +10166,8 @@ function pnwBarisHtml(f){
        baris set digambar sebagai kotak cari, lalu dibuang saat simpan karena
        tak punya kode). Harga boleh diturunkan; ditandai terhadap harga set. */
     if (b.set_id || b.setInline) {   /* #28: juga set inline */
-      var totSet = (Number(b.qty)||0) * (Number(b.harga)||0);
-      var bawahSet = b.list != null && b.list !== "" && bandingList(b.harga, b.list, pnwModeForm()) < 0;   /* #42: include → DPP */
+      var totSet = nilaiBarisPnw(b);   /* #60: sesudah diskon */
+      var bawahSet = bawahListPnw(b, b.list, pnwModeForm());   /* #42: include → DPP; #60: sesudah diskon */
       return '<div class="baris-item" data-i="' + i + '">'
         + '<div class="bi-produk">'
         +   '<span class="pill p-lunas" style="float:right">set</span>'
@@ -10097,16 +10182,17 @@ function pnwBarisHtml(f){
         +   '<textarea class="pnw-spek" rows="2" data-i="' + i + '" placeholder="opsional — mis. dimensi / bahan / beban">' + esc(b.spesifikasi || "") + '</textarea></div>'   /* #3; #56: multi-baris */
         + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(totSet) + '</b>'
         +   (bawahSet ? '<span class="bi-tanda bad">di bawah harga set</span>' : '') + '</div>'
-        + '<div class="bi-angka bi-mini">'
+        + '<div class="bi-angka bi-po">'
         +   '<div><label>Qty (set)</label><input type="text" inputmode="decimal" data-angka="' + (b.setInline ? 0 : 2) + '" class="pnw-qty" data-i="' + i + '" value="' + ribu(b.qty) + '"></div>'   /* #28: set inline = bulat */
         +   '<div><label>Harga / set</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-harga' + (bawahSet ? " bawah" : "")
         +     '" data-i="' + i + '" value="' + ribu(b.harga) + '"></div>'
+        +   pnwDiskonHtml(b, i)   /* #60 */
         +   '<div><label>&nbsp;</label><button class="btn kecil bahaya pnw-hapus" data-i="' + i + '" type="button">×</button></div>'
         + '</div></div>';
     }
     var p = b.kode ? produkById(b.kode) : null;
-    var total = (Number(b.qty)||0) * (Number(b.harga)||0);   /* #12 */
-    var bawah = b.list && bandingList(b.harga, b.list, pnwModeForm()) < 0;   /* #42: include → DPP vs price list */
+    var total = nilaiBarisPnw(b);   /* #12; #60: sesudah diskon */
+    var bawah = bawahListPnw(b, b.list, pnwModeForm());   /* #42: include → DPP vs price list; #60: sesudah diskon */
     return '<div class="baris-item" data-i="' + i + '">'
       + '<div class="bi-produk"><label>Nama barang</label>'
       +   (p ? '<div class="bi-nama">' + esc(p.nama || p.kode) + '</div>'
@@ -10125,14 +10211,25 @@ function pnwBarisHtml(f){
       +   '<textarea class="pnw-spek" rows="2" data-i="' + i + '" placeholder="opsional — mis. dimensi / bahan / beban">' + esc(b.spesifikasi || "") + '</textarea></div>'   /* #3; #56: multi-baris */
       + '<div class="bi-hasil"><label>Total baris</label><b>' + rp(total) + '</b>'
       +   (bawah ? '<span class="bi-tanda bad">di bawah list</span>' : '') + '</div>'
-      + '<div class="bi-angka bi-mini">'
+      + '<div class="bi-angka bi-po">'
       +   '<div><label>Qty</label><input type="text" inputmode="decimal" data-angka="2" class="pnw-qty" data-i="' + i + '" value="' + ribu(b.qty) + '"></div>'
       +   '<div><label>Harga' + (pnwModeForm() === "include" ? ' <span class="muted" style="font-weight:400">incl. PPN</span>' : '') + '</label>'
       +     '<input type="text" inputmode="decimal" data-angka="2" class="pnw-harga' + (bawah ? " bawah" : "")
       +     '" data-i="' + i + '" value="' + ribu(b.harga) + '"></div>'
+      +   pnwDiskonHtml(b, i)   /* #60 */
       +   '<div><label>&nbsp;</label><button class="btn kecil bahaya pnw-hapus" data-i="' + i + '" type="button">×</button></div>'
       + '</div></div>';
   }).join("");
+}
+/* #60: diskon baris penawaran — Rp atau %, sama dengan baris PO (#7). */
+function pnwDiskonHtml(b, i){
+  var persen = b.diskon_tipe === "persen";
+  return '<div><label>Diskon</label><div class="diskon-grup">'
+    + '<select class="pnw-dtipe" data-i="' + i + '" aria-label="Tipe diskon">'
+    +   '<option value="rp"' + (persen ? '' : ' selected') + '>Rp</option>'
+    +   '<option value="persen"' + (persen ? ' selected' : '') + '>%</option></select>'
+    + '<input type="text" inputmode="decimal" data-angka="' + (persen ? 4 : 2) + '" class="pnw-diskon" data-i="' + i + '" value="'
+    +   angkaTeks(Number(b.diskon) || 0, persen ? 4 : 2) + '" placeholder="' + (persen ? '0–100' : '0') + '"></div></div>';
 }
 function pnwModeForm(){ var P = LANJUT.penawaran; return P.form ? P.form.mode_ppn : "exclude"; }
 /* #40: baris yang spesifikasinya masih isian otomatis ikut diperbarui (mis. sales penawaran diganti). */
@@ -10157,6 +10254,14 @@ function pasangPenawaran(){
   $("pnw-tanggal").addEventListener("change", function(){ f.tanggal = this.value; });
   $("pnw-hari").addEventListener("input", function(){ f.berlaku_hari = this.value; });
   $("pnw-catatan").addEventListener("input", function(){ f.catatan = this.value; });
+  /* #60: UP, e-mail, TOP */
+  if ($("pnw-up")) $("pnw-up").addEventListener("input", function(){ f.up = this.value; });
+  if ($("pnw-email")) $("pnw-email").addEventListener("input", function(){ f.email = this.value; });
+  if ($("pnw-top")) $("pnw-top").addEventListener("change", function(){
+    f.top = this.value; ulang();
+    if (f.top === "Lainnya" && $("pnw-top-lain")) $("pnw-top-lain").focus();
+  });
+  if ($("pnw-top-lain")) $("pnw-top-lain").addEventListener("input", function(){ f.topLain = this.value; });
   $("pnw-ppn").addEventListener("change", function(){   /* #42 */
     f.mode_ppn = this.value;
     f.baris.forEach(function(b){ if (b.hargaAuto && b.list) b.harga = hargaDariList(b.list, f.mode_ppn); });   /* harga otomatis ikut mode */
@@ -10193,6 +10298,7 @@ function pasangPenawaran(){
       }
       if (c.blacklist) toast("Perhatian: " + c.nama + " ada di daftar hitam.", true);
       ulang();
+      isiKontakPnw(f, c.id);   /* #60: UP & e-mail dari data pelanggan */
     }, {
       rep: function(){ return peranSales() ? null : f.sales_rep_id; },   /* #11 + #4 */
       bolehBaru: false,
@@ -10280,6 +10386,12 @@ function pasangPenawaran(){
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-harga"), function(inp){
     inp.addEventListener("input", function(){ var b = f.baris[Number(inp.dataset.i)]; b.harga = angkaId(inp.value); b.hargaAuto = false; ulang0(); });   /* #14; diketik → bukan otomatis */
   });
+  Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-diskon"), function(inp){   /* #60 */
+    inp.addEventListener("input", function(){ var n = angkaId(inp.value); f.baris[Number(inp.dataset.i)].diskon = n === null ? 0 : n; ulang0(); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-dtipe"), function(sel){   /* #60: Rp / % */
+    sel.addEventListener("change", function(){ var b = f.baris[Number(sel.dataset.i)]; b.diskon_tipe = sel.value === "persen" ? "persen" : "rp"; ulang(); });
+  });
   Array.prototype.forEach.call(document.querySelectorAll("#pnw-form .pnw-spek"), function(inp){   /* #3 */
     inp.addEventListener("input", function(){ f.baris[Number(inp.dataset.i)].spesifikasi = inp.value; });
   });
@@ -10302,10 +10414,10 @@ function pasangPenawaran(){
     Array.prototype.forEach.call(document.querySelectorAll("#pnw-baris .baris-item"), function(el, i){
       var b = f.baris[i]; if (!b) return;
       var t = el.querySelector(".bi-hasil b");
-      if (t) t.textContent = rp((Number(b.qty) || 0) * (Number(b.harga) || 0));   /* #12 */
-      /* #42 (verifikator): tanda "di bawah list" ikut diperbarui saat mengetik (include → dari DPP). */
+      if (t) t.textContent = rp(nilaiBarisPnw(b));   /* #12; #60: sesudah diskon */
+      /* #42 (verifikator): tanda "di bawah list" ikut diperbarui saat mengetik (include → dari DPP; #60: sesudah diskon). */
       var isSet = !!(b.set_id || b.setInline), hasil = el.querySelector(".bi-hasil");
-      var bawah = b.list != null && b.list !== "" && Number(b.list) > 0 && bandingList(b.harga, b.list, pnwModeForm()) < 0;
+      var bawah = bawahListPnw(b, b.list, pnwModeForm());
       var tanda = hasil && hasil.querySelector(".bi-tanda.bad");
       if (bawah && !tanda && hasil) hasil.insertAdjacentHTML("beforeend", '<span class="bi-tanda bad">' + (isSet ? 'di bawah harga set' : 'di bawah list') + '</span>');
       if (!bawah && tanda) tanda.parentNode.removeChild(tanda);
@@ -10315,6 +10427,20 @@ function pasangPenawaran(){
   }
 }
 
+/* #60: UP & e-mail dari data pelanggan (Nama PIC / e-mail). Isian yang diketik orang tidak ditimpa; isian otomatis
+   pelanggan sebelumnya diganti. DB sebelum berkas 129 (tanpa customers.email) → PIC saja. */
+function isiKontakPnw(f, custId){
+  api("GET", "/customers?select=pic,email&id=eq." + Number(custId))
+    .catch(function(){ return api("GET", "/customers?select=pic&id=eq." + Number(custId)); })
+    .then(function(r){
+      var c = (r || [])[0];
+      if (!c || LANJUT.penawaran.form !== f || String(f.customer_id) !== String(custId)) return;
+      var up = String(c.pic || "").trim(), em = String(c.email || "").trim();
+      if (!String(f.up || "").trim() || f.up === f.upAuto) { f.up = up; f.upAuto = up; if ($("pnw-up")) $("pnw-up").value = up; }
+      if (!String(f.email || "").trim() || f.email === f.emailAuto) { f.email = em; f.emailAuto = em; if ($("pnw-email")) $("pnw-email").value = em; }
+    })
+    .catch(function(){ /* isian otomatis saja — kegagalan tidak menahan penawaran */ });
+}
 /* Pemeriksaan sebelum pratinjau & simpan. Hasil: { salah } atau { isi: baris yang dikirim }. */
 function periksaPenawaran(f){
   if (!peranSales() && !f.sales_rep_id) return { salah: "Pilih dulu sales yang diwakili." };   /* #11 */
@@ -10343,18 +10469,26 @@ function periksaPenawaran(f){
     if (b.harga === "" || b.harga === null || b.harga === undefined || isNaN(Number(b.harga)) || Number(b.harga) < 0) {
       salah = "Baris " + (i + 1) + ": harga belum diisi."; return;
     }
+    var gd = cekDiskonPnw(b, "Baris " + (i + 1) + ": ");   /* #60 */
+    if (gd) { salah = gd; return; }
     isi.push(b);
   });
   if (salah) return { salah: salah };
   if (!isi.length) return { salah: "Belum ada baris barang dengan qty." };
+  /* #60: e-mail & TOP */
+  var em = String(f.email || "").trim();
+  if (em && (em.length > 200 || !EMAIL_POLA.test(em))) return { salah: 'E-mail "' + em + '" tidak valid — contoh: nama@perusahaan.co.id.' };
+  if (!repCashOnly(repPenawaranForm(f)) && f.top === "Lainnya" && !String(f.topLain || "").trim())
+    return { salah: "TOP “Lainnya” belum diisi — tulis termin pembayarannya, atau pilih yang lain." };
   return { salah: "", isi: isi };
 }
 
 /* #39: dokumen penawaran — dipakai pratinjau (sebelum simpan) dan laci detail (sesudah simpan).
-   d: { nomor, tanggal, kepada, alamat, sales, berlaku_hari, mode_ppn, catatan,
-        baris:[{ judul, sub, spesifikasi, qty, satuan, harga, set, bawah }] } */
+   d: { nomor, tanggal, kepada, alamat, sales, berlaku_hari, mode_ppn, catatan, up, email, top (#60),
+        baris:[{ judul, sub, spesifikasi, qty, satuan, harga, diskon, diskon_tipe, set, bawah }] } */
 function docPenawaranHtml(d){
-  var jml = d.baris.reduce(function(a, b){ return a + (Number(b.qty) || 0) * (Number(b.harga) || 0); }, 0);
+  var jml = d.baris.reduce(function(a, b){ return a + nilai1e4Pnw(b); }, 0) / 10000;   /* #60: sesudah diskon */
+  var adaDiskon = d.baris.some(function(b){ return Number(b.diskon) > 0; });   /* #60: kolom Diskon hanya bila ada */
   var masa = "tanpa batas";
   if (d.berlaku_hari !== null && d.berlaku_hari !== undefined && String(d.berlaku_hari).trim() !== "") {
     var m = masaPenawaran({ tanggal: d.tanggal, berlaku_hari: Number(d.berlaku_hari) });
@@ -10366,14 +10500,17 @@ function docPenawaranHtml(d){
     +   '<span>Nomor</span><div>' + (d.nomor ? '<b>' + esc(d.nomor) + '</b>' : '<i class="muted">diberikan otomatis saat disimpan</i>') + '</div>'
     +   '<span>Tanggal</span><div>' + esc(tglPanjang(d.tanggal) || tglTampil(d.tanggal) || "—") + '</div>'
     +   '<span>Kepada</span><div><b>' + esc(d.kepada || "—") + '</b>' + (d.alamat ? '<br><span class="muted">' + esc(d.alamat) + '</span>' : '') + '</div>'
+    +   (d.up ? '<span>UP</span><div>' + esc(d.up) + '</div>' : '')   /* #60 */
+    +   (d.email ? '<span>E-mail</span><div>' + esc(d.email) + '</div>' : '')
     +   '<span>Sales</span><div>' + esc(d.sales || "—") + '</div>'
     +   '<span>Berlaku</span><div>' + esc(masa) + '</div>'
+    +   (d.top ? '<span>TOP</span><div>' + esc(d.top) + '</div>' : '')
     +   '<span>Harga</span><div>' + esc(labelModePpn(d.mode_ppn)) + (d.mode_ppn === "include" ? ' — harga di bawah sudah termasuk PPN 11%'
           : (d.mode_ppn === "non" ? '' : ' — harga di bawah belum termasuk PPN 11%')) + '</div>'
     + '</div>'
     /* #56: Spesifikasi kolom tersendiri (baris baru dipertahankan), bukan teks kecil di bawah kode barang. */
     + '<div class="tw"><table class="dp-baris"><thead><tr><th>No</th><th class="l">Barang</th>'
-    +   '<th class="l">Spesifikasi</th><th>Qty</th><th class="r">Harga</th><th class="r">Jumlah</th></tr></thead><tbody>'
+    +   '<th class="l">Spesifikasi</th><th>Qty</th><th class="r">Harga</th>' + (adaDiskon ? '<th class="r">Diskon</th>' : '') + '<th class="r">Jumlah</th></tr></thead><tbody>'
     + d.baris.map(function(b, i){
         return '<tr><td>' + (i + 1) + '</td>'
           + '<td class="l">' + esc(b.judul || "—") + (b.set ? ' <span class="pill p-lunas">set</span>' : '')
@@ -10382,7 +10519,8 @@ function docPenawaranHtml(d){
           + '<td class="l dp-spek">' + esc(String(b.spesifikasi || "").trim()) + '</td>'
           + '<td>' + esc(angkaTeks(b.qty)) + ' ' + esc(b.satuan || "") + '</td>'
           + '<td class="r">' + rp(b.harga) + '</td>'
-          + '<td class="r">' + rp((Number(b.qty) || 0) * (Number(b.harga) || 0)) + '</td></tr>';
+          + (adaDiskon ? '<td class="r">' + esc(teksDiskonPnw(b)) + '</td>' : '')   /* #60 */
+          + '<td class="r">' + rp(nilaiBarisPnw(b)) + '</td></tr>';
       }).join("")
     + '</tbody></table></div>'
     + '<div class="jumlahan-alur">' + pnwJumlahIsi(d.mode_ppn, jml) + '</div>'
@@ -10394,7 +10532,8 @@ function barisDokPenawaran(b, mode){   /* baris form → baris dokumen; mode = m
   return { judul: isSet ? (b.deskripsi || "Set") : (pr ? pr.kode : (b.deskripsi || "—")),
            sub: isSet ? ("1 set = " + (b.setRinci || "—")) : (pr && !pr.usulan ? (pr.brand || "") : ""),   /* #59: tanpa "(usulan)" */
            spesifikasi: String(b.spesifikasi || "").trim(), qty: b.qty, satuan: b.satuan || (isSet ? "set" : "pcs"),
-           harga: b.harga, set: isSet, bawah: b.list != null && b.list !== "" && bandingList(b.harga, b.list, mode) < 0 };
+           harga: b.harga, diskon: Number(b.diskon) || 0, diskon_tipe: b.diskon_tipe || "rp",   /* #60 */
+           set: isSet, bawah: bawahListPnw(b, b.list, mode) };
 }
 
 /* #39: pratinjau dulu, baru simpan — tombol Simpan ada di laci pratinjau. */
@@ -10418,6 +10557,7 @@ function gambarPratinjauPenawaran(f, cek, kepada){
     + docPenawaranHtml({ nomor: null, tanggal: f.tanggal, kepada: kepada,
         alamat: f.baru ? String(f.baru.lokasi).trim() : "", sales: namaSalesPnw(f), berlaku_hari: f.berlaku_hari,
         mode_ppn: f.mode_ppn, catatan: String(f.catatan || "").trim(),
+        up: String(f.up || "").trim(), email: String(f.email || "").trim().toLowerCase(), top: topNilaiPnw(f),   /* #60 */
         baris: cek.isi.map(function(b){ return barisDokPenawaran(b, f.mode_ppn); }) });
   $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-pnw-simpan-akhir" type="button">Simpan penawaran</button> '
     + '<button class="btn" id="btn-pnw-kembali" type="button">Kembali ubah</button>';
@@ -10434,28 +10574,30 @@ function simpanPenawaran(isi){
      (berkas 87/109). Gagal di tengah = tidak ada yang tersimpan, nomor tidak
      terbuang. Pemilik penawaran (#11 #48) diisi/dijaga trigger quotes_jaga_sales. */
   sibuk(true);
-  /* #59: item baru diusulkan lebih dulu (usulkan_produk tidak menggandakan teks yang sama), supaya barisnya
-     menunjuk product_id. Kalau simpan sesudahnya gagal, barisnya sudah membawa id — simpan ulang tidak dobel. */
-  Promise.all(isi.filter(function(b){ return b.usulanTeks && !b.kode; }).map(function(b){
-    return api("POST", "/rpc/usulkan_produk", { p_teks: b.usulanTeks })
-      .then(function(id){ b.kode = (id && id.id) ? id.id : id; });
-  }))
+  /* #59 (review opsi B, berkas 129): item baru diusulkan DI DALAM simpan_penawaran (usulan_teks per baris) — satu
+     transaksi, jadi penawaran yang gagal disimpan tidak meninggalkan usulan yatim di antrean GM. Dulu layar memanggil
+     usulkan_produk lebih dulu. usulkan_produk tetap tidak menggandakan teks yang sama. */
+  Promise.resolve()
   .then(function(){ return api("POST", "/rpc/simpan_penawaran", {
     p_kepala: {
       customer_id: f.baru ? null : f.customer_id, tanggal: f.tanggal,
       berlaku_hari: (String(f.berlaku_hari).trim() === "" || isNaN(Number(f.berlaku_hari))) ? null : Number(f.berlaku_hari),   /* #5: kosong = tanpa batas */
       kepada: f.kepada || null, catatan: f.catatan || null,
       mode_ppn: f.mode_ppn || "exclude",   /* #42 */
+      up: String(f.up || "").trim() || null, email: String(f.email || "").trim().toLowerCase() || null,   /* #60 (berkas 129) */
+      top: topNilaiPnw(f),
       pelanggan_baru: f.baru ? { nama: String(f.baru.nama).trim(), hp: hpNormal(f.baru.hp), lokasi: String(f.baru.lokasi).trim() } : null,   /* #41 */
       sales_rep_id: peranSales() ? null : f.sales_rep_id   /* #11: sales = dirinya, diisi database */
     },
     p_baris: isi.map(function(b){
       return { product_id: (b.set_id || b.setInline) ? null : b.kode, set_id: b.set_id || null,   /* #1 */
+               usulan_teks: (!b.kode && b.usulanTeks) ? b.usulanTeks : null,   /* #59: diusulkan di dalam simpan_penawaran */
                set_komponen: b.setInline ? b.setKomp : null,   /* #28: set inline, diperiksa ulang di DB */
                deskripsi: b.deskripsi || null,
                spesifikasi: b.spesifikasi || null,   /* #3 #40 */
                qty: Number(b.qty), satuan: b.satuan || "pcs", harga: Number(b.harga),   /* #12: tanpa pembulatan */
-               harga_list: b.list || null };
+               harga_list: b.list || null,
+               diskon: Number(b.diskon) || 0, diskon_tipe: b.diskon_tipe === "persen" ? "persen" : "rp" };   /* #60 */
     })
   }); })
   .then(function(q){
@@ -10581,6 +10723,7 @@ function formDetailPenawaran(q){
   h += docPenawaranHtml({ nomor: q.nomor, tanggal: q.tanggal, kepada: namaPenawaran(q), alamat: "",
     sales: q.sales_rep_id ? (namaRepAlur(q.sales_rep_id) || ("#" + q.sales_rep_id)) : "—",
     berlaku_hari: q.berlaku_hari, mode_ppn: q.mode_ppn || "exclude", catatan: q.catatan,
+    up: q.up || "", email: q.email || "", top: q.top || "",   /* #60 */
     baris: lines.map(function(l){
       var pr = l.product_id ? produkById(l.product_id) : null;
       var isSet = !!l.set_id || l.satuan === "set" || adaSet(l);   /* set yang sudah dihapus: set_id NULL, satuan tetap "set"; #28 set inline */
@@ -10588,7 +10731,8 @@ function formDetailPenawaran(q){
       return { judul: pr ? (usul ? (pr.usulan_teks || pr.kode) : pr.kode) : (l.deskripsi || "—"),
                sub: pr && !usul ? [pr.brand, (l.deskripsi && l.deskripsi !== pr.kode) ? l.deskripsi : ""].filter(Boolean).join(" · ") : "",
                spesifikasi: l.spesifikasi, qty: l.qty, satuan: l.satuan, harga: l.harga, set: isSet,
-               bawah: l.harga_list != null && bandingList(l.harga, l.harga_list, q.mode_ppn) < 0 };   /* #42: DPP */
+               diskon: Number(l.diskon) || 0, diskon_tipe: l.diskon_tipe || "rp",   /* #60 */
+               bawah: bawahListPnw(l, l.harga_list, q.mode_ppn) };   /* #42: DPP; #60: sesudah diskon */
     }) });
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = (bolehBuatPenawaran()
@@ -10614,10 +10758,14 @@ function salinPenawaran(q){
       catatan.push("pelanggan kini dipegang " + (namaRepAlur(pemegang) || "sales lain") + ", jadi penawaran baru atas nama sales itu");
     f.mode_ppn = q.mode_ppn || "exclude";
     f.catatan = q.catatan || "";
+    /* #60: UP, e-mail, TOP ikut disalin (diskon per baris di bawah) */
+    f.up = q.up || ""; f.email = q.email || "";
+    if (q.top && TOP_PILIHAN.indexOf(q.top) < 0) { f.top = "Lainnya"; f.topLain = q.top; } else f.top = q.top || "";
     f.berlaku_hari = q.berlaku_hari == null ? "" : String(q.berlaku_hari);
     var hilang = 0;
     f.baris = (q.quote_lines || []).slice().sort(function(a, b){ return (a.urut||0) - (b.urut||0); }).map(function(l){
-      var dasar = { qty: Number(l.qty), harga: Number(l.harga), spesifikasi: l.spesifikasi || "", spekAuto: null, spekAsal: "" };
+      var dasar = { qty: Number(l.qty), harga: Number(l.harga), spesifikasi: l.spesifikasi || "", spekAuto: null, spekAsal: "",
+                    diskon: Number(l.diskon) || 0, diskon_tipe: l.diskon_tipe === "persen" ? "persen" : "rp" };   /* #60 */
       if (Array.isArray(l.set_komponen) && l.set_komponen.length)   /* #28 set inline */
         return Object.assign(dasar, { kode:null, set_id:null, setInline:true, setKomp:l.set_komponen, setRinci:rinciKomponen(l.set_komponen),
           deskripsi:l.deskripsi, list:listSetInline(l.set_komponen), satuan:"set" });
