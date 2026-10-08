@@ -144,10 +144,30 @@ persen saat menyetujui harga (boleh 0, maks 50%).
   e-mail otomatis dari data pelanggan, e-mail yang belum ada di data pelanggan otomatis disimpan ke sana.
 - #54 & #61 dikerjakan sesi EHC/komisi.
 - #50 lanjutan: alamat juga wajib di SP tanpa pelanggan master; No. HP yang sudah dipakai pelanggan lain DITOLAK saat SP
-  disimpan (pesan tanpa nama pelanggan/sales lain, minta pilih dari daftar).
+  disimpan (pesan tanpa nama pelanggan/sales lain, minta pilih dari daftar). → **selesai (berkas 131 + FE, 8 Okt)**, lihat
+  "#50/#51 lanjutan" di bawah.
 - #51 lanjutan: harga khusus hanya berlaku bila harganya DI BAWAH price list (di atas list kembali ke tier); Riksa & Michael
   tetap masuk antrean GM untuk harga di bawah list (komisi tetap flat 1%); penggolongan baris DIBEKUKAN (price list / harga
-  khusus yang disahkan sesudah SP dibuat tidak mengubah komisi/gerbang SP itu).
+  khusus yang disahkan sesudah SP dibuat tidak mengubah komisi/gerbang SP itu). → **selesai (berkas 130 + FE, 8 Okt)**.
+
+### #50/#51 lanjutan (8 Okt) — berkas 130 & 131 (DEV sudah) + FE
+- **Berkas 130** (#51): `so_baris_hitung` — harga_list BEKU (tanpa cadangan harga_berlaku hari ini), harga khusus dibaca
+  per saat SP dibuat dari `harga_khusus_log` (kecuali yang diajukan dari SP itu: per saat pertama disetujui) dan hanya bila
+  harga DPP < list, kolom baru `perlu_gm` (non-flat = pct IS NULL; flat bukan Office: di bawah list & tak ditutup harga
+  khusus). `so_ringkas` & `antrean_gm` hanya predikat `b.pct IS NULL` → `b.perlu_gm` (replace pada definisi hidup).
+  Trigger `sol_zz_list_beku`: UPDATE tanpa ganti produk mempertahankan harga_list (juga kosong); INSERT/ganti produk →
+  price list per saat SP dibuat (berlaku tgl SP & dibuat ≤ SP dibuat); INSERT dari putuskan_ubah membawa harga_list lama
+  (nilai_lama). `pratinjau_komisi_sp` ikut (+ `perlu_gm`, `n_flat_gm`). Status tersimpan dihitung ulang.
+  DEV: 018/IX & 011/X (di gudang) → **menunggu gm** (komisi 562.520 & 17.440 → menunggu GM); 008/X tetap 3% (harga
+  khusus dari SP-nya); 003/IX (Michael) gerbang flat tapi harga sudah disetujui. Uji DEV rollback 11 skenario (S1–S8b).
+  Sesi EHC sudah diberi tahu (bangun ulang so_baris_hitung dari DEV sesudah 130 untuk #54).
+- **Berkas 131** (#50): `jaga_hp_sp_tanpa_pelanggan` + alamat wajib & No. HP milik pelanggan di data pelanggan ditolak
+  (SP tanpa PO; pesan tanpa nama), kolom pemicu + alamat; RPC `hp_terdaftar` (ya/tidak). Uji DEV rollback T1–T10.
+- FE: label & validasi alamat, cek HP terdaftar saat mengetik & sebelum nomor SP diambil, Minta ubah SP; pratinjau
+  komisi flat "menunggu persetujuan harga GM", laci GM tanpa persen untuk SP sales flat, kolom Komisi Anda (flat),
+  teks aturan harga khusus. Layar 22/22 + regresi.
+- **Rilis PROD**: 130 & 131 bersama FE. Sebelum 130, hitung dampak di PROD (baris yang harga_list kosong padahal price
+  list kini ada; SP yang akan kembali "menunggu gm") dan kabarkan Hannes — SP yang sudah di gudang bisa tertahan.
 - 16–19 (harga_ok direset saat baris berubah, Tolak telat, kosongkan gm_pct lama di PROD, klaim pelanggan belum bertuan):
   Hannes minta dijelaskan ulang (7 Okt) → dijawab 8 Okt (di bawah).
 
@@ -196,12 +216,9 @@ Bug/data non-keamanan yang dicatat:
   ditolak saat GM menyetujui dan GM perlu menolaknya manual.
 - `harga_ok` tidak direset saat baris SP berubah lewat Minta ubah SP → baris baru di bawah list ikut persen GM lama tanpa
   ditinjau (diambil sesi EHC di tahap #54, putuskan_ubah).
-- Penggolongan baris tidak dibekukan: price list / harga khusus yang disahkan SESUDAH SP dibuat mengubah komisi SP lama
-  (juga yang lunas, belum diklaim) dan bisa mengeluarkan baris dari gerbang GM tanpa keputusan (DEV: 018/IX, 008/X,
-  011/X). Perlu keputusan Hannes: boleh berubah, atau dibekukan saat GM memutus / saat lunas.
-- Harga khusus mengalahkan tier walau harga jual di atas list (mis. 0,5% padahal tier 5%) — perlu keputusan Hannes.
-- Riksa/Michael (flat): baris di bawah list tidak masuk antrean GM (hanya Office yang dikecualikan di ATURAN B) — perlu
-  keputusan Hannes.
+- ~~Penggolongan baris tidak dibekukan~~ → SELESAI berkas 130 (dibekukan saat SP dibuat, keputusan Hannes 7 Okt).
+- ~~Harga khusus mengalahkan tier walau harga jual di atas list~~ → SELESAI berkas 130 (hanya di bawah list).
+- ~~Riksa/Michael (flat): baris di bawah list tidak masuk antrean GM~~ → SELESAI berkas 130 (masuk gerbang, komisi tetap flat).
 - View `cash_belum_cocok.komisi_kalau_cash` memakai 5% untuk sales flat & belum memakai persen GM (tidak dipakai FE).
 - `putuskan_ubah` (Minta ubah SP) menghapus & membuat ulang semua baris → gagal pada SP yang sudah punya surat jalan
   bertahap / qty batal (SP 159). (Area #54.)

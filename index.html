@@ -6268,7 +6268,9 @@ function formMintaUbah(jenis, id){
       +  field(d.customer_id ? { nama:"u_telp", label:"Telp.", nilai:d.telp || "" }
               : { nama:"u_telp", label:"No. HP pelanggan", nilai:d.telp || "",   /* #50 (berkas 122) */
                   bantu:"SP ini belum tertaut ke data pelanggan — bila No. HP diubah, wajib satu nomor sah (mis. 0812xxxxxxx)." })
-      +  field({ nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" })
+      +  field(d.customer_id ? { nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "" }
+              : { nama:"u_alamat", label:"Alamat", jenis:"textarea", nilai:d.alamat || "",   /* #50 lanjutan (berkas 131) */
+                  bantu:"SP ini belum tertaut ke data pelanggan — alamat tidak boleh dikosongkan." })
       +  field({ nama:"u_mode_ppn", label:"PPN", jenis:"select", nilai:modePpnDok(d), mati: !!d.po_id,   /* #30 */
                  pilihan: MODE_PPN.map(function(o){ return { v:o[0], l:o[1] }; }),
                  bantu: d.po_id ? "SP ini mengikuti mode PPN PO-nya — ubah lewat PO." : "" });
@@ -6392,6 +6394,14 @@ function formMintaUbah(jenis, id){
         : "No. HP pelanggan tidak boleh dikosongkan — SP ini belum tertaut ke data pelanggan.");
       return;
     }
+    /* #50 lanjutan (berkas 131): alamat yang DIUBAH jadi kosong ditolak (alamat lama yang memang kosong tetap boleh) */
+    if (jenis !== "po" && !d.customer_id && String(d.alamat || "").trim() && !String(kepala.alamat || "").trim()) {
+      tampilPesan("Alamat pelanggan tidak boleh dikosongkan — SP ini belum tertaut ke data pelanggan."); return;
+    }
+    /* No. HP yang diubah ke nomor yang sudah tercatat di data pelanggan ditolak database saat GM menyetujui (SP tanpa
+       PO) — diperiksa di sini supaya usulannya tidak dibuat sia-sia. */
+    var hpUbah = (jenis !== "po" && !d.customer_id && !d.po_id
+        && String(kepala.telp || "").replace(/\D/g, "") !== String(d.telp || "").replace(/\D/g, "")) ? hpNormal(kepala.telp) : null;
     var isi = [], salahBaris = [];
     Array.prototype.forEach.call(document.querySelectorAll("#laci-form tbody tr"), function(tr){
       var pid = tr.querySelector(".uu-pid");
@@ -6433,10 +6443,13 @@ function formMintaUbah(jenis, id){
 
     sibuk(true);
     var idUsulLangsung = null;
-    api("POST", "/rpc/ajukan_ubah", {
+    (hpUbah ? api("POST", "/rpc/hp_terdaftar", { p_hp: hpUbah }).catch(function(e){ if (rpcBelumAda(e)) return false; throw e; })
+            : Promise.resolve(false))
+    .then(function(ada){ if (ada === true) throw new Error(PESAN_HP_TERDAFTAR); })
+    .then(function(){ return api("POST", "/rpc/ajukan_ubah", {
       p_jenis: jenis, p_ref: id, p_alasan: alasan,
       p_baru: { kepala: kepala, baris: isi }
-    })
+    }); })
     .then(function(idUsul){
       /* Owner & GM tetap lewat jalur yang sama, lalu memutuskannya sendiri
          seketika. Bukan supaya ada langkah tambahan, tapi supaya jejak
@@ -6956,19 +6969,43 @@ function wajibHpSp(f){ return !f.customer_id; }
 function labelHpSp(f){ return wajibHpSp(f) ? 'No. HP pelanggan <em>wajib — belum dari data pelanggan</em>' : 'Telp.'; }
 function kelasKetHpSp(f){
   if (!wajibHpSp(f) || !String(f.telp || "").trim()) return "";
-  return hpSah(f.telp) ? " sah" : " salah";
+  return hpSah(f.telp) && hpTerdaftarSp(f) !== true ? " sah" : " salah";
+}
+/* #50 lanjutan (berkas 131): alamat juga wajib bila pelanggannya tidak dipilih dari data pelanggan; No. HP yang sudah
+   tercatat di data pelanggan DITOLAK pada SP tanpa PO (pilih pelanggannya dari daftar). Pemeriksaan "terdaftar" lewat
+   RPC hp_terdaftar (ya/tidak saja, tanpa nama pelanggan/sales) — hasilnya diingat per nomor. */
+function labelAlamatSp(f){ return wajibHpSp(f) ? 'Alamat <em>wajib — belum dari data pelanggan</em>' : 'Alamat'; }
+var SP_HP_TERDAFTAR = {};   /* hp baku → true/false (undefined = belum diperiksa) */
+var PESAN_HP_TERDAFTAR = "No. HP ini sudah terdaftar di data pelanggan — pilih pelanggannya dari daftar pelanggan "
+  + "(bila tidak muncul di daftar Anda, hubungi owner/GM).";
+function perluCekHpSp(f){ return wajibHpSp(f) && !f.po_id && hpSah(String(f.telp || "").trim()); }
+function hpTerdaftarSp(f){ return perluCekHpSp(f) ? SP_HP_TERDAFTAR[hpNormal(String(f.telp).trim())] : undefined; }
+var _cekHpSpJeda = null;
+function cekHpSpNanti(f){
+  clearTimeout(_cekHpSpJeda);
+  if (!perluCekHpSp(f)) return;
+  var hp = hpNormal(String(f.telp).trim());
+  if (hp in SP_HP_TERDAFTAR) return;
+  _cekHpSpJeda = setTimeout(function(){
+    api("POST", "/rpc/hp_terdaftar", { p_hp: hp })
+      .then(function(r){ SP_HP_TERDAFTAR[hp] = r === true; if (ALUR.spForm === f) segarkanHpSp(f); })
+      .catch(function(){ /* DB tanpa berkas 131 / jaringan: diperiksa lagi saat simpan, DB tetap menolak */ });
+  }, 400);
 }
 function ketHpSp(f){
   if (!wajibHpSp(f)) return "";
   var t = String(f.telp || "").trim();
   if (!t) return (f.po_id ? "PO ini belum tertaut ke data pelanggan" : "Pelanggan ini belum dipilih dari data pelanggan")
     + " — Vonny memakai nomor ini untuk mendaftarkannya saat cek. Isi satu nomor saja, tanpa ekstensi.";
+  if (hpSah(t) && hpTerdaftarSp(f) === true) return "✗ " + esc(PESAN_HP_TERDAFTAR);   /* #50 lanjutan (berkas 131) */
   return hpSah(t) ? "✓ " + esc(hpTampil(hpNormal(t)))
                   : "No. HP belum sah — isi satu nomor, 9 sampai 16 angka, mis. 0812xxxxxxx.";
 }
 /* Label & keterangan No. HP diperbarui lewat DOM (bukan panelSp) supaya kursor tidak lompat saat mengetik. */
 function segarkanHpSp(f){
   if ($("sp-telp-label")) $("sp-telp-label").innerHTML = labelHpSp(f);
+  if ($("sp-alamat-label")) $("sp-alamat-label").innerHTML = labelAlamatSp(f);   /* #50 lanjutan */
+  cekHpSpNanti(f);
   var k = $("sp-telp-ket");
   if (k) { k.innerHTML = ketHpSp(f); k.className = "hp-ket" + kelasKetHpSp(f); }
 }
@@ -7236,7 +7273,8 @@ function panelSp(){
                     + '</span>'))
           + '</div>'
           + '<div style="margin-top:12px">'
-          +   medanAlur("Alamat", '<textarea id="sp-alamat" rows="2">'+esc(f.alamat)+'</textarea>')
+          +   medanAlur('<span id="sp-alamat-label">' + labelAlamatSp(f) + '</span>',   /* #50 lanjutan (berkas 131) */
+                '<textarea id="sp-alamat" rows="2">'+esc(f.alamat)+'</textarea>')
           + '</div>'
           + '<div style="margin-top:12px">'
           +   medanAlur("Catatan untuk pengiriman", '<textarea id="sp-catatan" rows="2" placeholder="opsional — pesan untuk divisi pengiriman">'+esc(f.catatan||"")+'</textarea>')
@@ -7328,7 +7366,7 @@ function panelSp(){
           h += '<p class="bantu" style="margin-top:8px">Tombol merah mengajukan '
             + perlu.length + ' item di atas sebagai <b>harga khusus</b> untuk '
             + esc(f.kepada || 'customer ini') + '. Sekali GM menyetujuinya, PO berikutnya dengan '
-            + 'harga yang sama atau lebih tinggi tidak perlu antre lagi.</p>';
+            + 'harga yang sama atau lebih tinggi (selama masih di bawah price list) tidak perlu antre lagi.</p>';
         }
         /* Tombolnya hilang HARUS ada keterangannya. Tombol yang lenyap
            tanpa penjelasan terbaca sebagai kerusakan, bukan sebagai
@@ -7657,6 +7695,7 @@ function pasangSpIsi(f){
   });
   /* #50: No. HP disimpan per ketikan (Simpan bisa ditekan tanpa meninggalkan kotaknya), keterangannya ikut. */
   if ($("sp-telp")) $("sp-telp").addEventListener("input", function(){ f.telp = this.value; segarkanHpSp(f); });
+  if ($("sp-alamat")) $("sp-alamat").addEventListener("input", function(){ f.alamat = this.value; });   /* #50 lanjutan */
   if ($("sp-ppn")) $("sp-ppn").addEventListener("change", function(){
     f.mode_ppn = this.value; f.ppn_kena = f.mode_ppn !== "non";   /* #30 */
     (f.baris || []).forEach(function(b){ if (b.nettAutoList) b.nett = hargaDariList(b.nettAutoList, f.mode_ppn); });
@@ -7922,14 +7961,17 @@ function komisiBarisHtml(f, i){
   var cash = e.pct_bila_cash !== null && e.pct_bila_cash !== undefined
     ? " · " + pctTeks(e.pct_bila_cash) + " (" + rp(e.komisi_bila_cash) + ") bila cash dicocokkan finance" : "";
   switch (e.status) {
-    case "flat":   return Number(e.pct) === 0 ? "Office — tanpa komisi" : "komisi flat " + pctTeks(e.pct) + " · " + rp(e.komisi);
+    case "flat":   return Number(e.pct) === 0 ? "Office — tanpa komisi" : "komisi flat " + pctTeks(e.pct) + " · " + rp(e.komisi)
+                     /* #51 lanjutan (berkas 130): sales flat — di bawah list tetap ke persetujuan harga GM, komisinya tetap */
+                     + (e.perlu_gm ? ' · <span class="tunggu">di bawah price list — SP menunggu persetujuan harga GM'
+                                     + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan" : "") + '</span>' : "");
     case "khusus": return "komisi " + pctTeks(e.pct) + " harga khusus · " + rp(e.komisi);
     case "tier":   return "komisi " + pctTeks(e.pct) + " · " + rp(e.komisi) + cash;
     case "bawah_list":
       return '<span class="tunggu">di bawah price list — komisi memakai persen yang ditetapkan GM'
         + (e.harga_khusus_menunggu ? " · harga khusus sedang diajukan" : "") + "</span>";
-    case "tanpa_list":
-      return '<span class="tunggu">belum ada price list — komisi diputus GM (atau tier bila price list disahkan lebih dulu)</span>';
+    case "tanpa_list":   /* #51 lanjutan (berkas 130): penggolongan beku saat SP dibuat */
+      return '<span class="tunggu">belum ada price list — komisi diputus GM (price list yang disahkan sesudah SP disimpan tidak mengubahnya)</span>';
     default: return "";
   }
 }
@@ -7949,12 +7991,21 @@ function kotakKomisiSpHtml(f){
       + (!h.sales_rep_id ? '<br><span class="muted">SP tanpa sales tidak punya penerima komisi.</span>' : '')
       + (tunggu ? '<br><span class="muted">Belum termasuk ' + tunggu + ' baris di bawah / tanpa price list (nilai barang sebelum PPN '
                   + rp(h.dasar_menunggu) + ') — persennya ditetapkan GM saat menyetujui harga.</span>' : '')
+      + (Number(h.n_flat_gm) > 0   /* #51 lanjutan (berkas 130) */
+          ? '<br><span class="muted">' + Number(h.n_flat_gm) + ' baris di bawah price list — SP menunggu persetujuan harga GM '
+            + 'sebelum dikirim; komisinya tetap flat (sudah termasuk di atas).</span>' : '')
       + (h.komisi_bila_cash !== null && h.komisi_bila_cash !== undefined
           ? '<br><span class="muted">Bila finance mencocokkan pembayaran cash saat pelunasan: <b>' + rp(h.komisi_bila_cash)
             + '</b>. Sebelum dicocokkan berlaku tier biasa.</span>' : '');
   }
   return '<div class="flag" style="margin-top:12px"><span class="f-ico">%</span><div><b>Perkiraan komisi</b> '
     + '<span class="muted">— angka resmi di tab Komisi</span><br>' + isi + '</div></div>';
+}
+/* #51 lanjutan (berkas 130): sales komisi flat (bukan Office) — baris di bawah list menahan SP di gerbang GM tetapi
+   komisinya tetap flat. Dibaca dari data sales di layar (sales: dirinya sendiri). */
+function repFlatId(id){
+  var r = (id === null || id === undefined) ? null : (repAlurById(id) || ((repSayaAlur() && String(repSayaAlur().id) === String(id)) ? repSayaAlur() : null));
+  return !!(r && r.komisi_flat_pct !== null && r.komisi_flat_pct !== undefined && Number(r.komisi_flat_pct) > 0 && !r.sp_hanya_gm);
 }
 function spMilikSaya(o){
   if (!o || !peranSales()) return false;
@@ -7982,7 +8033,8 @@ function komisiSpSel(o, panjang){
   if (k === null || k.batal) return '<span class="muted">—</span>';
   if (k.komisi === null || k.komisi === undefined) return '<span class="muted">menunggu GM</span>';
   var ket = k.diklaim ? 'sudah diklaim'
-          : k.menunggu_gm ? 'belum termasuk baris yang menunggu GM'
+          : k.menunggu_gm ? (repFlatId(o.sales_rep_id) ? 'menunggu persetujuan harga GM — komisi flat tetap'   /* #51 lanjutan */
+                                                       : 'belum termasuk baris yang menunggu GM')
           : (o.harga_ok === false && (Number(k.n_bawah_list) || 0) + (Number(k.n_tanpa_list) || 0) > 0)
             ? 'harga ditolak GM — baris di bawah / tanpa price list tanpa komisi'   /* berkas 124: bukan "menunggu" */
           : k.telat ? 'invoice telat — persen dari GM' : '';
@@ -8140,6 +8192,14 @@ function simpanSp(khusus){
       if ($("sp-telp")) $("sp-telp").focus();
       return;
     }
+    /* #50 lanjutan (berkas 131): alamat wajib — Vonny memakainya untuk mendaftarkan pelanggan ini saat cek */
+    if (!String(f.alamat || "").trim()) {
+      toast("Alamat pelanggan wajib diisi — " + (f.po_id ? "PO ini belum tertaut ke data pelanggan."
+            : "pelanggan SP ini belum dipilih dari data pelanggan (atau pilih pelanggannya dari daftar)."), true);
+      if ($("sp-alamat")) $("sp-alamat").focus();
+      return;
+    }
+    if (hpTerdaftarSp(f) === true) { toast(PESAN_HP_TERDAFTAR, true); if ($("sp-telp")) $("sp-telp").focus(); return; }
   }
   if (spManual(f) && !String(f.alasanMenyusul || "").trim()) {
     toast(f.tanpaPo
@@ -8185,14 +8245,24 @@ function simpanSp(khusus){
   }
 
   sibuk(true);
+  /* #50 lanjutan (berkas 131): No. HP yang sudah tercatat di data pelanggan ditolak database — diperiksa SEBELUM
+     usulan & nomor SP diambil, supaya nomornya tidak hangus. Database tanpa berkas 131 → dilewati. */
+  var hpCek = perluCekHpSp(f) ? hpNormal(String(f.telp).trim()) : null;
+  (hpCek ? api("POST", "/rpc/hp_terdaftar", { p_hp: hpCek })
+             .catch(function(e){ if (rpcBelumAda(e)) return false; throw e; })
+         : Promise.resolve(false))
+  .then(function(ada){
+    if (hpCek) SP_HP_TERDAFTAR[hpCek] = ada === true;
+    if (ada === true) { segarkanHpSp(f); throw new Error(PESAN_HP_TERDAFTAR); }
+  })
   /* Item yang belum ada di master diusulkan lebih dulu, supaya barisnya
      punya product_id sejak awal — sama seperti di form PO. Hanya mungkin
      di mode "PO menyusul"; di mode biasa barisnya datang dari PO yang
      usulannya sudah diurus saat PO disubmit. */
-  Promise.all(isi.filter(function(b){ return b.usulanTeks; }).map(function(b){
+  .then(function(){ return Promise.all(isi.filter(function(b){ return b.usulanTeks; }).map(function(b){
     return api("POST", "/rpc/usulkan_produk", { p_teks: b.usulanTeks })
       .then(function(id){ b.kode = (id && id.id) ? id.id : id; });
-  }))
+  })); })
   /* Nomor SP dibuat fungsi database, bukan di sini — counter-nya harus
      satu sumber supaya dua sales tidak dapat nomor yang sama. */
   .then(function(){ return api("POST", "/rpc/nomor_sp_baru", {}); })
@@ -8321,7 +8391,8 @@ function formHargaKhusus(){
 
   var h = '<p class="muted" style="margin:2px 2px 10px">Untuk <b>' + esc(f.kepada || "—")
     + '</b>. Harga yang disetujui GM jadi <b>batas bawah</b>: PO berikutnya dengan harga '
-    + 'yang sama atau lebih tinggi tidak perlu antre lagi. Yang lebih rendah kembali ke GM.</p>'
+    + 'yang sama atau lebih tinggi — selama masih di bawah price list — tidak perlu antre lagi. Yang lebih rendah '
+    + 'kembali ke GM; di atas / sama dengan list kembali ke komisi tier.</p>'
     + '<div class="tw"><table><thead><tr><th class="l">Item</th><th>Price list</th>'
     + '<th>Harga nett</th><th>EHC / item</th></tr></thead><tbody>'
     + perlu.map(function(b){
@@ -15025,7 +15096,16 @@ function formGmPutus(jenis, ref){
       + field({ nama:"gm_catatan", label:"Catatan", jenis:"textarea",
                 bantu:"Wajib diisi kalau ditahan — sales-nya harus tahu apa yang perlu dibereskan." });
   }
-  if (jenis === "harga") {
+  /* #51 lanjutan (berkas 130, keputusan Hannes 7 Okt): SP sales komisi flat (Riksa, Michael) masuk antrean karena harga
+     di bawah list, tetapi komisinya TETAP flat — GM hanya memutus harganya, tanpa persen. */
+  var flatGm = jenis === "harga" && repFlatId(x.sales_rep_id);
+  if (jenis === "harga" && flatGm) {
+    h += '<div class="flag" style="margin-top:8px"><span class="f-ico">i</span><div><b>Sales berkomisi flat ('
+      + esc(namaRepAlur(x.sales_rep_id) || "flat") + ').</b> Komisinya tetap flat untuk seluruh SP — persen GM tidak dipakai. '
+      + 'Yang diputuskan hanya harganya: disetujui → SP lanjut ke cek Vonny; ditolak → SP tetap tertahan (surat jalan & '
+      + 'klaim) sampai harganya diubah lewat "Minta ubah SP".</div></div>'
+      + '<div id="gm-set-sp"></div>';   /* #57 */
+  } else if (jenis === "harga") {
     /* #51 (berkas 123): persen ini DIPAKAI untuk baris di bawah / tanpa price list (dulu Rp 0 walau diisi). */
     h += field({ nama:"gm_pct", label:"Komisi untuk baris di bawah / tanpa price list (%)", jenis:"angka", wajib:true,
                  bantu:"Dipakai hanya untuk baris yang di bawah price list atau belum punya price list — baris lain tetap "
@@ -15076,7 +15156,9 @@ function formGmPutus(jenis, ref){
        panjangnya, bukan cuma nomor SP-nya. */
     h += field({ nama:"gm_pct", label:"Komisi khusus (%)", jenis:"angka", wajib:true,
                  bantu:"Persentase dari harga nett. Dipakai untuk setiap SP berikutnya dengan "
-                     + "harga yang sama atau lebih tinggi — bukan hanya SP yang memicu permintaan ini." })
+                     + "harga yang sama atau lebih tinggi — selama masih DI BAWAH price list (di atas / sama dengan "
+                     + "list kembali ke tier) — bukan hanya SP yang memicu permintaan ini. SP yang sudah dibuat "
+                     + "sebelumnya tidak berubah, kecuali SP yang mengajukannya." })
       + field({ nama:"gm_catatan", label:"Catatan", jenis:"textarea",
                 bantu:"Tersimpan permanen di daftar Harga Special." });
   }
@@ -15147,7 +15229,7 @@ function formGmPutus(jenis, ref){
         sibuk(false); tampilPesan("Komisi harus ditetapkan untuk invoice yang lewat 120 hari."); return;
       }
       /* #51: persen GM kini bernilai uang untuk baris di bawah / tanpa list — wajib saat menyetujui (boleh 0). */
-      if (jenis === "harga" && setuju && pct === null) {
+      if (jenis === "harga" && setuju && pct === null && !flatGm) {
         sibuk(false); tampilPesan("Isi persen komisi untuk baris di bawah / tanpa price list (isi 0 bila tanpa komisi)."); return;
       }
       if (setuju && pct !== null && (pct < 0 || pct > 50)) {
@@ -15161,7 +15243,7 @@ function formGmPutus(jenis, ref){
       /* #51 (berkas 124): persen keputusan HARGA ditulis ke gm_pct_harga (baris di bawah / tanpa list); gm_pct tetap
          KHUSUS persen telat >120 hari — dulu satu kolom, sehingga SP yang harganya disetujui tidak pernah masuk
          antrean telat dan persen harga diam-diam dipakai untuk seluruh SP. Tolak tidak menulis persen. */
-      if (setuju && pct !== null) badan[jenis === "harga" ? "gm_pct_harga" : "gm_pct"] = pct / 100;
+      if (setuju && pct !== null && !flatGm) badan[jenis === "harga" ? "gm_pct_harga" : "gm_pct"] = pct / 100;   /* flat: tanpa persen */
       janji = api("PATCH", "/sales_orders?id=eq." + ref, badan, "return=representation");
     }
     janji.then(function(){
@@ -15303,8 +15385,11 @@ function panelKhusus(){
   }
 
   h += kotakGerbang('<b>Harga yang disetujui adalah batas bawah, bukan harga pasti.</b> '
-    + 'SP berikutnya dengan harga yang <b>sama atau lebih tinggi</b> memakai komisi khusus ini '
-    + 'tanpa antre. Yang lebih rendah kembali ke antrean GM — itulah gunanya batas.<br>'
+    + 'SP berikutnya dengan harga yang <b>sama atau lebih tinggi</b> — selama masih <b>di bawah price list</b> — '
+    + 'memakai komisi khusus ini tanpa antre; harga di atas / sama dengan list kembali ke komisi tier. '
+    + 'Yang lebih rendah kembali ke antrean GM — itulah gunanya batas.<br>'
+    + 'Harga khusus yang disetujui, diubah, atau dinonaktifkan <b>sesudah sebuah SP dibuat</b> tidak mengubah SP itu '
+    + '(kecuali SP yang mengajukannya) — penggolongan baris SP beku sejak SP dibuat (#51).<br>'
     + 'Kolom <b>Dipakai</b> menghitung berapa baris SP yang harganya masuk ke dalam batas ini, '
     + 'termasuk SP lama. Angkanya membantu menilai akibat sebelum sesuatu diubah.<br>'
     + 'Yang dipakai perhitungan komisi adalah baris berstatus <b>aktif</b> saja; '
