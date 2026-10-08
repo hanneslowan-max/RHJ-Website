@@ -17,6 +17,10 @@
 --       batal), penjualan tahun ini, piutang (SP ber-invoice belum lunas — sama dengan laporan_piutang), jumlah SP.
 --   PO tetap dikirim tiap divisi (keputusan Hannes 8 Okt) → tidak ada perubahan PO/SP/komisi.
 --
+-- Review adversarial (DEV: migrasi 132b): judul_grup_pelanggan hanya menjawab peran baca (boleh_baca) — dulu akun
+-- pending/nonaktif bisa membaca nama anggota grup lewat RPC. FE: data grup ditarik segar saat pelanggan dipilih di
+-- penawaran / laci pelanggan dibuka / muat ulang diam; pencarian penawaran ikut judul grup.
+--
 -- Tidak ada DROP. Tidak ada data yang diubah.
 -- ═══════════════════════════════════════════════════════════════════════
 
@@ -88,6 +92,7 @@ returns text language sql stable security definer set search_path = public as $$
   from public.customers c
   left join public.customer_groups g on g.id = c.grup_id
   where c.id = p_customer
+    and (auth.uid() is null or public.boleh_baca())   -- review: akun pending/nonaktif/peran tanpa baca tidak ikut melihat
 $$;
 revoke all on function public.judul_grup_pelanggan(bigint) from public, anon;
 grant execute on function public.judul_grup_pelanggan(bigint) to authenticated;

@@ -3736,16 +3736,19 @@ function barisDiisi(b){   /* qty sengaja tidak dihitung: baris PO baru sudah ber
 var MUAT_DIAM = {
   crm: { boleh: function(){ return CRM.dimuat && !CRM.memuat; }, kunci: function(){ return String(CRM.hari); },
          muat: function(){ return muatCrm(true); }, gambar: function(){ panelCrm(); } },
-  pelanggan: { boleh: function(){ var P = LANJUT.pelanggan; return P.dimuat && !P.memuat && !P.lihatLain; },
+  pelanggan: { boleh: function(){ var P = LANJUT.pelanggan;   /* #58 review: tampilan grup bergantung data grup, bukan daftar */
+                 return P.lihatGrup ? !GRUP.tidakAda : (P.dimuat && !P.memuat && !P.lihatLain); },
                kunci: function(){ var P = LANJUT.pelanggan; return plKunci() + "|" + P.hal + "|" + P.per + "|" + P.urut + "|" + JSON.stringify(P.urutKol || null); },
-               muat: function(){   /* #58: tampilan grup ikut ditarik ulang */
-                 return LANJUT.pelanggan.lihatGrup ? Promise.all([muatPelanggan(), muatGrup(true)]) : muatPelanggan(); },
+               muat: function(){   /* #58: tampilan grup → data grup yang ditarik ulang */
+                 return LANJUT.pelanggan.lihatGrup ? muatGrup(true) : muatPelanggan(); },
                gambar: function(){ panelPelangganTab(); } },
   khusus: { boleh: function(){ var K = LANJUT.khusus; return K.dimuat && !K.memuat; },
             kunci: function(){ return String(LANJUT.khusus.status || ""); },
             muat: function(){ return muatKhusus(); }, gambar: function(){ panelKhusus(); } },
   penawaran: { boleh: function(){ var P = LANJUT.penawaran; return P.dimuat && !P.memuat; },
-               muat: function(){ return muatPenawaran(); }, gambar: function(){ panelPenawaran(); },
+               muat: function(){   /* #58 review: info grup di form ikut segar */
+                 return GRUP.baris ? Promise.all([muatPenawaran(), muatGrup(true).catch(function(){})]) : muatPenawaran(); },
+               gambar: function(){ panelPenawaran(); },
                tunda: function(){ var f = LANJUT.penawaran.form;
                  return !!f && !!(f.customer_id || f.baru || isiTeks(f.kepada) || isiTeks(f.catatan)
                                   || (f.baris || []).some(barisDiisi)); } },
@@ -9653,9 +9656,9 @@ function formPelangganTab(c){
   $("laci-kaki").innerHTML = kunci ? ""
     : '<button class="btn utama" id="btn-plc-simpan" type="button">Simpan</button>';
   bukaLaci(baru ? "Pelanggan baru" : "Pelanggan — " + c.nama);
-  if (!baru && !GRUP.baris && !GRUP.tidakAda) {   /* #58: data grup belum dimuat → tambal kotaknya sesudah datang */
+  if (!baru && !GRUP.tidakAda) {   /* #58 (review): data grup ditarik segar → kotaknya ditambal sesudah datang */
     var kotakGrup = $("plc-grup");
-    muatGrup().then(function(){ if (kotakGrup && kotakGrup.isConnected) kotakGrup.innerHTML = infoGrupHtml(c.id); }).catch(function(){});
+    muatGrup(true).then(function(){ if (kotakGrup && kotakGrup.isConnected) kotakGrup.innerHTML = infoGrupHtml(c.id); }).catch(function(){});
   }
 
   if (!kunci) $("btn-plc-simpan").addEventListener("click", function(){ simpanPelangganTab(c, baru); });
@@ -10633,8 +10636,8 @@ function pasangPenawaran(){
       f.keGrup = false;   /* #58: dipilih ulang per pelanggan */
       ulang();
       isiKontakPnw(f, c.id);   /* #60: UP & e-mail dari data pelanggan */
-      if (!GRUP.baris && !GRUP.tidakAda)   /* #58 */
-        muatGrup().then(function(){ if (LANJUT.penawaran.form === f && String(f.customer_id) === String(c.id)) segarkanPnwGrup(f); }).catch(function(){});
+      if (!GRUP.tidakAda)   /* #58 (review): selalu segar — grup bisa dibuat/diubah owner sesudah data pertama ditarik */
+        muatGrup(true).then(function(){ if (LANJUT.penawaran.form === f && String(f.customer_id) === String(c.id)) segarkanPnwGrup(f); }).catch(function(){});
     }, {
       rep: function(){ return peranSales() ? null : f.sales_rep_id; },   /* #11 + #4 */
       bolehBaru: false,
@@ -10990,7 +10993,7 @@ function simpanPenawaran(isi, kepala){
 
 /* ── daftar penawaran tersimpan + pencarian (#44) ─────────────────────── */
 function pnwTeksCari(q){
-  return [q.nomor, namaPenawaran(q), q.kepada, q.catatan].concat((q.quote_lines || []).map(function(l){
+  return [q.nomor, namaPenawaran(q), q.kepada, q.kepada_grup, q.catatan].concat((q.quote_lines || []).map(function(l){
     var pr = l.product_id ? produkById(l.product_id) : null;
     return (l.deskripsi || "") + " " + (pr ? (pr.kode + " " + (pr.brand || "") + " " + (pr.kelompok || "")) : "") + " " + (l.spesifikasi || "");
   })).join(" ").toLowerCase();
@@ -11064,7 +11067,7 @@ function pasangDaftarPenawaran(){
     inp._t = setTimeout(function(){
       $("pnw-cari-ket").textContent = "mencari di penawaran lama…";
       var pola = encodeURIComponent("*" + kata + "*");
-      api("GET", "/quotes?select=" + PNW_SELECT + "&or=(nomor.ilike." + pola + ",kepada.ilike." + pola + ")"
+      api("GET", "/quotes?select=" + PNW_SELECT + "&or=(nomor.ilike." + pola + ",kepada.ilike." + pola + ",kepada_grup.ilike." + pola + ")"   /* #58 */
           + "&order=tanggal.desc,id.desc&limit=100")
         .then(function(r){
           if (giliran !== inp._giliran) return;
