@@ -258,6 +258,27 @@ persen saat menyetujui harga (boleh 0, maks 50%).
    -- Tempelkan PO yang terjadi SEBELUM audit_log sales_orders mulai mencatat tidak terdeteksi (DEV: audit mulai 10 Sep).
    ```
 
+## Jawaban Hannes 9 Okt — "semua ikut rekomendasi" (daftar keputusan 1–17, 19–20)
+- **1–3** (#50/#51): biarkan — harga khusus yang menunggu hanya menutup SP pengajunya; Riksa/Michael: barang tanpa price
+  list tidak ditahan; SP lama mereka yang barangnya sudah keluar tidak ditahan ulang.
+- **4** (rilis 130): (a) diterima — SEBELUM rilis PROD saya kirim daftar SP yang kembali "menunggu gm" (cek PROD di
+  catatan rilis 130: harga_list kosong / list dari pengesahan sesudah SP dibuat / SP yang akan 'menunggu gm').
+- **5** (#1): (a) tutup yang langsung terbaca (angka komisi jadi, klaim komisi + rekening + lampiran); catat di ATURAN
+  bahwa komisi tetap bisa diperkirakan dari harga oleh peran yang melihat harga SP. **6**: rekening sales di klaim
+  komisi ditutup untuk staff & Lenni. **7**: objek milik sesi EHC dikerjakan dengan sepengetahuan sesi EHC.
+- **8** (#2): (a) nama sama ditolak untuk SALES di semua jalur (beri pembeda); owner/GM/staff boleh dengan peringatan.
+  **9**: ganti nama pelanggan yang punya SP/PO/penawaran/harga khusus hanya owner/GM/staff; sales hanya merapikan
+  penulisan; ubahan sales tidak mengisi nama_lama; perubahan data pelanggan dicatat di audit (menutup sisa #8).
+  **10**: (a) cek Vonny mendahulukan kembaran milik sales SP; ditahan bila ada kembaran milik sales lain.
+  **17**: (a) pelanggan belum bertuan hanya diambil lewat PO, atau dipindah owner/GM/staff.
+- **11** (#3): staff baru melihat usulan item dari SP "menunggu cek Vonny" sesudah dicek Vonny.
+- **12–13** (#4): baris & kepala penawaran tersimpan dikunci untuk semua peran; penawaran kosong tak bisa dibuat di
+  luar layar.
+- **14–16** (#7): SP pelanggan daftar hitam ditahan total; daftar hitam & "konfirmasi sebelum kirim" hanya owner & GM
+  (staff tidak); invoice & pelunasan barang yang sudah keluar tetap boleh.
+- **19**: barang baru lewat Minta ubah SP tetap memakai list tanggal SP. **20**: tanggal/nomor SP tetap UTC.
+- Urutan kerja: #3 → #4 → #2 (+9, 10, 17) → #7 → #1.
+
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
 1. **Komisi terbaca lewat REST oleh peran yang layarnya menyembunyikan**: Vonny membaca `so_ringkas.komisi` 54 SP
