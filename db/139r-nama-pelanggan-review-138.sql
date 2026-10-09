@@ -34,6 +34,14 @@
 -- tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 0 · prasyarat (review 139r no. 9: `sort -V` menaruh 139r sebelum 139): 138 & 139 sudah dijalankan
+do $$ begin
+  if to_regprocedure('public.kunci_nama_pelanggan(text)') is null
+     or position('v_hitam_alasan' in pg_get_functiondef('public.cek_kelayakan_vonny(bigint,text,text)'::regprocedure)) = 0 then
+    raise exception '139r: jalankan 138 dan 139 dulu.';
+  end if;
+end $$;
+
 -- A · teks bersih: NFKC + karakter format (tak terlihat) dibuang — soft hyphen, zero-width, penanda arah, word joiner,
 --     variation selector, BOM, pengisi Hangul, karakter tag
 create or replace function public.teks_tanpa_format(p text)

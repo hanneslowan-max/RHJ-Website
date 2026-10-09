@@ -34,6 +34,14 @@
 -- Tidak ada data yang diubah (selain jejak awal pelanggan daftar hitam yang sudah ada); tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 0 · prasyarat (review 139r no. 9): 139 & 139r sudah dijalankan
+do $$ begin
+  if position('v_hitam_alasan' in pg_get_functiondef('public.cek_kelayakan_vonny(bigint,text,text)'::regprocedure)) = 0
+     or to_regprocedure('public.tautkan_pelanggan_sp(bigint,bigint,text)') is null then
+    raise exception '139s: jalankan 139 dan 139r dulu.';
+  end if;
+end $$;
+
 -- A · jejak identitas pelanggan daftar hitam (internal — tanpa akses REST)
 do $$
 begin

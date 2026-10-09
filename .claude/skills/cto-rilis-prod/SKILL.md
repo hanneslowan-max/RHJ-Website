@@ -11,7 +11,8 @@ yang dijalankan Hannes (atau orang yang ditunjuk Hannes) di SQL editor Supabase 
 
 ## 1. Kumpulkan isi rilis
 - Branch sumber & commit: `git log --oneline main..<branch>`.
-- Migrasi baru: `git diff --name-only main..<branch> -- db/ | sort -V`.
+- Migrasi baru: `git diff --name-only main..<branch> -- db/ | sort -t- -k1,1V` (nomor polos sebelum varian berhuruf:
+  139, 139k, 139p, … — `sort -V` biasa menaruh `139-…` SESUDAH `139k…` dan migrasi lanjutan gagal di jangkar).
 - Dari `HANDOFF.md`: migrasi mana yang sudah/belum pernah dijalankan di PROD (mis. "109–114 belum pernah di PROD").
 - Perbaikan susulan (`114b`, dst.) — pastikan isinya sudah tercakup di berkas utamanya atau ikut diurutkan.
 

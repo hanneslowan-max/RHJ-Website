@@ -477,11 +477,42 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    uji_set 46/46, uji_nama 12/12, uji119 36/36, uji_rek 6/6, uji_hp 35/35, uji_lampiran 23/23.
    Diterima (dicatat): varian nama yang TERLIHAT beda (salah ketik, akhiran kota) tetap dianggap nama lain (8a);
    pencocokan nama ke pelanggan daftar hitam (`sp_pelanggan_hitam`) dikerjakan di 139s.
-   **Cek PROD sebelum rilis 139r:** (1) `select datlocprovider from pg_database where datname = current_database();`
-   — 'i' (ICU; DEV 'i'), kelas [[:alnum:]] menganggap huruf Kiril huruf; bila 'c' laporkan dulu; (2) informasi:
-   jumlah kunci yang berubah `select count(*) from customers where kunci_nama_pelanggan(nama) is distinct from
-   <kunci lama>` dihitung sebelum menjalankan (DEV 0); (3) 139r naik bersama index.html baru (tombol tautkan owner/GM,
-   pra-cek) — index.html lama tetap jalan (hanya pesan 403 jadi 400).
+   **Review adversarial 139r** (10 terkonfirmasi, 2 dibantah) → **berkas 139w (DEV 9 Okt)** + FE:
+   (1/8, sedang) huruf mirip di blok Latin sendiri — ǀ (U+01C0, garis tegak = "I"), ı, ĸ, ȷ, Ɩ, İ — lolos
+   ada_huruf_non_latin (menerima seluruh À-ɏ) & tidak dilipat kunci: Iwan membuat "PT Tokai Rubber ǀndonesia" di samping
+   pelanggan Hendri, cek Vonny "pelanggan baru" → huruf yang diterima dipersempit (A–Z, angka, Latin-1 beraksen, Latin
+   Extended-A tanpa ı ĸ ŀ ŉ ſ İ, Vietnam); kunci melipat ı ȷ ĸ & membuang tanda gabung tak berpasangan. (2) inisial orang
+   "Bp. T.B. Silalahi" = "Bp Silalahi" (SP tertaut ke orang lain) → "p t · c v · u d · p d · t b" hanya di awal/akhir.
+   (3) NFKC mengubah teks tersimpan ("1½" → "11⁄2", "™" → "TM", Kepada tanpa cadangan) → teks_tanpa_format NFC; NFKC hanya
+   di kunci; huruf lebar penuh kini ditolak untuk selain owner/GM/staff. (4) saran hp_sales_lain "Tautkan ke pelanggan
+   tertentu" buntu & pesan lengkapi kasus No. HP menyuruh ubah Kepada → saran per kasus. (5) regex `\p{L}` literal (ES2018)
+   → dibangun saat jalan (skrip kembali terurai ES2015). (6) Kepada non-Latin ditolak DB SESUDAH nomor SP diambil → layar
+   memeriksa sebelumnya. (7) toast "pilihan —" sesudah "Tautkan ke ini" → kategori dibaca sebelum laci ditutup.
+   (9) `sort -V` menaruh 139r sebelum 139 → skill rilis `sort -t- -k1,1V`; 139r & 139s memeriksa prasyaratnya di awal.
+   (10) cek PROD tidak bisa dijalankan → diganti di bawah. Uji: DB diri 139w (18 kunci + 12 huruf); DEV rollback — Iwan:
+   ǀ/ı/ĸ → P0001, i+titik atas → 23505 (kembar Hendri), Kepada ǀ → P0001, Kepada "1½" tersimpan utuh, cek Vonny Kepada
+   i+titik → nama_sales_lain; owner tetap boleh huruf non-Latin; hp_sales_lain & lengkapi No. HP → saran baru. Cermin
+   layar = DB pada 35 kasus (kunci & huruf). Layar uji139w 9/9; regresi uji139r 23/23, uji139s 17/17, uji_hitam 16/16,
+   uji138 15/15, uji_nomor 10/10, uji_hp 35/35. DEV: 0 kunci berubah (5403 pelanggan, 54 SP), 0 nama non-Latin.
+   **Diterima (dicatat):** pertukaran ASCII I/l di tengah kata ("GIobal") tetap lolos (bukan karakter khusus);
+   kata "pt/cv/tb/toko" TANPA titik dibuang di mana pun sejak berkas 109 ("Bp TB Silalahi" = "Bp Silalahi") — perilaku
+   lama, tidak diubah; apostrof huruf ʼ dan µ ditolak untuk sales (dibantah sebagai cacat — vektor kembaran).
+   **Cek PROD sebelum rilis 138/139r/139w:** (1) `select datlocprovider from pg_database where datname = current_database();`
+   — 'i' (ICU; DEV 'i'), kelas [[:alnum:]] = huruf + angka desimal; bila 'c' laporkan dulu. (2) SIMPAN dulu badan
+   `select pg_get_functiondef('public.customers_sales_bawaan()'::regprocedure);` (139r bagian D menggantinya utuh dan
+   versi lamanya tidak ada di repo — hanya di PROD). (3) Urutan: 138 → 139 → 139k → 139p → 139r → 139s → 139t → 139u →
+   139v → 139w (`sort -t- -k1,1V`). (4) Informasi SESUDAH 139w — kunci yang berubah dibanding kunci lama berkas 109
+   (DEV 0 / 0 / 0 / 0):
+   `select count(*) filter (where kunci_nama_pelanggan(c.nama) is distinct from l.k) nama_berubah, count(*) filter (where
+   c.nama_lama is not null and kunci_nama_pelanggan(c.nama_lama) is distinct from ll.k) nama_lama_berubah, count(*)
+   filter (where ada_huruf_non_latin(c.nama)) nama_non_latin from customers c, lateral (select coalesce(string_agg(k,' '
+   order by n),'') k from regexp_split_to_table(btrim(regexp_replace(lower(coalesce(c.nama,'')),'[^[:alnum:]]+',' ','g')),
+   ' ') with ordinality s(k,n) where k<>'' and k not in ('pt','cv','ud','pd','tb','tbk','toko')) l, lateral (… sama,
+   c.nama_lama …) ll;` — bila > 0, pelanggan itu kini bisa cocok/tidak cocok dengan nama lain (cek Vonny & 8a).
+   (5) 139r/139w naik bersama index.html baru — index.html lama tetap jalan (hanya pesan 403 jadi 400, tanpa pra-cek
+   Kepada). **Rencana mundur:** kunci_nama_pelanggan/teks_tanpa_format/ada_huruf_non_latin dikembalikan dari berkas
+   sebelumnya LALU `reindex index public.customers_kunci_nama_idx; reindex index public.customers_kunci_nama_lama_idx;`
+   (indeks ekspresi); customers_sales_bawaan dari badan yang disimpan di (2); fungsi tambalan dari definisi sebelumnya.
    **Cek PROD sebelum rilis 138:** `select to_regprocedure('public.catat_perubahan()') is not null;` (wajib true) dan
    (informasi untuk Hannes) jumlah kunci nama kembar lama: `select count(*) from (select kunci_nama_pelanggan(nama) k
    from customers group by 1 having count(*) > 1) x;`.

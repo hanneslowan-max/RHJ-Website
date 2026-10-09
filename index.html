@@ -6162,7 +6162,8 @@ function formDetailDoc(jenis, row){
       .then(function(){ sibuk(false); });
   });
   pasangKandidatPelangganSp(row, $("dd-kandidat"), function(){ return nilaiForm("dd_kat"); }, function(r){   /* 139r */
-    tutupLaci(); toast(("SP " + row.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, nilaiForm("dd_kat"))).trim());
+    var katDipilih = nilaiForm("dd_kat");   /* 139w (review 139r no. 7): dibaca SEBELUM laci ditutup */
+    tutupLaci(); toast(("SP " + row.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, katDipilih)).trim());
     ALUR.dimuatSp = false; if (LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;
     if (tabAktif === "sp") panelSp();
   });
@@ -8400,6 +8401,14 @@ function simpanSp(khusus){
   if (khusus && khusus.type) khusus = null;   /* dipanggil dari event klik */
   if (!f.po_id && !spManual(f)) { toast("Pilih PO dulu.", true); return; }
   if (!f.kepada.trim()) { toast("Kolom Kepada belum diisi.", true); return; }
+  /* 139w (review 139r no. 6): Kepada berhuruf di luar huruf Latin biasa ditolak database (so_a_kepada_bersih) untuk
+     selain owner/GM/staff — diperiksa SEBELUM nomor SP diambil, supaya nomornya tidak hangus. */
+  if (["owner","gm","staff"].indexOf(saya.peran) < 0 && adaHurufNonLatin(f.kepada)) {
+    toast('Kepada "' + f.kepada.trim() + '" memuat huruf di luar huruf Latin biasa (mis. huruf Kiril/Yunani atau huruf '
+          + 'khusus yang mirip). Ketik ulang dengan huruf biasa; bila memang perlu, minta owner/GM/staff membuatkan SP-nya.', true);
+    var elKepada = $("sp-kepada") || $("sp-cust"); if (elKepada) elKepada.focus();
+    return;
+  }
   /* #50 (berkas 122): diperiksa SEBELUM nomor SP diambil, supaya nomornya tidak hangus. */
   if (wajibHpSp(f)) {
     var telpSp = String(f.telp || "").trim();
@@ -8801,19 +8810,32 @@ function galatKotak(e){
    dan untuk peran lain hanya bila ada sales acuan. */
 /* #41: kunci pencocokan nama — cermin kunci_nama_pelanggan() di DB (berkas 109):
    kata alfanumerik tanpa badan usaha, jadi "Surya Panel, PT" = "PT Surya Panel". */
-/* 139r (review 138 no. 1/2): cermin kunci_nama_pelanggan — NFKC, karakter format (tak terlihat) dibuang, huruf Kiril/Yunani
-   yang mirip huruf Latin dipetakan, huruf/angka non-ASCII ikut dihitung, bentuk badan usaha berhuruf tunggal ("P.T.",
-   "C V") dibuang — "P.T. X", "PT X", dan "P\u200bT X" berkunci sama. */
+/* 139r (review 138 no. 1/2): cermin kunci_nama_pelanggan — karakter format (tak terlihat) dibuang, huruf Kiril/Yunani
+   yang mirip huruf Latin dipetakan, huruf/angka non-ASCII ikut dihitung — "P.T. X", "PT X", dan "P\u200bT X" berkunci sama.
+   139w (review 139r no. 2/3/5/8): tanpaFormatTeks = teks_tanpa_format (NFC, untuk teks yang disimpan); NFKC hanya di kunci;
+   ı ȷ ĸ dipetakan, tanda gabung dibuang; "p t · c v · u d · p d · t b" hanya di awal/akhir nama (inisial "T.B." di tengah
+   tetap kata); adaHurufNonLatin = ada_huruf_non_latin. Regex ber-property-escape dibangun saat jalan — literal \p{…}
+   membuat SELURUH skrip gagal diurai di peramban lama. [[:alnum:]] di database (ICU) = huruf + angka desimal. */
+var RE_FORMAT_TEKS = /[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]|[\udb40-\udb43][\udc00-\udfff]/g;
+var RE_TANDA_GABUNG = /[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]/g;
+var RE_BUKAN_ALNUM = (function(){
+  try { return new RegExp("[^\\p{L}\\p{Nd}]+", "gu"); }
+  catch (e) { return /[^0-9A-Za-z\u00aa\u00b5\u00ba\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u0370-\u03ff\u0400-\u04ff\u1e00-\u1eff]+/g; }  /* perkiraan */
+})();
+var RE_LATIN_DITERIMA = /[0-9A-Za-z\u00aa\u00ba\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u012f\u0132-\u0137\u0139-\u013e\u0141-\u0148\u014a-\u017e\u1e00-\u1e95\u1ea0-\u1ef9]/g;
+function normalTeks(s, bentuk){ try { return s.normalize(bentuk); } catch (e) { return s; } }   /* peramban lama */
 function tanpaFormatTeks(t){
-  var s = String(t == null ? "" : t);
-  try { s = s.normalize("NFKC"); } catch (e) { /* peramban lama */ }
-  return s.replace(/[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\u{e0000}-\u{e0fff}]/gu, "");
+  return normalTeks(String(t == null ? "" : t).replace(RE_FORMAT_TEKS, ""), "NFC");
+}
+function adaHurufNonLatin(t){
+  return tanpaFormatTeks(t).replace(RE_BUKAN_ALNUM, "").replace(RE_LATIN_DITERIMA, "") !== "";
 }
 function kunciNamaPelanggan(t){
-  var dari = "аеорсухіјѕкмнтвӏԁԛԝαβεζηικμνορτυχ", ke = "aeopcyxijskmhtbldqwabezhikmnoptyx";
-  var s = tanpaFormatTeks(t).toLowerCase().replace(/[^\x00-\x7f]/gu, function(ch){
-    var i = dari.indexOf(ch); return i > -1 ? ke.charAt(i) : ch; });
-  s = (" " + s.replace(/[^\p{L}\p{N}]+/gu, " ") + " ").replace(/ (t b k|p t|c v|u d|p d|t b)(?= )/g, " ");
+  var dari = "аеорсухіјѕкмнтвӏԁԛԝαβεζηικμνορτυχıȷĸ", ke = "aeopcyxijskmhtbldqwabezhikmnoptyxijk";
+  var s = normalTeks(tanpaFormatTeks(t), "NFKC").toLowerCase().replace(RE_TANDA_GABUNG, "")
+            .replace(/[^\x00-\x7f]/g, function(ch){ var i = dari.indexOf(ch); return i > -1 ? ke.charAt(i) : ch; });
+  s = (" " + s.replace(RE_BUKAN_ALNUM, " ") + " ").replace(/ t b k(?= )/g, " ")
+        .replace(/^ +(p t|c v|u d|p d|t b) /, " ").replace(/ (p t|c v|u d|p d|t b) +$/, " ");
   return s.trim().split(/ +/)
     .filter(function(k){ return k && ["pt","cv","ud","pd","tb","tbk","toko"].indexOf(k) < 0; }).join(" ");
 }
@@ -21652,6 +21674,7 @@ window.__segar = {
   pelangganCrm: function(c){ formPelanggan(c); },
   leadBaru: function(){ formLeadBaru(); },
   kunciNama: function(t){ return kunciNamaPelanggan(t); },   /* 139r: uji cermin kunci_nama_pelanggan */
+  hurufNonLatin: function(t){ return adaHurufNonLatin(t); },   /* 139w: uji cermin ada_huruf_non_latin */
   kunciNamaFe: function(t){ return kunciNamaFe(t); },
   detailPnw: function(q){ formDetailPenawaran(q); },        /* #55: uji template penawaran */
   dokPnwQ: function(q){ return dataDokPenawaranQ(q, (q.quote_lines || []).slice()); }
