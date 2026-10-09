@@ -191,6 +191,10 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
     tampil untuk klaim lewat cutoff yang menunggu GM (DB mengizinkan); dua periode (bayar Sept vs rekap Okt) di satu
     layar Laporan; kode mati cabang 'ehc' di loop Batch transfer; nama pelaku riwayat laci = "pengguna lain" bila
     profiles tidak terbaca. **Uji asap per peran dengan login sungguhan di DEV masih perlu (Hannes).**
+- **Alur kerja (skill alur-kerja-erp-rhj):** halaman artifact diterbitkan ulang sebagai **v4** (9 Okt; bagian peran, F, G,
+  I, J, matriks, aturan, riwayat — EHC s.d. 143; klaim dini dihapus). **Salinan markdown `claude/ALUR-KERJA-ERP.md` di
+  project BELUM disamakan** (sesi cloud ini tidak punya akses project doc) — samakan dari halaman v4. Bagian A–F, H,
+  K–L halaman itu belum diperiksa ulang terhadap migrasi 59–139 (pekerjaan sesi lain).
 - **Rilis PROD:** tuntaskan pengajuan EHC lama dengan layar LAMA → migrasi s.d. 141→142→143 → unggah index.html segera.
   Layar baru tidak bisa menuntaskan pengajuan EHC 'disetujui' (tanpa tombol rekap_transfer('ehc')), dan tab/laci EHC-nya
   tidak berfungsi sebelum 141. Rinciannya di `RANCANGAN-EHC-TAHAP3.md` bagian E.
