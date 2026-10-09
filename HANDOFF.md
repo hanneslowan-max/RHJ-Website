@@ -298,6 +298,24 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    jangan revoke kolom products.dibuat_oleh.
 4. **`quote_lines` tanpa penjaga baris**: INSERT teks bebas (tanpa product/set) lewat REST lolos — `jaga_jenis_baris`
    tidak terpasang (butuh fungsi baru; quote_lines tidak punya kolom jenis).
+   → **SELESAI berkas 137 (DEV 9 Okt)**, desain dikoreksi kritik (cap waktu kepala bisa dipalsukan lewat PATCH quotes;
+   GraphQL): trigger `quote_lines_jaga_baris` (BEFORE INSERT: baris hanya di transaksi & oleh pembuat yang sama dengan
+   kepala — quotes.dibuat_pada = now() & dibuat_oleh = auth.uid(); wajib produk/set/set inline), hak UPDATE/DELETE/
+   TRUNCATE quote_lines **dan quotes** dicabut dari public/anon/authenticated (keputusan 13: kepala juga terkunci;
+   menggantikan izin koreksi kepala owner/GM/staff/Vonny berkas 87 — layar tidak memakainya), constraint trigger
+   tertunda `quotes_wajib_baris` (penawaran tanpa baris ditolak saat commit), 3 CHECK berkas 87 divalidasi bila data
+   bersih (DEV: valid). FE tidak berubah (hanya /rpc/simpan_penawaran). Uji DEV rollback: Iwan simpan_penawaran 3
+   baris (produk, usulan, diskon %) lolos + pemeriksaan tertunda; RPC teks bebas → pesan lama; INSERT teks bebas /
+   ke penawaran lama / sales lain → ditolak (P0001); UPDATE & hapus baris → 42501; kepala tanpa baris → ditolak;
+   Vonny PATCH kepala (termasuk dibuat_pada='now') → 42501; Vonny mewakili Iwan lolos; owner gabung_produk_usulan
+   lolos. Regresi layar uji_pnw 31/31, uji60 28/28, uji60b 28/28, uji12 29/29, uji58 25/25, uji59b 16/16.
+   **Cek PROD sebelum rilis 137:** (1) `select extname from pg_extension where extname = 'pg_graphql';` — bila aktif:
+   layar tidak memakai GraphQL, sarankan dinonaktifkan (sisa: satu request GraphQL bisa membuat kepala + baris sah
+   sekaligus, melompati simpan_penawaran tetapi tetap kena bentuk baris/CHECK/RLS); (2) `select count(*) from
+   quote_lines where not (qty > 0) or not (harga >= 0) or not (product_id is null or set_id is null);` — bila > 0,
+   VALIDATE ditunda otomatis (NOTICE), laporkan; (3) index.html PROD yang baru (menyimpan lewat simpan_penawaran)
+   naik bersama paket ini — index.html lama yang POST /quote_lines langsung akan ditolak. harga_list baris penawaran
+   tetap kiriman klien (hanya tanda "di bawah list" di arsip; tidak dipakai gerbang).
 5. **Total SP lunas bisa naik**: GM bisa PATCH `sales_order_lines.ehc_item` SP tanpa PO yang sudah ber-invoice/lunas
    (SP 150: 1.640.000 → 1.740.000) — `periksa_total_sp` keluar bila SP tanpa PO. (Area #54 — sesi EHC.)
 6. **Klaim EHC/komisi** (area #61 — sesi EHC): owner/GM/staff/finance bisa ubah nominal lewat REST

@@ -30,6 +30,7 @@ Berkas ini dibaca Claude sebelum mengerjakan setiap revisi. Pemilik keputusan: H
 
 ### Penawaran
 - Masa berlaku default kosong (tanpa batas).
+- **Penawaran yang sudah tersimpan terkunci untuk semua peran** (termasuk owner/GM/Vonny; temuan keamanan #4, berkas 137, keputusan Hannes 9 Okt): baris dan kepalanya (tanggal, mode PPN, kepada, TOP, UP, pelanggan, sales) tidak bisa ditambah, diubah, atau dihapus — koreksi dengan "Buat penawaran baru dari ini" (#44). Penawaran hanya disimpan lewat tombol Simpan penawaran: kepala dan barisnya sekaligus, tidak ada penawaran tanpa baris. Setiap baris wajib menunjuk barang master, set, atau set yang dirakit di baris itu; barang di luar master hanya lewat usulan item baru (#59). Waktu dan pembuat penawaran diisi sistem.
 - Setiap penawaran tercatat atas nama satu sales. Baris boleh berisi produk atau set, dengan spesifikasi; penawaran punya catatan.
 - Penawaran boleh untuk pelanggan **baru** (#41): diisi langsung di form penawaran — wajib nama, alamat, HP; sales PIC = sales penawaran — dan ikut tersimpan ke data pelanggan saat penawaran disimpan. Nama/HP yang sudah ada di master ditolak (pilih dari daftar).
 - Sebelum disimpan, penawaran ditampilkan dulu sebagai pratinjau dokumen (#39). Barang/set yang sudah dipilih bisa diganti (#43). Penawaran lama bisa dicari lalu disalin jadi penawaran baru — nomor baru, tanggal hari ini, harga dibandingkan dengan price list yang berlaku sekarang (#44).
