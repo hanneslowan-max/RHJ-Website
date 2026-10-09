@@ -177,6 +177,23 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
     `rekap_ehc_bulanan(p_bulan)`, `keluarkan_klaim_ehc_batch(p_klaim,p_alasan)`, `ehc_daftar_bayar(p_bulan,p_batch)`,
     `putuskan_klaim_cepat_v(...)` (dengan versi; `putuskan_klaim_cepat` lama tetap untuk layar lama). `ajukan_transfer('ehc')`
     → 0A000. Antrean GM: 'ehc_periksa' (ref_id = −id klaim), 'ehc_dini' dibuang.
+- **Layar tahap 3 SELESAI (9 Okt):** workflow pembangun → 3 peninjau + verifikasi skeptis (12 temuan terbukti,
+  diperbaiki) → Playwright **31/31 lulus** (skenario tahap 1 + 12–28 tahap 3; 44 sesi, 0 pageerror, 0 request keluar;
+  harness scratchpad `layar/`). Uji asap PostgREST DEV dengan kunci publishable (anon): EHC_KOLOM penuh + embed
+  `customer_pics!ehc_klaim_pic_id_fkey`/`ehc_klaim_tujuan`/`ehc_klaim_putusan` dan parameter 6 RPC baru dikenali
+  (kontrol embed/parameter palsu → PGRST200/202). Isi: laci GM EHC (`formGmPutusEhc`, setujui/tolak, versi, 40001 →
+  muat ulang), halaman EHC "Perlu diperiksa GM" (centang massal, lintas/tanpa lampiran tidak bisa), status klaim baru,
+  tombol Batalkan GM/owner, Laporan Finance `blokBayarEhc` (kunci daftar/keluarkan/rincian/referensi; Lenni tanpa
+  tombol & rekening), EHC emergency + batch cepat, `formGmPutus` ELSE hanya harga/telat, ehc_dini dibuang.
+  - Sisa kecil (dicatat, belum dikerjakan): peringatan "menunggu GM" di Laporan Finance baru segar sesudah Rekap
+    ditekan ulang; staff boleh membaca klaim EHC tapi tidak punya menu EHC (TAB tetap owner/gm/finance/sales);
+    Lenni masih melihat tombol komisi lama (blok komisi sengaja tidak diubah; DB menolaknya); "Minta EHC cepat" masih
+    tampil untuk klaim lewat cutoff yang menunggu GM (DB mengizinkan); dua periode (bayar Sept vs rekap Okt) di satu
+    layar Laporan; kode mati cabang 'ehc' di loop Batch transfer; nama pelaku riwayat laci = "pengguna lain" bila
+    profiles tidak terbaca. **Uji asap per peran dengan login sungguhan di DEV masih perlu (Hannes).**
+- **Rilis PROD:** tuntaskan pengajuan EHC lama dengan layar LAMA → migrasi s.d. 141→142→143 → unggah index.html segera.
+  Layar baru tidak bisa menuntaskan pengajuan EHC 'disetujui' (tanpa tombol rekap_transfer('ehc')), dan tab/laci EHC-nya
+  tidak berfungsi sebelum 141. Rinciannya di `RANCANGAN-EHC-TAHAP3.md` bagian E.
 - Koordinasi 9 Okt: sesi 50–61 tidak mengubah `antrean_gm` selama 141–143 dibangun (definisi DEV sudah membawa
   ubahan 130: `b.perlu_gm`, harga khusus `h.so_id = s.id`). **Merge `formGmPutus`:** branch 50–61 mengubahnya di
   0c9e0f1 (persen keputusan HARGA → `gm_pct_harga`, `gm_pct` khusus telat), 7888154 (sales flat → tanpa persen,

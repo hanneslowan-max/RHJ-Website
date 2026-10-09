@@ -1326,7 +1326,10 @@ function api(metode, path, badan, prefer, _ulang){
             function(){ tolakSesi(); throw new Error("Sesi habis. Silakan masuk lagi."); });
         catatPenolakan(res.status);
         if (res.status === 401) { tolakSesi(); throw new Error("Sesi habis. Silakan masuk lagi."); }
-        throw new Error(pesanGalat(j, res));
+        /* kode SQLSTATE ikut dibawa (mis. 40001 = data berubah sejak dimuat → muat ulang) */
+        var galat = new Error(pesanGalat(j, res));
+        galat.kode = j && j.code ? String(j.code) : ""; galat.status = res.status;
+        throw galat;
       }
       tolakBeruntun = 0;
       return j;
@@ -3499,7 +3502,7 @@ var TAB = [
 
   /* ── 4 · APPROVAL ─────────────────────────────────────────────── */
   { grup:"Approval",
-    id:"gm",        label:"Menunggu Konfirmasi GM", judul:"Menunggu Konfirmasi GM", sub:"Harga di bawah price list, invoice telat, klaim dini, ubah rekening, usulan item", peran:["owner","gm","staff","sales"], baru:1 },
+    id:"gm",        label:"Menunggu Konfirmasi GM", judul:"Menunggu Konfirmasi GM", sub:"Harga di bawah price list, invoice telat, klaim EHC, ubah rekening, usulan item", peran:["owner","gm","staff","sales"], baru:1 },
 
   /* ── 5 · LAPORAN ──────────────────────────────────────────────── */
   /* Grupnya sendiri, bukan diselipkan ke Klaim atau Approval: isinya
@@ -7567,6 +7570,13 @@ var GALAT_BERKAS = [
     berkas:"108-set-inline-baris.sql" },
   { pola:/set_komponen|simpan_set|hapus_set|periksa_komposisi_set/i,   /* #1 #6 #7 */
     berkas:"94-po-set-diskon-snapshot.sql" },
+  /* EHC tahap 3 (sebelum pola 140: lebih khusus) */
+  { pola:/putuskan_klaim_ehc|setujui_klaim_ehc_massal|rekap_ehc_bulanan|keluarkan_klaim_ehc_batch|ehc_daftar_bayar|putuskan_klaim_cepat_v/i,
+    berkas:"142-ehc-periksa-gm-fungsi.sql" },
+  { pola:/ehc_klaim_putusan|ehc_klaim_tujuan|periode_bayar|ehc_klaim\.(gm_jalur|gm_catatan|gm_pada|gm_oleh|ditransfer_pada|cepat_diminta_pada)/i,
+    berkas:"141-ehc-periksa-gm-struktur.sql" },
+  { pola:/rekening_ada|ada_sp_batal|klaim_ehc_tujuan_ada|ehc_periksa/i,
+    berkas:"143-ehc-periksa-gm-view.sql" },
   { pola:/ehc_saldo_sp|simpan_klaim_ehc|batalkan_klaim_ehc|ehc_klaim_alokasi|ehc_klaim\.periode/i,   /* EHC tahap 1 */
     berkas:"140-ehc-saldo-pemakaian.sql" }
 ];
@@ -7803,11 +7813,16 @@ var SIAP_DB = {
   performa:  ["leads", "lead_events", "sales_reps"],
   kirim:     ["sales_orders.no_surat_jalan", "sales_orders.no_invoice", "boleh_terbitkan()"],
   lunas:     ["sales_orders.lunas", "sales_orders.telat", "boleh_pelunasan()"],
-  ehc:       ["ehc_klaim", "ehc_klaim_alokasi", "ehc_saldo_sp (view)", "simpan_klaim_ehc()"],
+  ehc:       ["ehc_klaim", "ehc_klaim_alokasi", "ehc_saldo_sp (view)", "simpan_klaim_ehc()",
+              "ehc_klaim_tujuan", "ehc_klaim_putusan", "putuskan_klaim_ehc()", "setujui_klaim_ehc_massal()",
+              "putuskan_klaim_cepat_v()"],
   kas:       ["kas_sales (view)", "ehc_saldo_sp (view)"],
   laporan:   ["so_ringkas", "so_baris_hitung", "ehc_klaim_nilai",
-              "transfer_pengajuan", "ajukan_transfer()", "rekap_transfer()"],
-  gm:        ["antrean_gm (view)", "pic_rekening_ubah", "putuskan_ubah_rekening()"]
+              "transfer_pengajuan", "ajukan_transfer()", "rekap_transfer()",
+              "transfer_batch.periode_bayar", "ehc_daftar_bayar()", "rekap_ehc_bulanan()",
+              "keluarkan_klaim_ehc_batch()", "ehc_cepat_siap (view)"],
+  gm:        ["antrean_gm (view)", "pic_rekening_ubah", "putuskan_ubah_rekening()",
+              "putuskan_klaim_ehc()", "putuskan_klaim_cepat_v()"]
 };
 function panelBelum(id){
   var t = TAB.filter(function(x){ return x.id === id; })[0] || {};
@@ -7876,7 +7891,10 @@ var LANJUT = {
   ehc:      { saldo:[], saldoDipotong:false, rek:{}, form:null,
               dimuat:false, memuat:false,
               hal:"saldo", cacah:null,
-              hlm:{ saldo:null, diajukan:null, selesai:null, batal:null } },
+              /* berkas 141–143: halaman periksa (GM/owner) & disetujui; centang =
+                 klaim yang dipilih untuk persetujuan massal; hasilMassal = hasil per klaim */
+              centang:[], hasilMassal:null,
+              hlm:{ saldo:null, diajukan:null, periksa:null, disetujui:null, selesai:null, batal:null } },
   kas:      { baris:[], dimuat:false, memuat:false },
   /* Laporan Finance tidak lagi punya "dimuat": ia memang tidak memuat
      apa pun sampai tombolnya ditekan. rekap.ehc dan rekap.komisi berisi
@@ -7898,6 +7916,10 @@ var LANJUT = {
                  ditekan dan memang kosong. Dua keadaan yang berbeda, dan
                  layarnya mengatakan yang berbeda pula. */
               cepat: null, cepatGalat: "", pesanCepat: "", cepatGagal: false,
+              /* berkas 141–143 · daftar bayar EHC periode tgl 20 (ehc_daftar_bayar);
+                 null = belum ditarik. rincian = isi satu batch EHC {batch, baris, galat}. */
+              bayarEhc: null, bayarEhcGalat: "", pesanBayarEhc: "", bayarEhcGagal: false,
+              rincian: null,
               sibuk:null, galat:"" },
   gm:       { baris:[], dimuat:false, memuat:false },
   /* Tab Laporan SENGAJA tidak memuat apa pun saat dibuka. Laporan yang
@@ -11287,9 +11309,10 @@ function panelLunas(){
   h += ketPeriode(L, KOL_TGL_LUNAS);
 
   h += kotakGerbang('<b>Pelunasan adalah gerbangnya, bukan catatan.</b> '
-    + 'Klaim EHC dan komisi sales tidak bisa diajukan sebelum SP-nya ditandai lunas di sini — '
-    + 'dan penolakannya dilakukan trigger <code>jaga_gerbang_klaim()</code> di database, '
-    + 'bukan dengan menyembunyikan tombol. Invoice yang lewat <b>120 hari</b> menurunkan komisi '
+    + 'Komisi sales tidak bisa diklaim sebelum SP-nya ditandai lunas di sini — '
+    + 'penolakannya dilakukan trigger <code>jaga_gerbang_komisi()</code> di database, '
+    + 'bukan dengan menyembunyikan tombol. EHC yang sudah disetujui GM juga baru dibayar finance '
+    + '(daftar bayar tgl 20) sesudah semua SP-nya lunas. Invoice yang lewat <b>120 hari</b> menurunkan komisi '
     + 'dan masuk antrean GM.<br><br>'
     + '<b>Penjualan cash dicocokkan di sini juga.</b> Sales menandai klaimnya saat membuat SP; '
     + 'yang menaikkan komisinya jadi 5% adalah pencocokan finance di layar ini, bukan klaim '
@@ -11376,7 +11399,7 @@ function formLunas(s){
   var h = '<div id="ln-umur">' + blokUmurLunas(s, !!s.lunas, s.tgl_lunas) + '</div>'
     + field({ nama:"ln_status", label:"Status pembayaran", jenis:"select", mati:kunci,
               nilai: s.lunas ? "ya" : "tidak",
-              pilihan:[{v:"tidak",l:"Belum lunas"},{v:"ya",l:"Lunas — buka klaim EHC & komisi"}] })
+              pilihan:[{v:"tidak",l:"Belum lunas"},{v:"ya",l:"Lunas — buka klaim komisi & pembayaran EHC"}] })
     + field({ nama:"ln_tgl", label:"Tanggal pelunasan", jenis:"date",
               nilai: tglAwal, mati:kunci,
               bantu:"Tanggal INI yang menentukan aturan 120 hari, bukan hari ini. "
@@ -11559,36 +11582,121 @@ function ehcMasihBisaUbah(k){
     && !(k.cepat_minta && k.cepat_ok !== false)
     && hariIniJkt() <= cutoffEhc(k.periode);
 }
+/* ATURAN B: owner/GM boleh membatalkan klaim yang uangnya belum keluar kapan
+   saja (beralasan) — juga sesudah cutoff dan sesudah disetujui (cermin
+   batalkan_klaim_ehc, berkas 142). Klaim di batch dikeluarkan finance dulu;
+   EHC cepat yang menunggu GM diputus/ditarik dulu. Sebelum cutoff tombol
+   "Batalkan" biasa (ehcMasihBisaUbah) sudah ada. */
+function ehcBatalGm(k){
+  return bolehApprove() && (k.status === "diajukan" || k.status === "disetujui")
+    && !k.transfer_batch_id
+    && !(k.cepat_minta && (k.cepat_ok === null || k.cepat_ok === undefined))
+    && !ehcMasihBisaUbah(k);
+}
+/* Periode BAYAR — cermin periode_bayar_ehc() (berkas 141): tgl ≥ 20 (WIB) →
+   periode bulan itu, selain itu periode bulan lalu. 9 Okt → 2026-09; 20 Okt →
+   2026-10. Finance mengunci daftar bayar periode ini sekali, mulai tgl 20. */
+function periodeBayarEhc(tgl){
+  var p = String(tgl || hariIniJkt()).split("-"), th = Number(p[0]), bl = Number(p[1]);
+  if (Number(p[2]) < 20) { bl -= 1; if (bl < 1) { bl = 12; th -= 1; } }
+  return th + "-" + dd(bl);
+}
+/* P4 (keputusan Hannes 9 Okt): klaim EHC hanya untuk owner, GM, staff, finance,
+   Lenni, dan sales pemiliknya — Vonny, Lie Sian, Ichi tidak. Database yang
+   menyaring (ehck_baca); ini supaya menu/angkanya tidak ditawarkan. */
+function bolehLihatKlaimEhc(){
+  return ["owner","gm","staff","finance","lenni","sales"].indexOf(saya.peran) > -1;
+}
+/* Cermin boleh_rekap_transfer(): tombol uang (kunci daftar bayar, keluarkan dari
+   batch, referensi bank) dan nomor rekening di daftar bayar. Lenni hanya membaca. */
+function bolehRekapTransfer(){ return ["owner","gm","finance"].indexOf(saya.peran) > -1; }
+/* Embed satu-satu: PostgREST mengirim objek, larik, atau null (peran tak berhak). */
+function satuEmbed(x){ if (Array.isArray(x)) x = x[0]; return x || null; }
+function tujuanKlaim(k){ return satuEmbed(k && k.ehc_klaim_tujuan); }
+function picKlaim(k){ return satuEmbed(k && k.customer_pics); }
+/* Versi klaim untuk putusan GM = string PostgREST APA ADANYA (diubah_pada ||
+   dibuat_pada). Tidak lewat Date JS: mikrodetiknya hilang dan database
+   menolaknya sebagai versi basi (40001). */
+function versiKlaimEhc(k){ return (k && (k.diubah_pada || k.dibuat_pada)) || null; }
+function teksRekening(r){
+  if (!r) return "";
+  var t = [r.bank, r.no_rekening].filter(Boolean).join(" ");
+  return t ? t + (r.atas_nama ? " a.n. " + r.atas_nama : "") : "";
+}
+function spBelumLunasEhc(k){
+  return alokasiKlaim(k).filter(function(a){ return a.sales_orders && a.sales_orders.lunas === false; });
+}
+/* Nama pemutus / pelaku riwayat. profiles hanya terbaca owner (dan diri sendiri);
+   sales dikenali dari tautan akunnya. Selebihnya "pengguna lain" — bukan galat. */
+function namaOlehEhc(uid){
+  if (!uid) return "—";
+  if (saya && uid === saya.id) return (saya.nama || "Anda") + " (Anda)";
+  var p = (PROFIL || []).filter(function(x){ return x.id === uid; })[0];
+  if (p) return p.nama || p.email || "—";
+  var r = (ALUR.rep || []).filter(function(x){ return x.profile_id === uid; })[0];
+  return r ? r.nama + " (sales)" : "pengguna lain";
+}
 
-var EHC_KOLOM = "id,so_id,sales_rep_id,pic_id,bank,no_rekening,atas_nama,tanggal,periode,status,"
+/* Berkas 143: hak baca kepala ehc_klaim PER KOLOM — bank/no_rekening/atas_nama
+   (salinan rekening; untuk reimburse = rekening pribadi sales) tidak terbaca REST,
+   dan PostgREST menolak SELURUH permintaan bila satu kolom tak berhak. Jadi tidak
+   ada select=* untuk ehc_klaim. Rekening dibaca dari: PIC customer (transfer,
+   sebelum diputus), sales_rep_rekening (reimburse), ehc_klaim_tujuan (yang
+   DIKUNCI saat GM setuju; owner/GM/finance + sales pemilik). Pola KOMISI_KOLOM 139k.
+   customer_pics diberi petunjuk FK supaya embed-nya tidak pernah ambigu. */
+var EHC_KOLOM = "id,so_id,sales_rep_id,pic_id,tanggal,periode,status,"
   + "keperluan,cara_bayar,customer_id,keterangan,lintas_customer,batal_alasan,transfer_batch_id,"
-  + "dibuat_pada,cepat_minta,cepat_ok,cepat_alasan,cepat_catatan,"
-  + "customers(nama),customer_pics(nama,jabatan),ehc_klaim_nilai(nominal),"
-  + "ehc_klaim_alokasi(so_id,nominal,sales_orders(no_sp,lunas)),"
-  + "ehc_klaim_berkas(id,nama_berkas,path,ukuran,dibuang_pada)";
+  + "dibuat_pada,dibuat_oleh,diubah_pada,cepat_minta,cepat_ok,cepat_alasan,cepat_catatan,"
+  + "cepat_diminta_pada,cepat_diputus_pada,gm_oleh,gm_pada,gm_catatan,gm_jalur,ditransfer_pada,"
+  + "customers(nama),customer_pics!ehc_klaim_pic_id_fkey(nama,jabatan,bank,no_rekening,atas_nama,aktif,customer_id),"
+  + "ehc_klaim_nilai(nominal),ehc_klaim_tujuan(sumber,pic_id,bank,no_rekening,atas_nama,dikunci_pada),"
+  + "ehc_klaim_alokasi(so_id,nominal,sales_orders(no_sp,lunas,batal,customer_id)),"
+  + "ehc_klaim_berkas(id,nama_berkas,path,ukuran,dibuang_pada),"
+  + "ehc_klaim_putusan(jalur,aksi,catatan,pada)";   /* ekp_baca: + sales pemilik — alasan "Keluarkan" */
 
+/* Berkas 141–143: klaim yang lewat cutoff diperiksa GM per klaim (setujui/tolak);
+   yang disetujui dibayar finance lewat daftar bayar tgl 20 begitu semua SP-nya
+   lunas; ditransfer = referensi bank batch sudah diisi. Halaman "periksa" hanya
+   untuk GM/owner. */
+function syaratPeriksaEhc(){
+  return "status=eq.diajukan&transfer_batch_id=is.null&periode=lt." + periodeEhcDari(hariIniJkt())
+    + "&or=(cepat_minta.is.false,cepat_ok.is.false)";
+}
 var EHC_HAL = [
   { id:"saldo",    label:"Saldo per SP",
     q:"/ehc_saldo_sp?select=so_id&sisa=gt.0&tertutup=is.false",
     path:"/ehc_saldo_sp?select=*", syarat:"sisa=gt.0&tertutup=is.false",
     tglKol:"tanggal", jenis:"sp" },
-  { id:"diajukan", label:"Diajukan",
+  { id:"diajukan", label:"Diajukan / menunggu GM",
     q:"/ehc_klaim?select=id&status=eq.diajukan&transfer_batch_id=is.null",
     path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"status=eq.diajukan&transfer_batch_id=is.null",
     tglKol:"tanggal", jenis:"klaim" },
-  { id:"selesai",  label:"Disetujui / ditransfer",
-    q:"/ehc_klaim?select=id&or=(status.eq.disetujui,transfer_batch_id.not.is.null)",
-    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"or=(status.eq.disetujui,transfer_batch_id.not.is.null)",
+  { id:"periksa",  label:"Perlu diperiksa GM", gm:true,
+    q:function(){ return "/ehc_klaim?select=id&" + syaratPeriksaEhc(); },
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:function(){ return syaratPeriksaEhc(); },
+    tglKol:"tanggal", jenis:"klaim" },
+  { id:"disetujui", label:"Disetujui · belum dibayar",
+    q:"/ehc_klaim?select=id&status=eq.disetujui&transfer_batch_id=is.null",
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"status=eq.disetujui&transfer_batch_id=is.null",
+    tglKol:"tanggal", jenis:"klaim" },
+  { id:"selesai",  label:"Daftar bayar / ditransfer",
+    q:"/ehc_klaim?select=id&transfer_batch_id=not.is.null",
+    path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"transfer_batch_id=not.is.null",
     tglKol:"tanggal", jenis:"klaim" },
   { id:"batal",    label:"Batal / ditolak",
     q:"/ehc_klaim?select=id&status=in.(batal,ditolak)",
     path:"/ehc_klaim?select=" + EHC_KOLOM, syarat:"status=in.(batal,ditolak)",
     tglKol:"tanggal", jenis:"klaim" }
 ];
+/* Halaman yang tampil untuk peran ini (halaman "periksa" hanya GM/owner). */
+function ehcHalSaya(){
+  return EHC_HAL.filter(function(d){ return !d.gm || bolehApprove(); });
+}
+function nilaiHal(x){ return typeof x === "function" ? x() : x; }
 var KOL_TGL_KLAIM = [["tanggal", "Tanggal transaksi"]];
 var KOL_TGL_BK = [["tanggal", "Tanggal SP"], ["tgl_lunas", "Tanggal lunas"]];
 
-function ehcDef(id){ return EHC_HAL.filter(function(x){ return x.id === id; })[0] || EHC_HAL[0]; }
+function ehcDef(id){ return ehcHalSaya().filter(function(x){ return x.id === id; })[0] || EHC_HAL[0]; }
 function ehcHal(id){
   var E = LANJUT.ehc, d = ehcDef(id);
   if (!E.hlm[id]) E.hlm[id] = halBaru(d.tglKol);
@@ -11642,10 +11750,10 @@ function muatEhcHal(){
   var urut = d.jenis === "sp"
     ? H.tglKol + ".desc.nullslast,so_id.desc"
     : H.tglKol + ".desc.nullslast,id.desc";
-  return muatHalaman(H, d.path, d.syarat, urut);
+  return muatHalaman(H, d.path, nilaiHal(d.syarat), urut);
 }
 function ehcHalCacah(){
-  return EHC_HAL.map(function(d){ return { id:d.id, q:d.q }; });
+  return ehcHalSaya().map(function(d){ return { id:d.id, q:nilaiHal(d.q) }; });
 }
 
 function barisSpEhc(s){
@@ -11670,7 +11778,9 @@ function barisSpEhc(s){
 function pilCepat(k){
   if (!k || !k.cepat_minta) return "";
   if (k.cepat_ok === true)
-    return '<br><span class="pill p-lunas">cepat · disetujui GM</span>';
+    /* Selama belum masuk batch, pil status sudah berbunyi "disetujui GM · EHC cepat". */
+    return (k.status === "disetujui" && !k.transfer_batch_id) ? ""
+      : '<br><span class="pill p-lunas">cepat · disetujui GM</span>';
   if (k.cepat_ok === false)
     return '<br><span class="pill p-belum">cepat · ditolak GM</span>';
   return '<br><span class="pill p-sebagian">cepat · menunggu GM</span>';
@@ -11679,13 +11789,14 @@ function ketCepat(k){
   if (!k || !k.cepat_minta) return "";
   var t = "";
   if (k.cepat_alasan)  t += '<span class="muted">Alasan: ' + esc(k.cepat_alasan) + '</span>';
-  if (k.cepat_catatan) t += (t ? '<br>' : '')
-    + '<span class="muted">Catatan GM: ' + esc(k.cepat_catatan) + '</span>';
+  /* EHC cepat disetujui: catatan yang sama sudah tampil lewat ketGmEhc ("diputus … · X") */
+  if (k.cepat_catatan && !(k.status === "disetujui" && k.cepat_catatan === k.gm_catatan))
+    t += (t ? '<br>' : '') + '<span class="muted">Catatan GM: ' + esc(k.cepat_catatan) + '</span>';
   return t ? '<br>' + t : "";
 }
 function tombolCepat(k){
+  /* Berkas 142: EHC cepat kini juga untuk klaim lintas customer — GM memutus per klaim. */
   if (k.status !== "diajukan" || k.transfer_batch_id || !bolehMintaCepat()) return "";
-  if (k.lintas_customer) return "";       /* menunggu GM per klaim (db/140 §18) */
   if (!k.cepat_minta || k.cepat_ok === false)
     return '<button type="button" class="btn kecil bahaya" data-ehcepat="' + k.id + '">'
          + (k.cepat_ok === false ? "Ajukan cepat lagi" : "Minta EHC cepat") + '</button>';
@@ -11700,45 +11811,106 @@ function bolehMintaCepat(){
   return ["owner","gm","staff","finance","sales"].indexOf(saya.peran) > -1;
 }
 
+/* Status sesuai alur tahap 3: diajukan (bisa diubah s.d. cutoff) → menunggu GM →
+   disetujui (menunggu SP lunas / dibayar mulai tgl 20 / masuk daftar bayar #n) →
+   ditransfer; atau ditolak (+ alasan GM) / dibatalkan. */
 function pilStatusEhc(k){
-  if (k.transfer_batch_id) return '<span class="pill p-lunas">ditransfer · batch #' + esc(k.transfer_batch_id) + '</span>';
-  if (k.status === "disetujui") return '<span class="pill p-lunas">disetujui GM</span>';
-  if (k.status === "ditolak")   return '<span class="pill p-belum">ditolak GM</span>';
-  if (k.status === "batal")     return '<span class="pill p-belum">dibatalkan</span>';
-  return hariIniJkt() <= cutoffEhc(k.periode)
-    ? '<span class="pill p-sebagian">diajukan · bisa diubah s.d. ' + td(cutoffEhc(k.periode)) + '</span>'
-    : '<span class="pill p-jalan">menunggu pemeriksaan GM</span>';
+  if (k.status === "batal")   return '<span class="pill p-belum">dibatalkan</span>';
+  if (k.status === "ditolak") return '<span class="pill p-belum">ditolak GM</span>';
+  if (k.transfer_batch_id) {
+    return k.ditransfer_pada
+      ? '<span class="pill p-lunas">ditransfer ' + tdJkt(k.ditransfer_pada) + '</span>'
+      : '<span class="pill p-jalan">masuk daftar bayar #' + esc(k.transfer_batch_id) + '</span>';
+  }
+  if (k.status === "disetujui") {
+    if (k.gm_jalur === "cepat" || (k.cepat_minta && k.cepat_ok === true))
+      return '<span class="pill p-lunas">disetujui GM · EHC cepat</span>'
+        + '<br><span class="muted">menunggu finance (EHC emergency)</span>';
+    var belum = spBelumLunasEhc(k);
+    if (belum.length)
+      return '<span class="pill p-sebagian">disetujui · menunggu SP lunas</span>';
+    var bayar = bayarEhc(k.periode);
+    return '<span class="pill p-lunas">disetujui GM</span><br><span class="muted">'
+      + (hariIniJkt() < bayar ? 'dibayar mulai ' + td(bayar) : 'menunggu daftar bayar finance (tgl 20)') + '</span>';
+  }
+  if (hariIniJkt() > cutoffEhc(k.periode))
+    return '<span class="pill p-jalan">menunggu pemeriksaan GM</span>';
+  /* EHC cepat menunggu GM: database menolak ubah/batal sampai permintaannya ditarik. */
+  if (k.cepat_minta && k.cepat_ok !== false)
+    return '<span class="pill p-sebagian">diajukan · terkunci selama EHC cepat menunggu GM</span>'
+      + '<br><span class="muted">tarik permintaan cepat untuk mengubah/membatalkan</span>';
+  return '<span class="pill p-sebagian">diajukan · bisa diubah s.d. ' + td(cutoffEhc(k.periode)) + '</span>';
+}
+/* Keterangan putusan GM di bawah pil: alasan tolak wajib terbaca sales. */
+function ketGmEhc(k){
+  if (k.status === "ditolak")
+    return '<br><span class="muted">Alasan GM: ' + esc(k.gm_catatan || "—") + '</span>'
+      + '<br><span class="muted">Saldo EHC SP-nya kembali (SP yang komisinya sudah diklaim → kas sales).</span>';
+  if (k.status === "disetujui" && k.gm_pada)
+    return '<br><span class="muted">diputus ' + tdJkt(k.gm_pada)
+      + (k.gm_catatan ? ' · ' + esc(k.gm_catatan) : '') + '</span>';
+  return "";
+}
+/* Transfer gagal (berkas 142): finance mengeluarkan klaim dari daftar bayar; klaim
+   kembali "disetujui" tanpa batch. Alasannya hanya ada di ehc_klaim_putusan — sales
+   perlu tahu, karena rekening tujuan sudah terkunci (ganti = GM membatalkan, klaim baru). */
+function ketKeluarEhc(k){
+  if (k.status !== "disetujui" || k.transfer_batch_id) return "";
+  var p = (Array.isArray(k.ehc_klaim_putusan) ? k.ehc_klaim_putusan : [])
+    .filter(function(x){ return x.aksi === "keluar_batch"; })
+    .sort(function(a, b){ return String(b.pada || "").localeCompare(String(a.pada || "")); })[0];
+  if (!p) return "";
+  var cepat = k.gm_jalur === "cepat" || (k.cepat_minta && k.cepat_ok === true);
+  return '<br><b class="neg">Dikeluarkan dari daftar bayar ' + tdJkt(p.pada) + '</b>'
+    + '<br><span class="muted">Alasan finance: ' + esc(p.catatan || "—") + ' · '
+    + (cepat ? 'kembali ke EHC emergency' : 'ikut daftar bayar tgl 20 berikutnya')
+    + '. Rekening tujuan terkunci — bila rekeningnya salah, minta GM membatalkan lalu ajukan klaim baru.</span>';
+}
+/* Tujuan uang yang tampil: rekening yang DIKUNCI saat GM setuju bila sudah ada;
+   sebelum itu PIC customer (transfer) atau rekening sales (reimburse). */
+function tujuanEhcTeks(k){
+  var t = tujuanKlaim(k), pic = picKlaim(k);
+  if (k.cara_bayar === "transfer") {
+    var rek = t ? teksRekening(t) : teksRekening(pic);
+    return '<br><span class="muted">' + esc(pic ? pic.nama : "PIC") + ' · ' + esc(rek || "—")
+      + (t ? ' <span class="muted" title="rekening dikunci saat GM menyetujui">(terkunci)</span>' : '') + '</span>';
+  }
+  if (k.cara_bayar === "reimburse")
+    return '<br><span class="muted">ke rekening ' + esc(namaRepAlur(k.sales_rep_id) || "sales")
+      + (t && teksRekening(t) ? ' · ' + esc(teksRekening(t)) + ' (terkunci)' : '') + '</span>';
+  return "";
 }
 
 function barisKlaimEhc(k){
   var n = nilaiKlaim(k), bk = berkasKlaim(k), al = alokasiKlaim(k);
   var cust = k.customers ? k.customers.nama : "—";
-  var tujuan = k.cara_bayar === "transfer"
-    ? '<br><span class="muted">' + esc(k.customer_pics ? k.customer_pics.nama : "PIC") + ' · '
-      + esc([k.bank, k.no_rekening].filter(Boolean).join(" ") || "—")
-      + (k.atas_nama ? ' a.n. ' + esc(k.atas_nama) : '') + '</span>'
-    : (k.cara_bayar === "reimburse"
-        ? '<br><span class="muted">ke rekening ' + esc(namaRepAlur(k.sales_rep_id) || "sales") + '</span>' : '');
   var aksi = "";
   if (bolehAlurJual() && ehcMasihBisaUbah(k)) {
     aksi += '<button type="button" class="btn kecil" data-ehubah="' + k.id + '">Ubah</button> '
          +  '<button type="button" class="btn kecil bahaya" data-ehbatal="' + k.id + '">Batalkan</button> ';
   }
+  /* sesudah cutoff / sesudah disetujui: hanya owner/GM (beralasan), selama uangnya belum keluar */
+  else if (ehcBatalGm(k))
+    aksi += '<button type="button" class="btn kecil bahaya" data-ehbatal="' + k.id + '">Batalkan (GM)</button> ';
   aksi += tombolCepat(k);
+  /* GM/owner: klaim yang menunggu putusan dibuka di laci pemeriksaan. */
+  if (bolehApprove() && k.status === "diajukan" && !k.transfer_batch_id
+      && ((k.cepat_minta && k.cepat_ok === null) || hariIniJkt() > cutoffEhc(k.periode)))
+    aksi += ' <button type="button" class="btn kecil utama" data-ehperiksa="' + k.id + '">Periksa</button>';
   /* Status & tombol di kolom kedua: di layar HP tabelnya digeser ke samping,
      dan tombol Ubah/Batalkan tidak boleh baru terlihat sesudah menggeser
      jauh. */
   return '<tr><td>' + td(k.tanggal) + '<br><span class="muted">periode ' + esc(namaBulan(k.periode)) + '</span></td>'
-    + '<td class="l">' + pilStatusEhc(k)
+    + '<td class="l">' + pilStatusEhc(k) + ketGmEhc(k) + ketKeluarEhc(k)
     +   (k.status === "batal" && k.batal_alasan ? '<br><span class="muted">' + esc(k.batal_alasan) + '</span>' : '')
     +   pilCepat(k) + ketCepat(k)
     +   (aksi ? '<div style="margin-top:6px">' + aksi + '</div>' : '') + '</td>'
     + '<td>' + (n ? rp(n.nominal) : '<span class="muted">—</span>') + '</td>'
     + '<td class="l">' + esc(labelEhc(EHC_KEPERLUAN, k.keperluan))
-    +   '<br><span class="muted">' + esc(labelEhc(EHC_CARA, k.cara_bayar)) + '</span>' + tujuan
+    +   '<br><span class="muted">' + esc(labelEhc(EHC_CARA, k.cara_bayar)) + '</span>' + tujuanEhcTeks(k)
     +   (k.keterangan ? '<br><span class="muted">' + esc(k.keterangan) + '</span>' : '') + '</td>'
     + '<td class="l">' + esc(cust)
-    +   (k.lintas_customer ? '<br><span class="pill p-sebagian" title="Ada SP dari customer lain — perlu persetujuan GM">'
+    +   (k.lintas_customer ? '<br><span class="pill p-sebagian" title="Ada SP dari customer lain — GM memeriksa per klaim">'
                              + 'lintas customer · perlu GM</span>' : '') + '</td>'
     + '<td class="l">' + (al.length
         ? al.map(function(a){
@@ -11754,8 +11926,44 @@ function barisKlaimEhc(k){
         : '<span class="muted">—</span>') + '</td></tr>';
 }
 
+/* Baris halaman "Perlu diperiksa GM": centang untuk persetujuan massal. Klaim
+   lintas customer dan klaim tanpa lampiran tidak bisa dicentang — lintas
+   diperiksa satu per satu, tanpa lampiran hanya bisa ditolak (beralasan). */
+function barisPeriksaEhc(k, dipilih){
+  var n = nilaiKlaim(k), bk = berkasKlaim(k), al = alokasiKlaim(k);
+  var alasanMati = k.lintas_customer ? "lintas customer — periksa satu per satu"
+                 : (!bk.length ? "tanpa lampiran — hanya bisa ditolak" : "");
+  return '<tr><td>' + (alasanMati
+        ? '<input type="checkbox" disabled title="' + esc(alasanMati) + '" data-ehcentangmati="' + k.id + '">'
+        : '<input type="checkbox" data-ehcentang="' + k.id + '"' + (dipilih ? ' checked' : '') + '>') + '</td>'
+    + '<td>' + td(k.tanggal) + '<br><span class="muted">periode ' + esc(namaBulan(k.periode)) + '</span></td>'
+    + '<td class="l">' + esc(namaRepAlur(k.sales_rep_id) || "—") + '</td>'
+    + '<td class="l">' + esc(k.customers ? k.customers.nama : "—")
+    +   (k.lintas_customer ? '<br><b class="neg">LINTAS</b>' : '')
+    +   (alasanMati ? '<br><span class="muted">' + esc(alasanMati) + '</span>' : '') + '</td>'
+    + '<td>' + (n ? rp(n.nominal) : '<span class="muted">—</span>') + '</td>'
+    + '<td class="l">' + (al.length ? al.map(function(a){
+        var so = a.sales_orders || {};
+        return esc(so.no_sp || ("#" + a.so_id)) + ' · ' + rp(a.nominal)
+          + (so.batal ? ' <b class="neg">BATAL</b>'
+             : (so.lunas ? ' <span class="pill p-lunas">lunas</span>' : ' <span class="pill p-sebagian">belum lunas</span>'));
+      }).join("<br>") : '<span class="muted">—</span>') + '</td>'
+    + '<td class="l">' + (bk.length ? bk.length + ' berkas' : '<b class="neg">tanpa lampiran</b>')
+    +   (k.cepat_minta && k.cepat_ok === false ? '<br><span class="muted">cepat ditolak</span>' : '') + '</td>'
+    + '<td class="l">' + esc(labelEhc(EHC_KEPERLUAN, k.keperluan))
+    +   '<br><span class="muted">' + esc(labelEhc(EHC_CARA, k.cara_bayar)) + '</span></td>'
+    + '<td><button type="button" class="btn kecil utama" data-ehperiksa="' + k.id + '">Periksa</button></td></tr>';
+}
+
 function panelEhc(){
   var el = $("p-ehc"), E = LANJUT.ehc;
+  /* P4: Vonny, Lie Sian, Ichi tidak melihat klaim EHC (database juga menyaringnya). */
+  if (!bolehLihatKlaimEhc()) {
+    $("head-aksi").innerHTML = "";
+    el.innerHTML = kosong("Klaim EHC hanya untuk owner, GM, staff, finance, Lenni, dan sales pemiliknya.");
+    return;
+  }
+  if (!ehcHalSaya().some(function(d){ return d.id === E.hal; })) E.hal = "saldo";
   if (!E.dimuat) {
     EHC_HAL.forEach(function(d){ if (E.hlm[d.id]) E.hlm[d.id].dimuat = false; });
     E.cacah = null;
@@ -11780,24 +11988,33 @@ function panelEhc(){
   if ($("btn-ehc-baru")) $("btn-ehc-baru").addEventListener("click", function(){ formEhc(null); });
 
   var per = periodeEhcDari(hariIniJkt());
-  var h = kotakAkunSales() + tabHalaman("eh", E.hal, EHC_HAL, E.cacah);
+  var h = kotakAkunSales() + tabHalaman("eh", E.hal, ehcHalSaya(), E.cacah);
 
   var KET = {
     saldo:    'Saldo EHC tiap SP = EHC yang disisihkan di SP dikurangi klaim yang sudah diajukan. '
             + 'Klik baris SP untuk memakai saldonya. Saldo boleh dipakai berkali-kali selama '
             + '<b>komisi SP itu belum diklaim</b> — sesudah komisi diklaim, sisanya masuk kas sales.',
-    diajukan: 'Klaim yang <b>sudah diajukan</b>. Sampai cutoff periodenya (tanggal 18) masih bisa '
-            + 'diubah atau dibatalkan; sesudah itu GM memeriksa dan finance memproses tanggal 20. '
-            + 'Transfer ke customer dan reimburse baru dibayar sesudah semua SP-nya lunas.',
-    selesai:  'Klaim yang <b>sudah disetujui GM</b> atau <b>uangnya sudah dikirim</b> (batch transfer di '
-            + 'Laporan Finance). Nominalnya sudah membeku.',
-    batal:    'Klaim yang <b>dibatalkan</b> sales sebelum cutoff, atau <b>ditolak</b> GM. Saldo EHC '
-            + 'SP-nya sudah kembali.'
+    diajukan: 'Klaim yang <b>sudah diajukan</b> dan belum diputus. Sampai cutoff periodenya (tanggal 18) '
+            + 'masih bisa diubah atau dibatalkan; sesudah itu <b>GM memeriksa per klaim</b> (setujui atau '
+            + 'tolak beralasan). Yang mendesak bisa diminta sebagai <b>EHC cepat</b> — juga klaim lintas customer.',
+    periksa:  'Klaim yang <b>lewat cutoff</b> dan menunggu putusan Anda. Centang yang sudah diperiksa lalu '
+            + '"Setujui yang dicentang" — hasilnya per klaim, satu yang gagal tidak membatalkan yang lain. '
+            + '<b>Lintas customer</b> dan <b>tanpa lampiran</b> diputus satu per satu lewat tombol "Periksa"; '
+            + 'menolak selalu satu per satu dan wajib beralasan. Yang belum diputus tidak menghalangi klaim lain.',
+    disetujui:'Klaim yang <b>sudah disetujui GM</b> dan menunggu dibayar. Rekening tujuannya sudah '
+            + '<b>dikunci</b> saat disetujui. Finance mengunci daftar bayar mulai <b>tanggal 20</b> — hanya klaim '
+            + 'yang semua SP-nya sudah lunas; EHC cepat dibayar lewat EHC emergency.',
+    selesai:  'Klaim yang <b>masuk daftar bayar</b> finance. "Ditransfer" baru sesudah finance mengisi '
+            + 'referensi bank batch-nya; transfer yang gagal dikeluarkan dari batch dan ikut tanggal 20 berikutnya.',
+    batal:    'Klaim yang <b>dibatalkan</b>, atau <b>ditolak</b> GM beserta alasannya. Saldo EHC SP-nya sudah '
+            + 'kembali — bila komisi SP itu sudah diklaim, saldonya masuk kas sales. Ditolak itu final; '
+            + 'ajukan ulang sebagai klaim baru.'
   };
   h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
     + KET[E.hal]
     + '<br><span class="muted">Klaim yang diajukan hari ini masuk <b>periode ' + esc(namaBulan(per))
-    + '</b> — cutoff ' + td(cutoffEhc(per)) + ', diproses ' + td(bayarEhc(per)) + '.</span>'
+    + '</b> — cutoff ' + td(cutoffEhc(per)) + ', diperiksa GM sesudahnya, dibayar mulai ' + td(bayarEhc(per))
+    + ' begitu semua SP-nya lunas.</span>'
     + '</div></div>';
 
   h += alatHalaman(H, "eh", d0.jenis === "sp" ? KOL_TGL_BK : KOL_TGL_KLAIM,
@@ -11810,21 +12027,26 @@ function panelEhc(){
       return [s.no_sp, s.customer, s.kepada, namaRepAlur(s.sales_rep_id)]; });
   } else {
     d = saringLentur(d, H.cari, function(k){
-      return [k.customers ? k.customers.nama : "", k.keterangan,
-              k.customer_pics ? k.customer_pics.nama : "", k.bank, k.no_rekening,
+      var pic = picKlaim(k);
+      return [k.customers ? k.customers.nama : "", k.keterangan, pic ? pic.nama : "",
+              namaRepAlur(k.sales_rep_id),
               alokasiKlaim(k).map(function(a){ return a.sales_orders ? a.sales_orders.no_sp : ""; }).join(" ")]; });
   }
 
   var kosongAsli = {
     saldo:    "Tidak ada SP yang masih punya saldo EHC. Saldo muncul begitu ada SP yang EHC-nya diisi.",
-    diajukan: "Tidak ada klaim EHC yang sedang diajukan."
+    diajukan: "Tidak ada klaim EHC yang sedang diajukan atau menunggu GM."
             + (peranSales()
                 ? " Kalau Anda baru saja mengajukan klaim dan ia tidak ada di sini, kemungkinan besar "
                   + "akun Anda belum ditautkan ke nama sales. Minta owner mengisi \"Masuk sebagai\" di tab Pengguna."
                 : ""),
-    selesai:  "Belum ada klaim yang disetujui atau ditransfer.",
+    periksa:  "Tidak ada klaim EHC yang menunggu pemeriksaan GM. Klaim periode berjalan baru masuk sesudah cutoff tgl 18.",
+    disetujui:"Tidak ada klaim yang disetujui dan belum dibayar.",
+    selesai:  "Belum ada klaim yang masuk daftar bayar atau ditransfer.",
     batal:    "Tidak ada klaim yang dibatalkan atau ditolak."
   }[E.hal];
+
+  if (E.hal === "periksa" && E.hasilMassal) h += blokHasilMassalEhc(E.hasilMassal);
 
   var kos = kosongHalaman(H, d, kosongAsli);
   if (kos) {
@@ -11839,6 +12061,30 @@ function panelEhc(){
       +  '<th class="l">Customer</th><th class="l">Sales</th><th>Pelunasan</th>'
       +  '<th>EHC di SP</th><th>Terpakai</th><th>Sisa saldo</th></tr></thead><tbody>'
       +  d.map(barisSpEhc).join("") + '</tbody></table></div>';
+  } else if (E.hal === "periksa") {
+    /* centang yang masih ada di halaman ini saja */
+    var ada = {}; d.forEach(function(k){ ada[k.id] = k; });
+    E.centang = (E.centang || []).filter(function(id){
+      var k = ada[id]; return k && !k.lintas_customer && berkasKlaim(k).length; });
+    var dipilih = E.centang.map(function(id){ return ada[id]; });
+    var totPilih = dipilih.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal) || 0 : 0); }, 0);
+    var totSemua = d.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal) || 0 : 0); }, 0);
+    var nLintas = d.filter(function(k){ return k.lintas_customer; }).length;
+    h += '<div class="tiles" style="margin-top:12px">'
+      + tile("Menunggu putusan", d.length, nLintas ? nLintas + " lintas customer (satu per satu)" : "sesudah saringan",
+             d.length ? "alert" : "", "ehc:daftar")
+      + tile("Nominal", rpS(totSemua), "jumlah yang tampil", "", "ehc:nominal")
+      + '</div>';
+    h += '<div class="baris-alat" style="margin-top:10px">'
+      + '<button class="btn utama" id="btn-eh-massal" type="button"' + (dipilih.length ? '' : ' disabled') + '>'
+      + 'Setujui yang dicentang (' + dipilih.length + ' · ' + rp(totPilih) + ')</button>'
+      + '<button class="btn kecil" id="btn-eh-centangsemua" type="button">Centang semua yang bisa</button>'
+      + '</div>';
+    h += '<div class="tw" id="daftar-ehc"><table><thead><tr><th></th><th>Tanggal</th><th class="l">Sales</th>'
+      +  '<th class="l">Customer</th><th>Nominal</th><th class="l">SP dipakai</th><th class="l">Lampiran</th>'
+      +  '<th class="l">Untuk apa · cara bayar</th><th></th></tr></thead><tbody>'
+      +  d.map(function(k){ return barisPeriksaEhc(k, E.centang.indexOf(k.id) > -1); }).join("")
+      +  '</tbody></table></div>';
   } else {
     var adaNilai = d.some(function(k){ return nilaiKlaim(k); });
     var tot = d.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal)||0 : 0); }, 0);
@@ -11866,11 +12112,15 @@ function panelEhc(){
     + '1 · Klaim hanya lewat <code>simpan_klaim_ehc()</code>: tiap SP paling banyak sisa saldonya (dikunci '
     + 'supaya dua klaim bersamaan tidak sama-sama lolos), semua SP milik sales yang sama, lampiran wajib '
     + 'dan harus unggahan Anda sendiri, PIC penerima harus PIC customer penerima.<br>'
-    + '2 · Ubah/batal hanya sampai cutoff periode (tgl 18). Sesudah itu klaimnya menunggu GM.<br>'
+    + '2 · Ubah/batal hanya sampai cutoff periode (tgl 18). Sesudahnya — juga sesudah disetujui — hanya owner/GM '
+    + 'yang membatalkan (beralasan), selama uangnya belum keluar; klaim di daftar bayar dikeluarkan finance dulu. '
+    + 'Sesudah cutoff GM memutus per klaim lewat '
+    + '<code>putuskan_klaim_ehc()</code> — memeriksa versi klaim (klaim yang berubah sejak dimuat ditolak), '
+    + 'lampiran, SP batal, dan saldo; rekening tujuannya dikunci saat disetujui.<br>'
     + '3 · SP yang EHC-nya sudah dipakai tidak bisa dibatalkan atau diturunkan EHC-nya di bawah yang '
     + 'sudah terpakai — batalkan/ubah klaimnya dulu.<br>'
-    + '4 · Nominal disimpan di tabel terpisah dengan policy sendiri. Kolom yang tampil "—" berarti peran '
-    + 'Anda memang tidak dikirimi angkanya.');
+    + '4 · Nominal disimpan di tabel terpisah dengan policy sendiri, dan nomor rekening hanya terbaca '
+    + 'owner, GM, finance, dan sales pemiliknya. Kolom yang tampil "—" berarti peran Anda memang tidak dikirimi angkanya.');
 
   el.innerHTML = h;
 
@@ -11889,7 +12139,10 @@ function panelEhc(){
     });
   });
   Array.prototype.forEach.call(el.querySelectorAll("[data-ehbatal]"), function(b){
-    b.addEventListener("click", function(){ batalkanKlaimEhc(Number(b.dataset.ehbatal)); });
+    b.addEventListener("click", function(){
+      var k = H.baris.filter(function(x){ return String(x.id) === b.dataset.ehbatal; })[0];
+      batalkanKlaimEhc(Number(b.dataset.ehbatal), k);
+    });
   });
   Array.prototype.forEach.call(el.querySelectorAll("[data-ehcepat]"), function(b){
     b.addEventListener("click", function(){ formKlaimCepat(Number(b.dataset.ehcepat)); });
@@ -11897,6 +12150,314 @@ function panelEhc(){
   Array.prototype.forEach.call(el.querySelectorAll("[data-ehtarikcepat]"), function(b){
     b.addEventListener("click", function(){ tarikKlaimCepat(Number(b.dataset.ehtarikcepat)); });
   });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehperiksa]"), function(b){
+    b.addEventListener("click", function(){
+      var k = H.baris.filter(function(x){ return String(x.id) === b.dataset.ehperiksa; })[0];
+      formGmPutusEhc(k && k.cepat_minta && k.cepat_ok === null ? "ehc_cepat" : "ehc_periksa",
+                     Number(b.dataset.ehperiksa));
+    });
+  });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-ehcentang]"), function(c){
+    c.addEventListener("change", function(){
+      var id = Number(c.dataset.ehcentang), i = E.centang.indexOf(id);
+      if (c.checked && i < 0) E.centang.push(id);
+      if (!c.checked && i > -1) E.centang.splice(i, 1);
+      panelEhc();
+    });
+  });
+  if ($("btn-eh-centangsemua")) $("btn-eh-centangsemua").addEventListener("click", function(){
+    E.centang = d.filter(function(k){ return !k.lintas_customer && berkasKlaim(k).length; })
+                 .map(function(k){ return k.id; });
+    panelEhc();
+  });
+  if ($("btn-eh-massal")) $("btn-eh-massal").addEventListener("click", function(){ setujuiMassalEhc(H.baris); });
+  if ($("btn-eh-hasil-tutup")) $("btn-eh-hasil-tutup").addEventListener("click", function(){
+    E.hasilMassal = null; panelEhc(); });
+}
+
+/* ── persetujuan massal (berkas 142: setujui_klaim_ehc_massal) ─────────
+   Tiap butir membawa versinya sendiri; database memproses per klaim dan
+   melaporkan hasilnya per klaim — yang gagal tidak membatalkan yang lain.
+   Lintas customer dilewati database walau terkirim. Tidak ada tolak massal. */
+function setujuiMassalEhc(baris){
+  var E = LANJUT.ehc, peta = {};
+  (baris || []).forEach(function(k){ peta[k.id] = k; });
+  var pilih = (E.centang || []).map(function(id){ return peta[id]; }).filter(Boolean);
+  if (!pilih.length) { toast("Belum ada klaim yang dicentang.", true); return; }
+  if (pilih.length > 100) { toast("Paling banyak 100 klaim sekali setujui.", true); return; }
+  var tot = pilih.reduce(function(a, k){ var n = nilaiKlaim(k); return a + (n ? Number(n.nominal) || 0 : 0); }, 0);
+  if (!confirm("Setujui " + pilih.length + " klaim EHC (total " + rp(tot) + ")?\n\n"
+    + "Rekening tujuan tiap klaim dikunci sekarang. Finance membayarnya mulai tgl 20 begitu semua SP-nya lunas.\n"
+    + "Klaim yang berubah sejak halaman ini dimuat akan ditolak database — periksa ulang yang itu.")) return;
+  var daftar = pilih.map(function(k){ return { klaim: k.id, versi: versiKlaimEhc(k) }; });
+  sibuk(true, "Menyetujui " + pilih.length + " klaim…");
+  api("POST", "/rpc/setujui_klaim_ehc_massal", { p_daftar: daftar })
+    .then(function(r){
+      var o = Array.isArray(r) ? r[0] : r;
+      E.hasilMassal = o || {};
+      E.centang = [];
+      var n = (E.hasilMassal.disetujui || []).length;
+      toast(n + " klaim EHC disetujui.");
+      LANJUT.gm.dimuat = false;
+      segarkanEhc();
+    })
+    .catch(function(e){ toast(e.message, true); })
+    .then(function(){ sibuk(false); });
+}
+function blokHasilMassalEhc(o){
+  var ok = o.disetujui || [], lewat = o.dilewati || [], gagal = o.gagal || [];
+  var h = '<div class="flag' + (gagal.length || lewat.length ? ' merah' : '') + '" id="ehc-hasil-massal" style="margin-top:12px">'
+    + '<span class="f-ico">' + (gagal.length || lewat.length ? '!' : 'i') + '</span><div>'
+    + '<b>Hasil persetujuan:</b> ' + ok.length + ' disetujui (' + rp(o.total || 0) + '), '
+    + lewat.length + ' dilewati, ' + gagal.length + ' gagal.';
+  if (ok.length) h += '<br>Disetujui: ' + ok.map(function(x){
+      return 'EHC #' + esc(x.klaim) + (x.nominal !== null && x.nominal !== undefined ? ' (' + rp(x.nominal) + ')' : ''); }).join(", ");
+  lewat.forEach(function(x){ h += '<br>Dilewati EHC #' + esc(x.klaim) + ' — ' + esc(x.alasan || "") + '. Buka "Periksa".'; });
+  gagal.forEach(function(x){
+    h += '<br>Gagal EHC #' + esc(x.klaim) + ' — ' + esc(x.pesan || "")
+      + (x.kode === "40001" ? ' <span class="muted">(klaim berubah sejak dimuat — periksa ulang)</span>' : '');
+  });
+  h += '<br><button type="button" class="btn kecil" id="btn-eh-hasil-tutup" style="margin-top:6px">Tutup hasil</button>';
+  return h + '</div></div>';
+}
+
+/* ── laci keputusan GM untuk SATU klaim EHC (berkas 141–143) ─────────
+   Dipakai dari antrean GM ('ehc_periksa' — ref_id negatif — dan 'ehc_cepat')
+   dan dari halaman EHC (tombol "Periksa"). Semua isinya dibaca SEGAR saat laci
+   dibuka; versi yang dikirim saat memutus berasal dari fetch yang sama yang
+   menggambar laci ini — kalau klaimnya berubah sesudah itu, database menolak
+   (40001) dan laci dimuat ulang. P1: GM/owner boleh memutus klaim yang ia
+   buat sendiri; yang tercatat siapa yang memutus. */
+var EHC_RIWAYAT_LABEL = {
+  "log:ajukan":"Diajukan", "log:ubah":"Diubah", "log:batal":"Dibatalkan",
+  "cepat:minta":"Minta EHC cepat", "cepat:tarik":"Permintaan cepat ditarik",
+  "cepat:setuju":"EHC cepat disetujui", "cepat:tolak":"EHC cepat ditolak",
+  "putusan:periksa:setuju":"Disetujui GM", "putusan:periksa:tolak":"Ditolak GM",
+  "putusan:cepat:setuju":"Disetujui GM (EHC cepat)", "putusan:konversi:setuju":"Konversi data lama",
+  "putusan:bayar:keluar_batch":"Dikeluarkan dari daftar bayar"
+};
+function formGmPutusEhc(jenis, klaimId, pesanAwal){
+  klaimId = Math.abs(Number(klaimId));
+  $("laci-form").innerHTML = kotakMuat("Memuat klaim EHC #" + klaimId + "…");
+  $("laci-kaki").innerHTML = "";
+  bukaLaci((jenis === "ehc_cepat" ? "EHC cepat" : "Periksa EHC") + " — klaim #" + klaimId);
+  var K = null;
+  function riwayat(path){ return api("GET", path).catch(function(){ return null; }); }
+  api("GET", "/ehc_klaim?select=" + EHC_KOLOM + "&id=eq." + klaimId)
+    .then(function(r){
+      K = (r || [])[0] || null;
+      if (!K) throw new Error("Klaim EHC #" + klaimId + " tidak ditemukan, atau tidak terbaca untuk peran Anda.");
+      var so = alokasiKlaim(K).map(function(a){ return a.so_id; });
+      return Promise.all([
+        so.length ? api("GET", "/ehc_saldo_sp?select=so_id,no_sp,total_ehc,terpakai,sisa,tertutup,lunas,tgl_lunas"
+                         + "&so_id=in.(" + so.join(",") + ")").catch(function(){ return null; }) : [],
+        riwayat("/ehc_klaim_putusan?select=id,jalur,aksi,catatan,oleh,pada&klaim_id=eq." + klaimId + "&order=id"),
+        riwayat("/ehc_klaim_log?select=id,aksi,catatan,oleh,pada&klaim_id=eq." + klaimId + "&order=id"),
+        riwayat("/ehc_cepat_log?select=id,aksi,alasan,oleh,pada&klaim_id=eq." + klaimId + "&order=id"),
+        /* reimburse yang belum diputus: rekening sales yang AKAN dikunci (srr_baca: owner/GM/finance) */
+        K.cara_bayar === "reimburse" && !tujuanKlaim(K)
+          ? api("GET", "/sales_rep_rekening?select=sales_rep_id,bank,no_rekening,atas_nama&sales_rep_id=eq."
+                + encodeURIComponent(K.sales_rep_id)).catch(function(){ return null; })
+          : null,
+        repAlur().catch(function(){ return []; })
+      ]);
+    })
+    .then(function(r){
+      gambarLaciGmEhc(jenis, K, { saldo: r[0], putusan: r[1], log: r[2], cepatLog: r[3], rekSales: r[4] }, pesanAwal);
+    })
+    .catch(function(e){ $("laci-form").innerHTML = kotakGalat(e); $("laci-kaki").innerHTML = ""; });
+}
+
+function gambarLaciGmEhc(jenis, K, X, pesanAwal){
+  var cepatMenunggu = !!(K.cepat_minta && K.cepat_ok === null);
+  /* klaim yang sedang meminta cepat diputus sebagai EHC cepat (database menolak 'periksa' untuknya) */
+  if (jenis === "ehc_periksa" && cepatMenunggu) jenis = "ehc_cepat";
+  var cepat = jenis === "ehc_cepat";
+  var n = nilaiKlaim(K), bk = berkasKlaim(K), al = alokasiKlaim(K), t = tujuanKlaim(K), pic = picKlaim(K);
+  var lewatCutoff = hariIniJkt() > cutoffEhc(K.periode);
+  var terbuka = K.status === "diajukan" && !K.transfer_batch_id && (cepat ? cepatMenunggu : true);
+  var mati = [];          /* alasan Setujui dimatikan */
+  var matiSemua = "";     /* alasan Setujui DAN Tolak dimatikan */
+  if (!terbuka) {
+    matiSemua = cepat && K.status === "diajukan"
+      ? "Klaim ini tidak sedang menunggu putusan EHC cepat (sudah diputus atau ditarik)."
+      : "Klaim ini sudah berstatus " + K.status + (K.transfer_batch_id ? " dan masuk daftar bayar #" + K.transfer_batch_id : "")
+        + " — tidak ada yang perlu diputus.";
+  } else if (!cepat && !lewatCutoff) {
+    matiSemua = "Klaim periode " + namaBulan(K.periode) + " diperiksa GM sesudah cutoff " + tglTampil(cutoffEhc(K.periode))
+      + ". Kalau mendesak, sales meminta EHC cepat.";
+  }
+  if (!bk.length) mati.push("Klaim tanpa lampiran tidak bisa disetujui — tolak dengan alasan.");
+  var spBatal = al.filter(function(a){ return a.sales_orders && a.sales_orders.batal; });
+  if (spBatal.length) mati.push("SP " + spBatal.map(function(a){ return a.sales_orders.no_sp; }).join(", ")
+    + " sudah dibatalkan — klaim ini tidak bisa disetujui.");
+  if (!t) {
+    if (K.cara_bayar === "transfer") {
+      if (!pic) mati.push("PIC penerima transfer tidak ada atau tidak terbaca.");
+      else if (pic.aktif === false) mati.push("PIC " + pic.nama + " sudah tidak aktif.");
+      else if (!pic.bank || !pic.no_rekening) mati.push("PIC " + pic.nama + " belum punya rekening.");
+    } else if (K.cara_bayar === "reimburse") {
+      if (Array.isArray(X.rekSales) && !X.rekSales.length)
+        mati.push("Rekening sales belum diisi finance — klaim reimburse ini belum bisa disetujui.");
+    } else if (K.cara_bayar === "kartu_kredit") {
+      mati.push("Kartu kredit perusahaan menyusul di tahap 2.");
+    }
+  }
+
+  var pilSt = pilStatusEhc(K);
+  var h = '<div class="flag' + (cepat ? ' merah' : '') + '"><span class="f-ico">' + (cepat ? '!' : 'i') + '</span><div>'
+    + '<b>EHC #' + esc(K.id) + '</b> · periode ' + esc(namaBulan(K.periode)) + ' · ' + pilSt
+    + (cepat
+        ? '<br><b>Minta dicairkan cepat</b>' + (K.cepat_diminta_pada ? ' sejak ' + esc(waktuJkt(K.cepat_diminta_pada)) + ' WIB' : '')
+          + '<br>Alasan mendesak: ' + esc(K.cepat_alasan || "—")
+        : '<br>Cutoff ' + td(cutoffEhc(K.periode)) + ' · '
+          + (hariIniJkt() < bayarEhc(K.periode) ? 'dibayar mulai ' + td(bayarEhc(K.periode))
+                                                : 'dibayar lewat daftar bayar finance tgl 20 berikutnya')
+          + ' begitu semua SP lunas')
+    + '</div></div>';
+
+  var rek = t ? teksRekening(t)
+    : (K.cara_bayar === "transfer" ? teksRekening(pic)
+       : (K.cara_bayar === "reimburse" && Array.isArray(X.rekSales) && X.rekSales[0] ? teksRekening(X.rekSales[0]) : ""));
+  var tujuanTeks = K.cara_bayar === "tunai" ? "Tunai — tanpa rekening"
+    : (K.cara_bayar === "transfer" ? (pic ? pic.nama + (pic.jabatan ? " · " + pic.jabatan : "") : "PIC") + " · " + (rek || "rekening belum ada")
+       : (K.cara_bayar === "reimburse" ? "Rekening " + (namaRepAlur(K.sales_rep_id) || "sales") + " · "
+            + (rek || (X.rekSales === null ? "tidak terbaca untuk peran Anda" : "belum diisi finance")) : labelEhc(EHC_CARA, K.cara_bayar)));
+  var baris = [
+    ["Sales", esc(namaRepAlur(K.sales_rep_id) || "—")],
+    ["Customer penerima", esc(K.customers ? K.customers.nama : "—")
+      + (K.lintas_customer ? ' <b class="neg">LINTAS</b> <span class="muted">— ada SP customer lain</span>' : '')],
+    ["Untuk apa", esc(labelEhc(EHC_KEPERLUAN, K.keperluan))],
+    ["Cara bayar", esc(labelEhc(EHC_CARA, K.cara_bayar))],
+    ["Tujuan", esc(tujuanTeks) + (t ? ' <span class="muted">(dikunci ' + esc(waktuJkt(t.dikunci_pada)) + ')</span>'
+                                    : (K.cara_bayar !== "tunai" ? ' <span class="muted">(rekening saat ini — dikunci saat disetujui)</span>' : ''))],
+    ["Tanggal transaksi", td(K.tanggal)],
+    ["Nominal", n ? '<b>' + rp(n.nominal) + '</b>' : '<span class="muted">—</span>'],
+    ["Keterangan", esc(K.keterangan || "—")],
+    ["Diajukan", esc(waktuJkt(K.dibuat_pada)) + (K.diubah_pada ? ' · diubah ' + esc(waktuJkt(K.diubah_pada)) : '')]
+  ];
+  if (K.gm_pada) baris.push(["Putusan GM", esc(waktuJkt(K.gm_pada)) + ' · ' + esc(namaOlehEhc(K.gm_oleh))
+    + (K.gm_catatan ? ' — ' + esc(K.gm_catatan) : '')]);
+  h += '<h4 class="sec" style="margin:12px 0 6px">Isi klaim</h4><div class="tw"><table><tbody>'
+    + baris.map(function(b){ return '<tr><td class="l muted">' + b[0] + '</td><td class="l wrap">' + b[1] + '</td></tr>'; }).join("")
+    + '</tbody></table></div>';
+
+  /* tiap SP: dipakai klaim ini, lunas, saldo, tertutup (komisi sudah diklaim → saldo kembali ke kas sales) */
+  var saldo = {};
+  (X.saldo || []).forEach(function(x){ saldo[x.so_id] = x; });
+  h += '<h4 class="sec" style="margin:12px 0 6px">SP yang dipakai</h4><div class="tw"><table><thead><tr>'
+    + '<th class="l">No SP</th><th>Klaim ini</th><th class="l">Pelunasan</th><th>EHC di SP</th>'
+    + '<th>Terpakai</th><th>Sisa</th><th class="l">Catatan</th></tr></thead><tbody>'
+    + (al.length ? al.map(function(a){
+        var so = a.sales_orders || {}, sd = saldo[a.so_id] || null;
+        var lintasSp = so.customer_id !== undefined && so.customer_id !== null && String(so.customer_id) !== String(K.customer_id);
+        var kurang = sd && Number(sd.total_ehc) < Number(sd.terpakai);
+        return '<tr><td class="l">' + esc(so.no_sp || ("#" + a.so_id)) + (lintasSp ? ' <b class="neg">LINTAS</b>' : '') + '</td>'
+          + '<td>' + rp(a.nominal) + '</td>'
+          + '<td class="l">' + (so.batal ? '<b class="neg">SP BATAL</b>'
+              : (so.lunas ? '<span class="pill p-lunas">lunas' + (sd && sd.tgl_lunas ? ' ' + td(sd.tgl_lunas) : '') + '</span>'
+                          : '<span class="pill p-sebagian">belum lunas</span>')) + '</td>'
+          + '<td>' + (sd ? rp(sd.total_ehc) : '—') + '</td><td>' + (sd ? rp(sd.terpakai) : '—') + '</td>'
+          + '<td>' + (sd ? rp(sd.sisa) : '—') + '</td>'
+          + '<td class="l wrap">' + (sd && sd.tertutup ? 'komisi sudah diklaim — bila ditolak, saldo masuk kas sales' : '')
+          + (kurang ? '<b class="neg">saldo SP tidak cukup</b>' : '') + '</td></tr>';
+      }).join("") : '<tr><td colspan="7" class="kosong">Tidak ada SP.</td></tr>')
+    + '</tbody></table></div>';
+  if (X.saldo === null) h += '<p class="muted" style="margin:4px 2px 0">Saldo SP tidak terbaca — keputusan tetap diperiksa database.</p>';
+
+  h += '<h4 class="sec" style="margin:12px 0 6px">Lampiran</h4>'
+    + (bk.length ? '<div class="baris-alat">' + bk.map(function(f){
+        return '<button type="button" class="btn kecil" data-ehunduh="' + esc(f.path) + '" data-ehnama="'
+          + esc(f.nama_berkas) + '">Unduh ' + esc(f.nama_berkas) + '</button>'; }).join(" ") + '</div>'
+      : '<div class="flag merah"><span class="f-ico">!</span><div><b>Tanpa lampiran.</b> Klaim ini hanya bisa ditolak (beralasan).</div></div>');
+
+  /* riwayat: ehc_klaim_log + ehc_cepat_log + ehc_klaim_putusan, urut waktu */
+  var rw = [];
+  (X.log || []).forEach(function(x){ rw.push({ pada:x.pada, k:EHC_RIWAYAT_LABEL["log:" + x.aksi] || x.aksi, oleh:x.oleh, cat:x.catatan }); });
+  (X.cepatLog || []).forEach(function(x){ rw.push({ pada:x.pada, k:EHC_RIWAYAT_LABEL["cepat:" + x.aksi] || x.aksi, oleh:x.oleh, cat:x.alasan }); });
+  (X.putusan || []).forEach(function(x){ rw.push({ pada:x.pada, k:EHC_RIWAYAT_LABEL["putusan:" + x.jalur + ":" + x.aksi] || (x.jalur + " " + x.aksi), oleh:x.oleh, cat:x.catatan }); });
+  rw.sort(function(a, b){ return String(a.pada || "").localeCompare(String(b.pada || "")); });
+  h += '<h4 class="sec" style="margin:12px 0 6px">Riwayat</h4>'
+    + (rw.length ? '<div class="tw"><table><thead><tr><th>Waktu</th><th class="l">Kejadian</th><th class="l">Oleh</th>'
+        + '<th class="l">Catatan</th></tr></thead><tbody>'
+        + rw.map(function(x){ return '<tr><td style="white-space:nowrap">' + esc(waktuJkt(x.pada)) + '</td><td class="l">' + esc(x.k)
+            + '</td><td class="l">' + esc(namaOlehEhc(x.oleh)) + '</td><td class="l wrap">' + esc(x.cat || "") + '</td></tr>'; }).join("")
+        + '</tbody></table></div>'
+      : '<p class="muted" style="margin:0 2px">' + (X.log === null && X.putusan === null ? 'Riwayat tidak terbaca.' : 'Belum ada riwayat.') + '</p>');
+
+  if (!matiSemua) {
+    h += '<div class="flag" style="margin-top:12px"><span class="f-ico">i</span><div>'
+      + (cepat
+          ? '<b>EHC cepat = pengecualian.</b> Menyetujui memutus klaim ini sekarang (rekening tujuannya dikunci) dan '
+            + 'memunculkannya di <b>EHC emergency</b> finance — boleh sebelum SP lunas, juga untuk klaim lintas. '
+            + 'Menolak hanya menolak <b>pencairan cepatnya</b>: klaim tetap diajukan dan diperiksa GM sesudah tanggal 18.'
+          : '<b>Menyetujui tidak mengirim uang.</b> Rekening tujuannya dikunci sekarang, lalu klaim ini masuk daftar bayar '
+            + 'finance mulai tanggal 20 begitu semua SP-nya lunas. Menolak itu final: saldo EHC SP-nya kembali '
+            + '(SP yang komisinya sudah diklaim → kas sales), dan sales perlu tahu alasannya.')
+      + '</div></div>'
+      + field({ nama:"gm_catatan", label:"Catatan GM", jenis:"textarea",
+                bantu: cepat ? "Wajib diisi kalau ditolak — sales-nya harus bisa menjelaskan ke pelanggannya."
+                             : "Wajib diisi kalau ditolak — terbaca oleh sales pemilik klaim." });
+  }
+  if (matiSemua) h += '<div class="flag merah" style="margin-top:12px"><span class="f-ico">!</span><div>' + esc(matiSemua) + '</div></div>';
+  else if (mati.length) h += '<div class="flag merah" style="margin-top:10px" id="gm-ehc-mati"><span class="f-ico">!</span><div>'
+    + '<b>"Setujui" dimatikan:</b><br>' + mati.map(esc).join("<br>") + '</div></div>';
+
+  $("laci-form").innerHTML = h;
+  /* klaim yang sudah disetujui (mis. dibuka dari antrean basi): tidak ada yang diputus,
+     tetapi owner/GM masih boleh membatalkannya selama uangnya belum keluar */
+  $("laci-kaki").innerHTML = matiSemua
+    ? (ehcBatalGm(K) ? '<button class="btn bahaya" id="btn-gm-batal" type="button">Batalkan klaim (GM)</button>' : '') :
+      '<button class="btn bahaya" id="btn-gm-tolak" type="button">' + (cepat ? "Tolak pencairan cepat" : "Tolak") + '</button> '
+    + '<button class="btn utama" id="btn-gm-setuju" type="button"' + (mati.length ? ' disabled title="' + esc(mati.join(" ")) + '"' : '') + '>'
+    + (cepat ? "Setujui EHC cepat" : "Setujui") + '</button>';
+  $("laci-judul").textContent = (cepat ? "EHC cepat" : "Periksa EHC") + " — klaim #" + K.id;
+  if (pesanAwal) tampilPesan(esc(pesanAwal));
+  Array.prototype.forEach.call($("laci-form").querySelectorAll("[data-ehunduh]"), function(b){
+    b.addEventListener("click", function(){ unduhBukti(b.dataset.ehunduh, b.dataset.ehnama); });
+  });
+  if ($("btn-gm-batal")) $("btn-gm-batal").addEventListener("click", function(){ tutupLaci(); batalkanKlaimEhc(K.id, K); });
+  if (matiSemua) return;
+
+  function kirim(setuju){
+    if (setuju && mati.length) { tampilPesan(esc(mati[0])); return; }
+    var cat = String(nilaiForm("gm_catatan") || "").trim();
+    if (!setuju && !cat) {
+      tampilPesan(cepat ? "Menolak pencairan cepat wajib beralasan — sales-nya harus bisa menjelaskan ke pelanggannya."
+                        : "Menolak klaim EHC wajib beralasan — tulis alasannya di Catatan GM.");
+      return;
+    }
+    /* versi = string apa adanya dari fetch yang menggambar laci ini */
+    var rpc = cepat ? "/rpc/putuskan_klaim_cepat_v" : "/rpc/putuskan_klaim_ehc";
+    var badan = { p_klaim: K.id, p_setuju: setuju, p_catatan: cat || null, p_versi: versiKlaimEhc(K) };
+    if (cepat) badan.p_diminta = K.cepat_diminta_pada || null;
+    sibuk(true, setuju ? "Menyetujui…" : "Menolak…");
+    api("POST", rpc, badan)
+      .then(function(r){
+        sibuk(false);
+        tutupLaci();
+        toast(String(Array.isArray(r) ? r[0] : r || (setuju ? "Disetujui." : "Ditolak.")));
+        segarkanSesudahPutusEhc();
+      })
+      .catch(function(e){
+        sibuk(false);
+        if (e.kode === "40001") {
+          formGmPutusEhc(jenis, K.id, "Klaim ini berubah sejak laci dibuka — data terbaru sudah dimuat ulang. "
+            + "Periksa lagi sebelum memutus. (" + e.message + ")");
+          return;
+        }
+        tampilPesan(esc(e.message));
+      });
+  }
+  $("btn-gm-setuju").addEventListener("click", function(){ kirim(true); });
+  $("btn-gm-tolak").addEventListener("click", function(){ kirim(false); });
+}
+/* Sesudah GM memutus: antrean GM, halaman EHC, dan kas (ditolak → saldo bisa jadi kas) ditarik ulang. */
+function segarkanSesudahPutusEhc(){
+  LANJUT.gm.dimuat = false; LANJUT.kas.dimuat = false;
+  if (tabAktif === "gm") muatGm().then(panelGmAntre).catch(function(){});
+  if (tabAktif === "ehc") segarkanEhc();
+  else { LANJUT.ehc.dimuat = false; }
 }
 
 /* ── meminta EHC cepat untuk klaim yang SUDAH ada ────────────────────── */
@@ -11904,7 +12465,8 @@ function formKlaimCepat(klaimId){
   var h = '<div class="flag merah"><span class="f-ico">!</span><div>'
     + '<b>EHC cepat = keadaan darurat.</b> EHC biasanya diperiksa GM sesudah cutoff tanggal 18 dan '
     + 'dibayar tanggal 20. Yang Anda minta di sini adalah pengecualian: klaim ini saja, lebih cepat, '
-    + 'boleh walaupun SP-nya belum lunas. <b>GM yang memutuskan</b>, satu per satu.'
+    + 'boleh walaupun SP-nya belum lunas. <b>GM yang memutuskan</b>, satu per satu. Kalau ditolak, '
+    + 'klaimnya tetap diajukan dan ikut pemeriksaan GM biasa sesudah tanggal 18.'
     + '</div></div>'
     + field({ nama:"kc_alasan", label:"Apa yang mendesak?", jenis:"textarea", wajib:true,
               bantu:"Minimal satu kalimat: apa yang mendesak dan kapan uangnya dibutuhkan. "
@@ -11943,10 +12505,14 @@ function tarikKlaimCepat(klaimId){
     .then(function(){ sibuk(false); });
 }
 
-/* #61: pembatalan sebelum cutoff. Klaimnya tidak dihapus — statusnya jadi
+/* #61: pembatalan sebelum cutoff (sales), dan oleh owner/GM kapan saja selama
+   uangnya belum keluar (berkas 142). Klaimnya tidak dihapus — statusnya jadi
    "batal" beserta alasannya, dan saldo SP-nya kembali. */
-function batalkanKlaimEhc(klaimId){
-  var alasan = prompt("Batalkan klaim EHC ini?\n\nSaldo EHC SP-nya kembali dan bisa dipakai lagi. "
+function batalkanKlaimEhc(klaimId, k){
+  var alasan = prompt("Batalkan klaim EHC ini? (EHC #" + klaimId + ")\n\nSaldo EHC SP-nya kembali dan bisa dipakai lagi. "
+    + (k && k.status === "disetujui"
+        ? "Klaim ini sudah disetujui GM: rekening tujuan yang dikunci ikut lepas; sales mengajukan klaim baru bila perlu. "
+        : "")
     + "Tulis alasan pembatalannya:");
   if (alasan === null) return;
   alasan = String(alasan).trim();
@@ -11954,7 +12520,7 @@ function batalkanKlaimEhc(klaimId){
   sibuk(true, "Membatalkan…");
   api("POST", "/rpc/batalkan_klaim_ehc", { p_klaim: klaimId, p_alasan: alasan })
     .then(function(r){ toast(String(Array.isArray(r) ? r[0] : r) || "Klaim dibatalkan.");
-                       LANJUT.kas.dimuat = false; segarkanEhc(); })
+                       segarkanSesudahPutusEhc(); })   /* + antrean GM (ehc_periksa) & kas */
     .catch(function(e){ toast(e.message, true); })
     .then(function(){ sibuk(false); });
 }
@@ -12040,8 +12606,8 @@ function formEhc(klaim, soAwal){
       + (ubah ? 'Mengubah klaim periode <b>' + esc(namaBulan(per)) + '</b>.'
               : 'Klaim ini masuk <b>periode ' + esc(namaBulan(per)) + '</b>.')
       + ' Masih bisa diubah atau dibatalkan sampai <b>' + td(cutoffEhc(per)) + '</b>; sesudah itu GM '
-      + 'memeriksa dan finance memproses tanggal ' + td(bayarEhc(per)) + '. Transfer ke customer dan '
-      + 'reimburse baru dibayar sesudah semua SP-nya lunas.</div></div>'
+      + 'memeriksa per klaim (setujui atau tolak beralasan) dan finance membayar mulai tanggal '
+      + td(bayarEhc(per)) + ' begitu semua SP-nya lunas. Rekening tujuannya dikunci saat GM menyetujui.</div></div>'
       + field({ nama:"eh_kep", label:"Dipakai untuk apa?", jenis:"select", wajib:true,
                 nilai: ubah ? klaim.keperluan : "",
                 pilihan: [{v:"",l:"— pilih —"}].concat(EHC_KEPERLUAN.map(function(p){ return {v:p[0], l:p[1]}; })) })
@@ -12417,17 +12983,10 @@ function simpanKlaimEhc(cepat){
   if (perluSimpanPic && F.picTersimpan && F.picTersimpan.kunci === kunciPic) {
     perluSimpanPic = false; picPil = String(F.picTersimpan.id);
   }
-  /* EHC cepat ditolak database untuk klaim lintas customer (menunggu GM
-     per klaim) dan untuk reimburse tanpa rekening sales — katakan di sini,
-     jangan sampai seluruh klaim batal tersimpan. */
+  /* EHC cepat ditolak database untuk reimburse tanpa rekening sales —
+     katakan di sini, jangan sampai seluruh klaim batal tersimpan. Klaim
+     lintas customer kini boleh diminta cepat (berkas 142: GM memutus per klaim). */
   if (cepat) {
-    var lintasCepat = daftar.some(function(a){
-      var x = spEhcById(a.so_id); return x && String(x.so.customer_id || "") !== String(cust); });
-    if (lintasCepat) {
-      tampilPesan("Klaim ini memakai SP dari customer lain, jadi harus diperiksa GM per periode — belum bisa "
-        + "diajukan sebagai EHC cepat. Ajukan sebagai klaim biasa.");
-      return;
-    }
     if (cara === "reimburse") {
       var repR = (spEhcById(daftar[0].so_id) || { so:{} }).so.sales_rep_id;
       if (!E.rek[repR]) {
@@ -13050,16 +13609,15 @@ function panelKas(){
    ═══════════════════════════════════════════════════════════════════════ */
 
 function bulanIniJkt(){ return hariIniJkt().slice(0, 7); }
-/* Berkas 140: pembayaran EHC per PERIODE (cutoff tgl 18), bukan bulan
-   kalender. Yang bisa diajukan adalah periode terakhir yang sudah ditutup:
-   tgl 19 ke atas → periode bulan ini; tgl 1–18 → periode bulan lalu.
+/* Berkas 141: pembayaran EHC per PERIODE BAYAR, bukan bulan kalender.
+   Finance mengunci daftar bayar periode X sekali, mulai tgl 20 (WIB) bulan X:
+   tgl 20 ke atas → periode bulan ini; tgl 1–19 → periode bulan lalu.
    Database ikut mengambil klaim periode sebelumnya yang tertunda (SP-nya
    baru lunas belakangan). Komisi masih bulan kalender (tahap 4). */
 function bulanTransfer(jenis){
   if (jenis !== "ehc") return bulanIniJkt();
-  var h = hariIniJkt(), th = Number(h.slice(0, 4)), bl = Number(h.slice(5, 7));
-  if (Number(h.slice(8, 10)) <= 18) { bl -= 1; if (bl < 1) { bl = 12; th -= 1; } }
-  return th + "-" + dd(bl);
+  /* berkas 141: periode yang daftar bayarnya bisa dikunci hari ini (mulai tgl 20 WIB) */
+  return periodeBayarEhc(hariIniJkt());
 }
 
 /* Rekap dijalankan atas permintaan, bukan saat layar dibuka.
@@ -13111,6 +13669,8 @@ function tarikRekap(jenis){
            Kegagalannya sengaja tidak menggagalkan rekap: rekap tetap
            berguna walau daftar batch-nya belum bisa dibaca. */
         return muatBatch().then(muatPengajuan).then(function(){
+          return jenis === "ehc" ? muatDaftarBayarEhc() : null;   /* berkas 142 */
+        }).then(function(){
           L.sibuk = null;
           gambarLaporan();
         });
@@ -13283,7 +13843,8 @@ function isiReferensi(id){
   if (ref === null) return;
   if (!String(ref).trim()) { toast("Nomor referensi tidak boleh kosong.", true); return; }
   api("POST", "/rpc/isi_referensi_batch", { p_batch: id, p_ref: String(ref).trim() })
-    .then(function(){ return muatBatch(); })
+    .then(function(){ LANJUT.ehc.dimuat = false; return muatBatch(); })   /* referensi → klaim 'ditransfer' di tab EHC */
+    .then(function(){ return muatUlangBayarEhc(); })   /* berkas 141: referensi → klaim ditransfer */
     .then(function(){ toast("Referensi batch #" + id + " tersimpan."); gambarLaporan(); })
     .catch(function(e){ toast(e.message, true); });
 }
@@ -13304,7 +13865,9 @@ function tarikEhcCepat(jagaPesan){
   if (!jagaPesan) { L.pesanCepat = ""; L.cepatGagal = false; }
   gambarLaporan();
   return api("GET", "/ehc_cepat_siap?select=*&order=klaim_id")
-    .then(function(r){ L.cepat = r || []; })
+    /* daftar batch ikut ditarik: batch cepat yang belum berreferensi (isi referensi,
+       Rincian → Keluarkan) tampil tanpa menarik rekap bulanan lebih dulu */
+    .then(function(r){ L.cepat = r || []; return muatBatch(); })
     .catch(function(e){
       /* TIDAK ditelan jadi daftar kosong: "belum ada yang disetujui GM"
          dan "daftarnya gagal dibaca" adalah dua keadaan yang berbeda,
@@ -13315,27 +13878,37 @@ function tarikEhcCepat(jagaPesan){
     .then(function(){ L.sibuk = null; gambarLaporan(); });
 }
 
+/* Klaim cepat yang ikut rekap_ehc_cepat(): tidak terkunci pengajuan lama, rekening
+   tujuannya sudah dikunci saat GM setuju, dan tidak ada SP-nya yang batal (berkas 142). */
+function cepatBisaDibayar(x){ return !x.pengajuan_bulanan && x.rekening_ada !== false && !x.ada_sp_batal; }
 function tandaiEhcCepat(){
   var L = LANJUT.laporan, d = L.cepat || [];
-  var bisa = d.filter(function(x){ return !x.pengajuan_bulanan; });
+  if (!bolehRekapTransfer()) return;
+  var bisa = d.filter(cepatBisaDibayar);
   if (!bisa.length) {
     tampilPesan("Tidak ada klaim cepat yang bisa ditandai sekarang. Tekan \"EHC emergency\" "
       + "dulu untuk menarik daftarnya.");
     return;
   }
   var total = bisa.reduce(function(a, x){ return a + (Number(x.nominal) || 0); }, 0);
-  if (!confirm("Tandai " + bisa.length + " klaim EHC cepat sebagai SUDAH DITRANSFER?\n\n"
+  if (!confirm("Kunci " + bisa.length + " klaim EHC cepat ke batch transfer?\n\n"
     + "Total " + rp(total) + ". Semuanya sudah disetujui GM satu per satu.\n\n"
-    + "Setelah ini nominalnya tidak bisa diubah lagi, dan batch-nya jadi catatan permanen. "
-    + "Jangan tekan kalau uangnya belum benar-benar dikirim.")) return;
+    + "Sesudah dikunci: transfer di bank sesuai batch, yang gagal \"Keluarkan\" (beralasan), lalu isi "
+    + "nomor referensi — baru sesudah referensi diisi klaimnya tercatat ditransfer.")) return;
   L.sibuk = "cepat"; L.pesanCepat = ""; L.cepatGagal = false; gambarLaporan();
+  var baru = null;
   api("POST", "/rpc/rekap_ehc_cepat", {})
     .then(function(h){
       var o = Array.isArray(h) ? h[0] : h;
       L.pesanCepat = (o && o.pesan) || "Batch pencairan cepat dibuat.";
       L.cepatGagal = false;
+      baru = o && o.batch ? Number(o.batch) : null;
+      LANJUT.ehc.dimuat = false;   /* klaim cepat masuk batch → tab EHC ditarik ulang saat dibuka */
       return muatBatch();
     })
+    /* rincian batch baru langsung terbuka (Keluarkan / referensi); grup "EHC cepat" di daftar bayar ikut segar */
+    .then(function(){ return baru ? muatRincianBatch(baru) : null; })
+    .then(function(){ return L.bayarEhc !== null ? muatDaftarBayarEhc() : null; })
     .catch(function(e){ L.pesanCepat = e.message; L.cepatGagal = true; })
     .then(function(){ L.sibuk = null; return tarikEhcCepat(true); });
 }
@@ -13352,9 +13925,10 @@ function blokEhcCepat(){
   }
   if (d === null) return "";
 
-  var bisa  = d.filter(function(x){ return !x.pengajuan_bulanan; });
-  var kunci = d.filter(function(x){ return !!x.pengajuan_bulanan; });
+  var bisa  = d.filter(cepatBisaDibayar);
+  var kunci = d.filter(function(x){ return !cepatBisaDibayar(x); });
   var total = bisa.reduce(function(a, x){ return a + (Number(x.nominal) || 0); }, 0);
+  var uang = bolehRekapTransfer();
 
   if (!d.length) {
     h += kosong("Belum ada klaim EHC yang disetujui GM untuk dicairkan cepat. "
@@ -13363,14 +13937,21 @@ function blokEhcCepat(){
     return h;
   }
 
-  h += '<div class="tw"><table><thead><tr><th class="l">SP</th><th class="l">Pelanggan</th>'
-    + '<th class="l">Sales</th><th class="l">PIC</th><th class="r">Nominal</th>'
+  /* Berkas 143: + customer penerima, LINTAS, keperluan, rekening terkunci, SP batal.
+     Nomor rekening hanya owner/GM/finance; Lenni melihat "terkunci / belum". */
+  h += '<div class="tw" id="daftar-ehc-cepat"><table><thead><tr><th class="l">SP</th><th class="l">Customer</th>'
+    + '<th class="l">Sales</th><th class="l">Untuk apa · cara</th><th class="l">Tujuan</th><th class="r">Nominal</th>'
     + '<th class="l">Alasan mendesak</th><th class="l">Keadaan</th></tr></thead><tbody>';
   d.forEach(function(x){
+    var rekTeks = uang ? teksRekening(x) : "";
     h += '<tr><td class="l">' + esc(x.no_sp || "—") + '</td>'
-      + '<td class="l">' + esc(x.kepada || "—") + '</td>'
+      + '<td class="l">' + esc(x.customer || x.kepada || "—") + (x.lintas_customer ? ' <b class="neg">LINTAS</b>' : '') + '</td>'
       + '<td class="l">' + esc(x.sales || "—") + '</td>'
-      + '<td class="l">' + esc(x.pic || "—") + '</td>'
+      + '<td class="l">' + esc(labelEhc(EHC_KEPERLUAN, x.keperluan)) + '<br><span class="muted">'
+      +   esc(labelEhc(EHC_CARA, x.cara_bayar)) + '</span></td>'
+      + '<td class="l">' + esc(x.pic || (x.cara_bayar === "reimburse" ? "rekening sales" : "—"))
+      +   (x.rekening_ada === false ? '<br><b class="neg">rekening belum terkunci</b>'
+           : (rekTeks ? '<br><b>' + esc(rekTeks) + '</b>' : (x.rekening_ada ? '<br><span class="muted">rekening terkunci</span>' : ''))) + '</td>'
       + '<td class="r">' + (x.nominal === null || x.nominal === undefined
           ? '<span class="muted">—</span>' : rp(x.nominal)) + '</td>'
       + '<td class="l">' + esc(x.cepat_alasan || "—")
@@ -13379,24 +13960,27 @@ function blokEhcCepat(){
       + '<td class="l">' + (x.pengajuan_bulanan
           ? '<span class="pill p-belum">tertahan</span><br><span class="muted">masih terkunci '
             + 'di pengajuan bulanan #' + esc(x.pengajuan_bulanan) + '</span>'
-          : '<span class="pill p-lunas">siap dicairkan</span>') + '</td></tr>';
+          : (x.ada_sp_batal ? '<span class="pill p-belum">tertahan</span><br><b class="neg">ada SP batal</b>'
+          : (x.rekening_ada === false ? '<span class="pill p-belum">tertahan</span>'
+          : '<span class="pill p-lunas">siap dicairkan</span>'))) + '</td></tr>';
   });
   h += '</tbody></table></div>';
 
-  h += '<div class="baris-alat" style="margin-top:10px">'
-    + '<button class="btn bahaya" id="lp-cepat-tandai" type="button"'
-    +   ((L.sibuk || !bisa.length) ? " disabled" : "") + '>Tandai '
-    +   bisa.length + ' klaim cepat sudah ditransfer</button>'
-    + '<span class="muted">Total ' + rp(total) + '</span></div>';
+  if (uang) {
+    h += '<div class="baris-alat" style="margin-top:10px">'
+      + '<button class="btn bahaya" id="lp-cepat-tandai" type="button"'
+      +   ((L.sibuk || !bisa.length) ? " disabled" : "") + '>Kunci '
+      +   bisa.length + ' klaim cepat untuk ditransfer</button>'
+      + '<span class="muted">Total ' + rp(total) + '</span></div>';
+  }
 
   if (!bisa.length) {
-    h += '<p class="muted" style="margin:6px 2px 0">Tombol merah mati: semua klaim di atas '
-      + 'masih terkunci di pengajuan transfer bulanan. Tarik dulu pengajuan bulanannya di '
-      + 'bagian <b>Batch transfer</b>, lalu tekan <b>EHC emergency</b> lagi.</p>';
+    h += '<p class="muted" style="margin:6px 2px 0">' + (uang ? 'Tombol merah mati: ' : '')
+      + 'semua klaim di atas tertahan — masih terkunci di pengajuan transfer bulanan lama, rekening '
+      + 'tujuannya belum terkunci, atau ada SP-nya yang batal (GM membatalkan klaimnya).</p>';
   } else if (kunci.length) {
     h += '<p class="muted" style="margin:6px 2px 0">' + kunci.length + ' klaim lain dilewati '
-      + 'karena masih terkunci di pengajuan transfer bulanan — kalau tidak, GM menyetujui '
-      + 'satu daftar dan yang terbayar isinya lain.</p>';
+      + 'karena tertahan (pengajuan bulanan lama, rekening belum terkunci, atau SP batal).</p>';
   }
 
   if (L.pesanCepat) {
@@ -13406,10 +13990,231 @@ function blokEhcCepat(){
   }
   h += '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div>'
     + '<b>Persetujuannya per klaim, bukan per bulan.</b> Yang ada di sini sudah disetujui GM '
-    + 'satu per satu — karena itu jalur ini tidak lagi meminta persetujuan bulanan di '
-    + 'atasnya. Sesudah ditandai, klaimnya masuk batch bertanda <b>cepat</b> dan otomatis '
-    + 'tidak ikut rekap bulanan berikutnya: syaratnya memang tidak lagi terpenuhi, bukan '
-    + 'karena ada yang ingat mengeluarkannya.</div></div>';
+    + 'satu per satu — boleh sebelum SP lunas. Sesudah dikunci, klaimnya masuk batch bertanda '
+    + '<b>cepat</b> dan tidak ikut daftar bayar tgl 20. Transfer di bank, yang gagal keluarkan dari batch '
+    + '(lewat <b>Rincian</b> di tabel batch), lalu isi referensinya.</div></div>';
+  return h;
+}
+
+/* ── berkas 141–143 · daftar bayar EHC tgl 20 ─────────────────────────
+   EHC tidak lagi lewat pengajuan transfer. GM memutus per klaim sesudah tgl 18;
+   finance (owner/GM juga boleh) mengunci daftar bayar periode X SEKALI, mulai
+   tgl 20 WIB → transfer di bank sesuai batch → yang gagal "Keluarkan" (beralasan)
+   → isi referensi bank = uang dianggap keluar (ditransfer_pada). Lenni melihat
+   daftar yang sama tanpa tombol uang dan tanpa nomor rekening (database yang
+   mengosongkan rekeningnya). */
+var EHC_KEADAAN = {
+  siap:           { l:"Siap dibayar", k:"p-lunas" },
+  menunggu_lunas: { l:"Menunggu SP lunas", k:"p-sebagian" },
+  tanpa_rekening: { l:"Tanpa rekening terkunci", k:"p-belum" },
+  menunggu_gm:    { l:"Menunggu GM", k:"p-belum" },
+  cepat:          { l:"EHC cepat (emergency)", k:"p-jalan" }
+};
+function muatDaftarBayarEhc(){
+  var L = LANJUT.laporan;
+  return api("POST", "/rpc/ehc_daftar_bayar", { p_bulan: bulanTransfer("ehc"), p_batch: null })
+    .then(function(r){ L.bayarEhc = r || []; L.bayarEhcGalat = ""; })
+    .catch(function(e){ L.bayarEhc = []; L.bayarEhcGalat = (e && e.message) || "sebabnya tidak disebutkan server"; });
+}
+function muatRincianBatch(id){
+  var L = LANJUT.laporan;
+  L.rincian = { batch: id, baris: null, galat: "" };
+  return api("POST", "/rpc/ehc_daftar_bayar", { p_bulan: null, p_batch: id })
+    .then(function(r){ if (L.rincian && L.rincian.batch === id) L.rincian.baris = r || []; })
+    .catch(function(e){ if (L.rincian && L.rincian.batch === id) { L.rincian.baris = []; L.rincian.galat = e.message; } });
+}
+/* Sesudah batch berubah (kunci, keluarkan, referensi): daftar & rincian ditarik ulang. */
+function muatUlangBayarEhc(){
+  var L = LANJUT.laporan, tugas = [];
+  if (L.bayarEhc !== null) tugas.push(muatDaftarBayarEhc());
+  if (L.rincian) tugas.push(muatRincianBatch(L.rincian.batch));
+  return Promise.all(tugas);
+}
+function batchEhcPeriode(per){
+  return (LANJUT.laporan.batch || []).filter(function(b){
+    return b.jenis === "ehc" && b.periode_bayar === per && !b.cepat && Number(b.jumlah_klaim) > 0; })[0] || null;
+}
+function kunciDaftarBayarEhc(){
+  var L = LANJUT.laporan, P = bulanTransfer("ehc");
+  var siap = (L.bayarEhc || []).filter(function(x){ return x.keadaan === "siap"; });
+  var tot = siap.reduce(function(a, x){ return a + (Number(x.nominal) || 0); }, 0);
+  if (!confirm("Kunci daftar bayar EHC periode " + namaBulan(P) + "?\n\n"
+    + siap.length + " klaim siap dibayar, total " + rp(tot) + " (dihitung ulang database saat dikunci).\n"
+    + "Sekali per periode. Sesudah dikunci: transfer di bank sesuai daftar, yang gagal \"Keluarkan\" "
+    + "(beralasan), lalu isi nomor referensi bank.")) return;
+  L.sibuk = "ehc"; L.pesanBayarEhc = ""; L.bayarEhcGagal = false; gambarLaporan();
+  var baru = null;
+  api("POST", "/rpc/rekap_ehc_bulanan", { p_bulan: P })
+    .then(function(h){
+      var o = Array.isArray(h) ? h[0] : h;
+      L.pesanBayarEhc = (o && o.pesan) || "Daftar bayar dikunci.";
+      baru = o && o.batch ? Number(o.batch) : null;
+      LANJUT.ehc.dimuat = false;   /* klaim masuk daftar bayar → tab EHC ditarik ulang saat dibuka */
+      return muatBatch();
+    })
+    .then(function(){ return baru ? muatRincianBatch(baru) : null; })
+    .then(function(){ return muatDaftarBayarEhc(); })
+    .catch(function(e){ L.pesanBayarEhc = e.message; L.bayarEhcGagal = true; })
+    .then(function(){ L.sibuk = null; gambarLaporan(); });
+}
+function keluarkanDariBatchEhc(klaimId, batchId){
+  var alasan = prompt("Keluarkan klaim EHC #" + klaimId + " dari batch #" + batchId + " (transfer gagal)?\n\n"
+    + "Klaim tetap disetujui: bulanan ikut daftar tgl 20 berikutnya, EHC cepat kembali ke EHC emergency. "
+    + "Tulis alasannya (mis. rekening tidak aktif):");
+  if (alasan === null) return;
+  alasan = String(alasan).trim();
+  if (!alasan) { toast("Alasan wajib diisi.", true); return; }
+  var L = LANJUT.laporan;
+  L.sibuk = "ehc"; L.pesanBayarEhc = ""; L.bayarEhcGagal = false; gambarLaporan();
+  api("POST", "/rpc/keluarkan_klaim_ehc_batch", { p_klaim: klaimId, p_alasan: alasan })
+    .then(function(r){
+      L.pesanBayarEhc = String(Array.isArray(r) ? r[0] : r || "Klaim dikeluarkan dari batch."); L.bayarEhcGagal = false;
+      LANJUT.ehc.dimuat = false;
+      return muatBatch().then(muatUlangBayarEhc)
+        .then(function(){ return L.cepat !== null ? tarikEhcCepat(true) : null; });   /* EHC cepat kembali ke EHC emergency */
+    })
+    .catch(function(e){ L.pesanBayarEhc = e.message; L.bayarEhcGagal = true; })
+    .then(function(){ L.sibuk = null; gambarLaporan(); });
+}
+/* Baris daftar bayar (dipakai daftar periode & rincian batch). Rekening hanya
+   untuk owner/GM/finance — untuk Lenni database mengirim kosong. */
+function sumberTujuanTeks(x){
+  return { pic:"PIC customer", sales:"rekening sales", tunai:"tunai" }[x.sumber_tujuan] || "belum terkunci";
+}
+function barisBayarEhc(x, opsi){
+  var uang = bolehRekapTransfer();
+  var sp = Array.isArray(x.sp) ? x.sp : [];
+  var umur = x.gm_pada ? selisihHari(tglJkt(x.gm_pada).split("/").reverse().join("-"), hariIniJkt()) : null;
+  return '<tr><td>EHC #' + esc(x.klaim_id) + '</td>'
+    + '<td>' + esc(namaBulan(x.periode)) + '</td>'
+    + '<td class="l">' + esc(x.sales || "—") + '</td>'
+    + '<td class="l">' + esc(x.customer || "—") + (x.lintas ? ' <b class="neg">LINTAS</b>' : '') + '</td>'
+    + '<td class="l">' + esc(labelEhc(EHC_KEPERLUAN, x.keperluan)) + '<br><span class="muted">'
+    +   esc(labelEhc(EHC_CARA, x.cara_bayar)) + '</span></td>'
+    + '<td class="l">' + esc(sumberTujuanTeks(x))
+    +   (uang && teksRekening(x) ? '<br><b>' + esc(teksRekening(x)) + '</b>' : '') + '</td>'
+    + '<td>' + rp(x.nominal) + '</td>'
+    + '<td class="l">' + (sp.length ? sp.map(function(a){
+        return esc(a.no_sp || ("#" + a.so_id)) + (a.batal ? ' <b class="neg">BATAL</b>'
+          : (a.lunas ? '' : ' <span class="muted">(belum lunas)</span>')); }).join("<br>") : '—') + '</td>'
+    + '<td class="l">' + (x.gm_pada ? esc(x.gm_nama || "GM") + '<br><span class="muted">' + tdJkt(x.gm_pada)
+        + (opsi && opsi.umur && umur !== null ? ' · ' + umur + ' hari' : '') + '</span>' : '<span class="muted">—</span>') + '</td>'
+    + (opsi && opsi.aksi ? '<td>' + opsi.aksi(x) + '</td>' : '')
+    + '</tr>';
+}
+function tabelBayarEhc(d, opsi){
+  var kepala = '<th>Klaim</th><th>Periode</th><th class="l">Sales</th><th class="l">Customer</th>'
+    + '<th class="l">Untuk apa · cara</th><th class="l">Tujuan</th><th>Nominal</th><th class="l">SP</th>'
+    + '<th class="l">Disetujui GM</th>' + (opsi && opsi.aksi ? '<th></th>' : '');
+  return '<div class="tw"' + (opsi && opsi.id ? ' id="' + opsi.id + '"' : '') + '><table><thead><tr>' + kepala
+    + '</tr></thead><tbody>' + d.map(function(x){ return barisBayarEhc(x, opsi); }).join("") + '</tbody></table></div>';
+}
+function blokBayarEhc(){
+  var L = LANJUT.laporan, P = bulanTransfer("ehc"), uang = bolehRekapTransfer();
+  var h = '<h4 style="margin:14px 2px 6px">EHC — periode ' + esc(namaBulan(P)) + ' (cutoff tgl 18, bayar mulai tgl 20)</h4>'
+    + '<p class="muted" style="margin:0 2px 6px">EHC <b>tidak lagi lewat pengajuan transfer</b>: GM memeriksa per klaim '
+    + 'sesudah tgl 18, finance mengunci daftar bayar periode ini <b>sekali</b>, mulai ' + td(P + "-20") + ' (WIB). Yang ikut: '
+    + 'klaim yang <b>disetujui GM</b>, <b>semua SP-nya lunas</b>, dan rekening tujuannya sudah dikunci — termasuk periode '
+    + 'lama yang tertunda. Klaim EHC cepat dibayar lewat tombol "EHC emergency".</p>';
+  if (L.bayarEhcGalat) {
+    return h + '<div class="flag bad"><span class="f-ico">!</span><div><b>Daftar bayar EHC gagal dibaca.</b> '
+      + '<code>' + esc(L.bayarEhcGalat) + '</code>' + petunjukBerkas(L.bayarEhcGalat) + '</div></div>';
+  }
+  var d = L.bayarEhc;
+  if (d === null) return h + kotakMuat("Memuat daftar bayar EHC…");
+  var g = { siap:[], menunggu_lunas:[], tanpa_rekening:[], menunggu_gm:[], cepat:[] };
+  d.forEach(function(x){ if (g[x.keadaan]) g[x.keadaan].push(x); });
+  function jml(a){ return a.reduce(function(t, x){ return t + (Number(x.nominal) || 0); }, 0); }
+  var batch = batchEhcPeriode(P);
+  /* #16: tiap tile menggulir ke tabel kelompoknya; "Menunggu GM" membawa owner/GM ke halaman periksa */
+  h += '<div class="tiles" id="bayar-ehc">'
+    + tile("Siap dibayar", g.siap.length, rp(jml(g.siap)), g.siap.length && !batch ? "alert" : "", "laporan:bayar-siap")
+    + tile("Menunggu SP lunas", g.menunggu_lunas.length, rp(jml(g.menunggu_lunas)), "", "laporan:bayar-lunas")
+    + tile("Tanpa rekening", g.tanpa_rekening.length, "rekening belum terkunci", g.tanpa_rekening.length ? "alert" : "", "laporan:bayar-rek")
+    + tile("Menunggu GM", g.menunggu_gm.length, "belum diputus — tidak ikut", g.menunggu_gm.length ? "alert" : "",
+        bolehApprove() ? ["ehc:periksa", "laporan:bayar-gm"] : "laporan:bayar-gm")
+    + tile("EHC cepat", g.cepat.length, "lewat EHC emergency", "", "laporan:bayar-cepat")
+    + '</div>';
+  h += '<div class="baris-alat" style="margin-top:10px">';
+  if (batch) {
+    h += '<button class="btn" disabled style="white-space:normal;text-align:left;max-width:100%">✓ Sudah dikunci — batch #' + esc(batch.id) + ' (' + esc(batch.jumlah_klaim)
+      + ' klaim, ' + rp(batch.total) + ')</button>'
+      + ' <button class="btn kecil" type="button" data-rincian="' + batch.id + '">Rincian batch #' + batch.id + '</button>';
+  } else if (uang) {
+    /* label panjang boleh turun baris — di HP 390px tidak boleh mendorong halaman ke samping */
+    h += '<button class="btn bahaya" id="lp-kunci-ehc" type="button" style="white-space:normal;text-align:left;max-width:100%"'
+      + (L.sibuk ? ' disabled' : '') + '>'
+      + 'Kunci daftar bayar EHC periode ' + esc(namaBulan(P)) + '</button>';
+  } else {
+    h += '<span class="muted">Mengunci daftar bayar, mengeluarkan klaim, dan mengisi referensi: owner, GM, finance.</span>';
+  }
+  h += '</div>';
+  if (L.pesanBayarEhc) {
+    h += '<div class="flag' + (L.bayarEhcGagal ? ' merah' : '') + '" style="margin-top:10px">'
+      + '<span class="f-ico">' + (L.bayarEhcGagal ? '!' : 'i') + '</span><div>' + esc(L.pesanBayarEhc) + '</div></div>';
+  }
+  if (g.menunggu_gm.length) {
+    h += '<div class="flag merah" style="margin-top:10px"><span class="f-ico">!</span><div><b>' + g.menunggu_gm.length
+      + ' klaim lewat cutoff belum diputus GM</b> (' + rp(jml(g.menunggu_gm)) + '). Tidak ikut daftar ini; sesudah '
+      + 'diputus ikut tgl 20 berikutnya. GM memeriksanya di halaman EHC "Perlu diperiksa GM".</div></div>';
+  }
+  if (g.siap.length) {
+    /* total per sales: yang dikerjakan finance adalah siapa dibayar berapa */
+    var perSales = {}, urut = [];
+    g.siap.forEach(function(x){
+      var k = x.sales || "—";
+      if (!perSales[k]) { perSales[k] = { n:0, t:0 }; urut.push(k); }
+      perSales[k].n++; perSales[k].t += Number(x.nominal) || 0;
+    });
+    h += '<h4 class="sec" style="margin:12px 0 6px">Siap dibayar' + (batch ? ' (tidak ikut batch yang sudah dikunci — menunggu periode berikutnya)' : '') + '</h4>'
+      + tabelBayarEhc(g.siap, { id: "daftar-bayar-ehc" })
+      + '<div class="tw"><table><thead><tr><th class="l">Sales</th><th>Klaim</th><th>Total</th></tr></thead><tbody>'
+      + urut.sort().map(function(k){ return '<tr><td class="l">' + esc(k) + '</td><td>' + perSales[k].n + '</td><td>'
+          + rp(perSales[k].t) + '</td></tr>'; }).join("") + '</tbody></table></div>';
+  }
+  /* Klaim yang bisa menggantung (SP tidak akan lunas, rekening tidak bisa dikunci ulang):
+     jalan keluarnya pembatalan oleh owner/GM (ATURAN B, batalkan_klaim_ehc berkas 142). */
+  if (g.menunggu_lunas.length)
+    h += '<h4 class="sec" style="margin:12px 0 6px">Menunggu SP lunas</h4>' + tabelBayarEhc(g.menunggu_lunas, { umur: true, id: "bayar-lunas" })
+      + '<p class="muted" style="margin:4px 2px 0">SP-nya batal atau tidak akan lunas? GM/owner membatalkan klaimnya '
+      + '(beralasan) di tab EHC, halaman "Disetujui · belum dibayar" — saldo EHC SP-nya kembali.</p>';
+  if (g.tanpa_rekening.length)
+    h += '<h4 class="sec" style="margin:12px 0 6px">Tanpa rekening terkunci</h4>' + tabelBayarEhc(g.tanpa_rekening, { id: "bayar-rek" })
+      + '<p class="muted" style="margin:4px 2px 0">Rekening tujuan tidak bisa dikunci ulang: GM/owner membatalkan klaimnya '
+      + '(beralasan) di tab EHC, halaman "Disetujui · belum dibayar", lalu sales mengajukan ulang.</p>';
+  if (g.menunggu_gm.length)
+    h += '<h4 class="sec" style="margin:12px 0 6px">Menunggu GM</h4>' + tabelBayarEhc(g.menunggu_gm, { id: "bayar-gm" });
+  if (g.cepat.length)
+    h += '<h4 class="sec" style="margin:12px 0 6px">EHC cepat — dibayar lewat EHC emergency</h4>' + tabelBayarEhc(g.cepat, { id: "bayar-cepat" });
+  if (!d.length) h += kosong("Tidak ada klaim EHC yang menunggu dibayar untuk periode " + namaBulan(P) + ".");
+  return h;
+}
+/* Isi satu batch EHC (bulanan atau cepat). "Keluarkan" hanya sebelum referensi bank diisi. */
+function blokRincianBatch(){
+  var L = LANJUT.laporan, R = L.rincian;
+  if (!R) return "";
+  var b = (L.batch || []).filter(function(x){ return x.id === R.batch; })[0] || {};
+  var bisaKeluar = bolehRekapTransfer() && !b.no_referensi;
+  var h = '<h4 class="sec" style="margin:14px 0 6px" id="rincian-batch">Rincian batch #' + esc(R.batch)
+    + (b.cepat ? ' <span class="pill p-belum">cepat</span>' : (b.periode_bayar ? ' · periode ' + esc(namaBulan(b.periode_bayar)) : ''))
+    + ' <button type="button" class="btn kecil" id="lp-rincian-tutup">Tutup</button></h4>';
+  /* hasil "Keluarkan": blokBayarEhc hanya tampil bila Rekap EHC ditarik — tanpa itu pesannya di sini */
+  if (L.pesanBayarEhc && !L.rekap.ehc)
+    h += '<div class="flag' + (L.bayarEhcGagal ? ' merah' : '') + '" style="margin:0 0 8px">'
+      + '<span class="f-ico">' + (L.bayarEhcGagal ? '!' : 'i') + '</span><div>' + esc(L.pesanBayarEhc) + '</div></div>';
+  if (R.galat) return h + '<div class="flag bad"><span class="f-ico">!</span><div>' + esc(R.galat) + '</div></div>';
+  if (R.baris === null) return h + kotakMuat("Memuat isi batch…");
+  if (!R.baris.length) return h + kosong("Batch ini tidak berisi klaim EHC (semua sudah dikeluarkan).");
+  h += tabelBayarEhc(R.baris, { aksi: function(x){
+    if (x.ditransfer_pada) return '<span class="pill p-lunas">ditransfer ' + tdJkt(x.ditransfer_pada) + '</span>';
+    return bisaKeluar
+      ? '<button type="button" class="btn kecil bahaya" data-keluarkan="' + x.klaim_id + '" data-batch="' + R.batch + '"'
+        + (L.sibuk ? ' disabled' : '') + '>Keluarkan (transfer gagal)</button>'
+      : '<span class="muted">belum ada referensi</span>';
+  } });
+  h += '<p class="muted" style="margin:6px 2px 0">' + (b.no_referensi
+      ? 'Referensi bank <code>' + esc(b.no_referensi) + '</code> sudah diisi — uang dianggap keluar, isi batch beku.'
+      : 'Transfer di bank sesuai daftar ini; yang gagal keluarkan (beralasan); lalu isi nomor referensi di tabel batch.') + '</p>';
   return h;
 }
 
@@ -13449,13 +14254,16 @@ function gambarLaporan(){
      melihat angka bisa dilakukan sepuluh kali sehari; menyatakan
      pembayaran sudah dikirim hanya sekali, dan itu jadi catatan permanen
      yang dipakai kalau suatu hari ada yang dipertanyakan. */
-  if (L.rekap.ehc || L.rekap.komisi) {
+  /* jalur EHC emergency juga butuh tabel batch (referensi, Rincian → Keluarkan) tanpa rekap */
+  if (L.rekap.ehc || L.rekap.komisi || (L.cepat !== null && (L.batch || []).length) || L.rincian) {
     h += '<h3 class="sec">Batch transfer</h3>';
     /* Satu blok per jenis yang sudah direkap. Tiga langkahnya digambar
        berurutan supaya orang melihat DI MANA ia sedang berada — bukan
        dua tombol yang sama-sama menyala dan salah satunya menolak. */
     ["ehc","komisi"].forEach(function(jenis){
       if (!L.rekap[jenis]) return;
+      /* berkas 141–143: EHC tidak lagi lewat pengajuan — daftar bayar tgl 20 per periode */
+      if (jenis === "ehc") { h += blokBayarEhc(); return; }
       var nama = jenis === "ehc" ? "EHC" : "komisi";
       var a = ajuanHidup(jenis), t = ajuanTerakhir(jenis);
       var disetujui = !!a && a.status === "disetujui";
@@ -13523,7 +14331,7 @@ function gambarLaporan(){
         + 'Kalau pesannya menyebut <code>transfer_pengajuan</code>, berkas 48 belum '
         + 'dijalankan di database ini.</div></div>';
     }
-    h += '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div>'
+    if (L.rekap.komisi) h += '<div class="flag" style="margin-top:10px"><span class="f-ico">i</span><div>'
       + '<b>Tiga langkah, dan yang di tengah GM.</b> Rekap cuma menampilkan angka; '
       + '"Minta persetujuan GM" mengunci daftar klaimnya dan mengirimnya ke antrean GM; '
       + 'tombol merah baru menyala sesudah GM menyetujui. Yang menolak bukan tombol yang '
@@ -13535,24 +14343,37 @@ function gambarLaporan(){
       + 'referensi transfer banknya supaya pembayaran ini bisa ditelusuri kalau suatu hari '
       + 'ditanyakan.</div></div>';
     if ((L.batch || []).length) {
-      h += '<div class="tw"><table><thead><tr><th>#</th><th class="l">Jenis</th><th class="l">Bulan</th>'
+      h += '<div class="tw" id="daftar-batch"><table><thead><tr><th>#</th><th class="l">Jenis</th><th class="l">Bulan</th>'
         + '<th>Tanggal</th><th class="r">Klaim</th><th class="r">Total</th>'
-        + '<th class="l">Referensi bank</th></tr></thead><tbody>';
+        + '<th class="l">Referensi bank</th><th></th></tr></thead><tbody>';
       L.batch.forEach(function(b2){
         h += '<tr><td>' + b2.id + '</td><td class="l">' + esc(b2.jenis)
           /* Batch pencairan cepat isinya sedikit dan totalnya kecil.
              Tanpa penanda ini, angka yang kecil terbaca seperti rekap
-             bulanan yang gagal separuh. */
-          + (b2.cepat ? ' <span class="pill p-belum">cepat</span>' : '') + '</td>'
+             bulanan yang gagal separuh. Berkas 141: batch EHC bulanan
+             membawa periode bayarnya; batch EHC tanpa keduanya = alur lama
+             (pengajuan transfer). */
+          + (b2.cepat ? ' <span class="pill p-belum">cepat</span>'
+             : (b2.jenis === "ehc" ? (b2.periode_bayar
+                 ? ' <span class="pill p-jalan">bulanan · ' + esc(namaBulan(b2.periode_bayar)) + '</span>'
+                 : ' <span class="pill p-none">pengajuan (lama)</span>') : '')) + '</td>'
           + '<td class="l">' + esc(b2.bulan) + '</td><td>' + td(b2.tanggal) + '</td>'
           + '<td class="r">' + b2.jumlah_klaim + '</td><td class="r">' + rp(b2.total) + '</td>'
           + '<td class="l">' + (b2.no_referensi
               ? '<code>' + esc(b2.no_referensi) + '</code>'
-              : '<button class="tautan lp-ref" data-batch="' + b2.id + '">isi nomor referensi</button>')
+              /* berkas 142: semua klaimnya dikeluarkan — tidak ada uang yang
+                 perlu direferensikan; referensi yang terisi akan beku selamanya. */
+              : (b2.jenis === "ehc" && Number(b2.jumlah_klaim) === 0
+                  ? '<span class="pill p-none">kosong — semua dikeluarkan</span>'
+                  : '<span class="pill p-belum">BELUM ADA REFERENSI</span>'
+                    + (bolehRekapTransfer() ? ' <button class="tautan lp-ref" data-batch="' + b2.id + '">isi nomor referensi</button>' : '')))
+          + '</td><td>' + (b2.jenis === "ehc"
+              ? '<button type="button" class="btn kecil" data-rincian="' + b2.id + '">Rincian</button>' : '')
           + '</td></tr>';
       });
       h += '</tbody></table></div>';
     }
+    h += blokRincianBatch();
   }
 
   h += '<h3 class="sec">Rekap per bulan</h3>';
@@ -13582,6 +14403,19 @@ function gambarLaporan(){
   });
   Array.prototype.forEach.call(document.querySelectorAll("#p-laporan .lp-ref"), function(b){
     b.addEventListener("click", function(){ isiReferensi(Number(b.dataset.batch)); });
+  });
+  /* berkas 141–143: kunci daftar bayar EHC, rincian batch, keluarkan klaim */
+  if ($("lp-kunci-ehc")) $("lp-kunci-ehc").addEventListener("click", kunciDaftarBayarEhc);
+  Array.prototype.forEach.call(el.querySelectorAll("[data-rincian]"), function(b){
+    b.addEventListener("click", function(){
+      muatRincianBatch(Number(b.dataset.rincian)).then(function(){
+        gambarLaporan(); var r = $("rincian-batch"); if (r && r.scrollIntoView) r.scrollIntoView({ block:"start" }); });
+      gambarLaporan();
+    });
+  });
+  if ($("lp-rincian-tutup")) $("lp-rincian-tutup").addEventListener("click", function(){ L.rincian = null; gambarLaporan(); });
+  Array.prototype.forEach.call(el.querySelectorAll("[data-keluarkan]"), function(b){
+    b.addEventListener("click", function(){ keluarkanDariBatchEhc(Number(b.dataset.keluarkan), Number(b.dataset.batch)); });
   });
   Array.prototype.forEach.call(el.querySelectorAll("[data-ajukan]"), function(b){
     b.addEventListener("click", function(){ ajukanTransfer(b.dataset.ajukan); });
@@ -13698,14 +14532,16 @@ function namaBulan(ym){
 var GM_LABEL = {
   harga:    { l:"Harga di bawah / tanpa list", k:"p-sebagian" },   /* #33 */
   telat:    { l:"Invoice lewat 120 hari", k:"p-belum" },
-  ehc_dini: { l:"Klaim EHC dini", k:"p-jalan" },
   rekening: { l:"Ubah rekening PIC", k:"p-ungu" },
   harga_khusus: { l:"Harga & komisi khusus", k:"p-belum" },
   ubah:     { l:"Minta ubah PO / SP", k:"p-ungu" },
   kirim:    { l:"Konfirmasi sebelum kirim", k:"p-belum" },
   tanpa_po: { l:"PO belum datang", k:"p-belum" },
   transfer: { l:"Pembayaran klaim", k:"p-ungu" },
-  ehc_cepat: { l:"EHC minta cair cepat", k:"p-belum" }
+  ehc_cepat: { l:"EHC minta cair cepat", k:"p-belum" },
+  /* berkas 143: satu baris per klaim EHC yang lewat cutoff tgl 18. ref_id = −id klaim
+     (tameng layar lama yang belum mengenal jenis ini) — dibaca dengan Math.abs. */
+  ehc_periksa: { l:"EHC perlu diperiksa GM", k:"p-jalan" }
 };
 
 function muatGm(){
@@ -13755,9 +14591,10 @@ function panelGmAntre(){
            per.tanpa_po ? "alert" : "", "gm:tanpa_po")
     + tile("EHC minta cair cepat", per.ehc_cepat || 0, "di luar rekap bulanan",
            per.ehc_cepat ? "alert" : "", "gm:ehc_cepat")
+    + (per.ehc_periksa ? tile("EHC perlu diperiksa GM", per.ehc_periksa, "per klaim, sesudah cutoff tgl 18",
+           "alert", ["ehc:periksa", "gm:ehc_periksa"]) : "")
     + tile("Usulan item dari PO", nUsulan, "belum ada di master", nUsulan ? "alert" : "", "gm:usulan")
     /* #16: jenis yang ikut dihitung "Menunggu keputusan" tapi dulu tanpa tile */
-    + (per.ehc_dini ? tile("Klaim EHC dini", per.ehc_dini, "sebelum SP lunas", "alert", "gm:ehc_dini") : "")
     + (per.rekening ? tile("Ubah rekening PIC", per.rekening, "rekening terkunci mau diganti", "alert", "gm:rekening") : "")
     + (per.transfer ? tile("Pembayaran klaim", per.transfer, "menunggu persetujuan transfer", "alert", "gm:transfer") : "")
     + '</div>';
@@ -13802,7 +14639,7 @@ function panelGmAntre(){
   }
 
   h += kotakGerbang('<b>Satu antrean, delapan sumber — plus usulan item.</b> Harga di bawah price list, invoice lewat '
-    + '120 hari, klaim EHC sebelum pelunasan, permintaan ubah rekening PIC, permintaan '
+    + '120 hari, klaim EHC per klaim (diperiksa sesudah cutoff tgl 18, atau minta cair cepat), permintaan ubah rekening PIC, permintaan '
     + 'harga &amp; komisi khusus, permintaan ubah PO / SP, konfirmasi sebelum kirim, dan '
     + 'SP yang barangnya sudah berangkat tapi PO-nya belum datang — semuanya dibaca '
     + 'dari view <code>antrean_gm</code>. Karena view-nya yang menggabungkan, tidak ada daftar '
@@ -13979,7 +14816,7 @@ function formGmUsulUbah(ref){
 /* #21: konteks HPP keputusan GM. Baris batal tidak dihitung (DB), qty = qty efektif.
    EHC dikembalikan ke PIC → yang tinggal di RHJ = nett; margin sesudah EHC = nett − HPP,
    margin sebelum EHC = (nett + EHC) − HPP. Uang lewat rp(), tanpa pembulatan sendiri. */
-var GM_JENIS_HPP = ["harga","telat","harga_khusus","ehc_dini"];
+var GM_JENIS_HPP = ["harga","telat","harga_khusus"];
 function persenTampil(n){
   return n === null || n === undefined || !isFinite(n) ? "—"
     : Number(n).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
@@ -14067,6 +14904,8 @@ function gambarKonteksHpp(box, rows, jenisDok){
 
 function formGmPutus(jenis, ref){
   if (jenis === "ubah") { formGmUsulUbah(ref); return; }
+  /* berkas 141–143: klaim EHC diputus di laci EHC sendiri (isi klaim, SP, lampiran, riwayat). */
+  if (jenis === "ehc_periksa" || jenis === "ehc_cepat") { formGmPutusEhc(jenis, Math.abs(Number(ref))); return; }
   /* Yang ini bukan "setuju / tolak". Keputusannya adalah MENEMPELKAN
      sesuatu — atau, kalau memang tidak akan pernah ada PO-nya, memberi
      pengecualian. Dua-duanya ada di laci yang sama, dipakai bersama layar
@@ -14112,23 +14951,6 @@ function formGmPutus(jenis, ref){
       + field({ nama:"gm_catatan", label:"Catatan", jenis:"textarea",
                 bantu:"Wajib diisi kalau ditolak — finance harus tahu apa yang perlu dibereskan." });
   }
-  if (jenis === "ehc_cepat") {
-    /* Yang diputuskan di sini adalah UANG KELUAR DI LUAR JADWAL, untuk
-       satu klaim. Keterangannya dari antrean sudah memuat nominal dan
-       alasan mendesaknya; yang ditambahkan adalah apa arti "setuju" —
-       supaya tidak ada yang mengira ini mengirim uangnya. */
-    h += '<div class="flag merah" style="margin-top:10px"><span class="f-ico">!</span><div>'
-      + '<b>Ini pengecualian, bukan jalur biasa.</b> Klaim EHC dibayar sekali sebulan, '
-      + 'sekaligus untuk seluruh sales. Menyetujui di sini mengeluarkan <b>satu klaim ini</b> '
-      + 'dari jadwal itu supaya finance bisa mencairkannya lebih dulu.<br>'
-      + 'Menyetujui <b>tidak mengirim uang</b>: ia memunculkan klaim ini di tombol '
-      + '<b>"EHC emergency"</b> milik finance. Sesudah ditandai, klaim ini otomatis tidak '
-      + 'ikut lagi di rekap bulanan — jadi tidak mungkin terbayar dua kali.'
-      + '</div></div>'
-      + field({ nama:"gm_catatan", label:"Catatan", jenis:"textarea",
-                bantu:"Wajib diisi kalau ditolak — sales-nya harus bisa menjelaskan ke "
-                    + "pelanggannya kenapa tidak bisa dipercepat." });
-  }
   if (jenis === "harga_khusus") {
     /* Yang diputuskan di sini bukan satu SP, tapi kesepakatan yang akan
        dipakai berulang. Karena itu keterangannya menyebut akibat jangka
@@ -14165,16 +14987,6 @@ function formGmPutus(jenis, ref){
       }
       janji = api("POST", "/rpc/putuskan_transfer",
                   { p_id: ref, p_setuju: setuju, p_catatan: catTf });
-    } else if (jenis === "ehc_cepat") {
-      var catKc = nilaiForm("gm_catatan");
-      if (!setuju && !String(catKc || "").trim()) {
-        sibuk(false);
-        tampilPesan("Menolak pencairan cepat wajib beralasan — sales-nya harus bisa "
-                  + "menjelaskan ke pelanggannya kenapa tidak bisa dipercepat.");
-        return;
-      }
-      janji = api("POST", "/rpc/putuskan_klaim_cepat",
-                  { p_klaim: ref, p_setuju: setuju, p_catatan: catKc });
     } else if (jenis === "harga_khusus") {
       var pk = angkaSaja(nilaiForm("gm_pct"));
       if (setuju && pk === null) {
@@ -14195,9 +15007,7 @@ function formGmPutus(jenis, ref){
       }
       janji = api("POST", "/rpc/putuskan_kirim",
                   { p_so: ref, p_boleh: setuju, p_alasan: alasanKirim });
-    } else if (jenis === "ehc_dini") {
-      janji = api("PATCH", "/sales_orders?id=eq." + ref, { ehc_dini_ok: setuju }, "return=representation");
-    } else {
+    } else if (jenis === "harga" || jenis === "telat") {
       var pct = angkaSaja(nilaiForm("gm_pct"));
       if (jenis === "telat" && setuju && pct === null) {
         sibuk(false); tampilPesan("Komisi harus ditetapkan untuk invoice yang lewat 120 hari."); return;
@@ -14205,6 +15015,12 @@ function formGmPutus(jenis, ref){
       var badan = { harga_ok: setuju, gm_pada: new Date().toISOString() };
       if (pct !== null) badan.gm_pct = pct / 100;
       janji = api("PATCH", "/sales_orders?id=eq." + ref, badan, "return=representation");
+    } else {
+      /* Jenis antrean yang belum dikenal layar ini TIDAK jatuh ke PATCH sales_orders:
+         ref_id-nya belum tentu id SP (mis. 'ehc_periksa' = −id klaim). */
+      sibuk(false);
+      tampilPesan("Jenis antrean '" + esc(jenis) + "' belum dikenal layar ini — muat ulang halaman.");
+      return;
     }
     janji.then(function(){
       tutupLaci(); toast(setuju ? "Disetujui." : "Ditolak.");
@@ -14507,7 +15323,10 @@ var LAPORAN = {
          + "karena pelunasanlah yang membuka hak klaimnya. Tiga angka per jenis, "
          + "bukan satu: selisih di antaranya justru pekerjaannya. Yang terhitung tapi "
          + "belum diklaim adalah sales yang perlu diingatkan; yang sudah diklaim tapi "
-         + "belum ditransfer adalah antrean finance.",
+         + "belum ditransfer adalah antrean finance. Untuk EHC, kolom <b>EHC masuk batch</b> "
+         + "menghitung klaim yang sudah dikunci ke daftar bayar finance, termasuk batch yang "
+         + "referensi banknya belum diisi — di halaman EHC klaim itu baru disebut "
+         + "“ditransfer” sesudah referensi diisi.",
     rpc:   "/rpc/laporan_komisi",
     tanggal: true,
     peran: function(){ return bolehLihatNilaiKlaim() || saya.peran === "sales"; },
@@ -14521,7 +15340,7 @@ var LAPORAN = {
       ["komisi_ditransfer", "Komisi ditransfer", "rupiah"],
       ["ehc_terhitung",     "EHC terhitung", "rupiah"],
       ["ehc_diklaim",       "EHC diklaim", "rupiah"],
-      ["ehc_ditransfer",    "EHC ditransfer", "rupiah"],
+      ["ehc_ditransfer",    "EHC masuk batch", "rupiah"],
       ["ehc_jadi_kas",      "EHC jadi kas", "rupiah"]
     ]
   },
@@ -15180,6 +15999,13 @@ function urutDomLabel(panel, label, arah){
   /* EHC & komisi */
   A["ehc:daftar"]  = function(){ return "daftar-ehc"; };
   A["ehc:nominal"] = function(){ return urut("daftar-ehc", "Nominal", "desc"); };
+  A["ehc:periksa"] = function(){   /* berkas 143: tile antrean GM → halaman "Perlu diperiksa GM" */
+    var E = LANJUT.ehc; E.hal = bolehApprove() ? "periksa" : "diajukan";
+    if (E.hlm[E.hal]) E.hlm[E.hal].dimuat = false; return "daftar-ehc"; };
+  /* Laporan Finance · daftar bayar EHC: kelompok kosong → ke deretan tile-nya */
+  function by(id){ return function(){ return $(id) ? id : "bayar-ehc"; }; }
+  A["laporan:bayar-siap"] = by("daftar-bayar-ehc"); A["laporan:bayar-lunas"] = by("bayar-lunas");
+  A["laporan:bayar-rek"] = by("bayar-rek"); A["laporan:bayar-gm"] = by("bayar-gm"); A["laporan:bayar-cepat"] = by("bayar-cepat");
   A["komisi:daftar"]  = function(){ return "daftar-komisi"; };
   A["komisi:nominal"] = function(){ return urut("daftar-komisi", "Nominal", "desc"); };
   A["komisi:telat"]   = function(){ var K = LANJUT.komisi; komisiHal(K.hal).telat = "telat"; return "daftar-komisi"; };
@@ -15897,17 +16723,20 @@ var KETERANGAN_PERAN = [
            "Mengubah PO/SP yang sudah terbit — harus lewat usulan ke GM"] },
   { peran:"liesian", ringkas:"Lie Sian — penerbitan dokumen jual",
     bisa:["Surat jalan, invoice, dan nomor faktur pajak","Melihat SELURUH alur jual: PO, SP, pengiriman, pelunasan"],
-    tidak:["Menandai SP lunas — itu Ichi","Melihat HPP dan margin","Mengubah price list atau produk"] },
+    tidak:["Menandai SP lunas — itu Ichi","Melihat HPP dan margin","Mengubah price list atau produk",
+           "Melihat klaim EHC (keputusan 9 Okt)"] },
   { peran:"ichi", ringkas:"Ichi — pelunasan",
     bisa:["Menandai Surat Pesanan lunas (input pelunasan)","Melihat SELURUH alur jual: PO, SP, pengiriman, pelunasan"],
     tidak:["Menerbitkan surat jalan, invoice, atau faktur — itu Lie Sian",
-           "Melihat HPP dan margin","Mengubah price list atau produk"] },
+           "Melihat HPP dan margin","Mengubah price list atau produk",
+           "Melihat klaim EHC (keputusan 9 Okt)"] },
   { peran:"vonny", ringkas:"Vonny — input PO, cek SP, ubah master produk; sisanya baca saja",   /* #27 */
     bisa:["Memasukkan dan merapikan PO customer","Melihat SELURUH alur jual: PO, SP, pengiriman, pelunasan",
           "Melihat price list",
           "Membuat & mengubah master produk (tanpa menghapus)",
           "Melihat order impor & supplier (baca saja)"],
     tidak:["Membuat Surat Pesanan","Mengubah CRM","Mengisi nominal klaim EHC atau komisi",
+           "Melihat klaim EHC (keputusan 9 Okt)",
            "Melihat HPP dan margin",
            "Mengubah order impor, kode pabrik, atau pembayaran",
            "Melihat pembayaran supplier atau mengunduh dokumen impor",
@@ -19671,7 +20500,8 @@ window.__alur = {
     LANJUT.kirim.hal = "belum"; LANJUT.kirim.cacah = null;
     LANJUT.kirim.dimuat = false; LANJUT.kirim.hlm = { belum:null, sudah:null };
     LANJUT.ehc.hal = "saldo"; LANJUT.ehc.cacah = null; LANJUT.ehc.dimuat = false;
-    LANJUT.ehc.hlm = { saldo:null, diajukan:null, selesai:null, batal:null };
+    LANJUT.ehc.hlm = { saldo:null, diajukan:null, periksa:null, disetujui:null, selesai:null, batal:null };
+    LANJUT.ehc.centang = []; LANJUT.ehc.hasilMassal = null;
     LANJUT.komisi.hal = "bisa"; LANJUT.komisi.cacah = null; LANJUT.komisi.dimuat = false;
     LANJUT.komisi.hlm = { belum:null, bisa:null, klaim:null, transfer:null };
     /* Antrean GM dan usulan item ikut dikosongkan. Keduanya menyimpan
