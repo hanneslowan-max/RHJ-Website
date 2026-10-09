@@ -14,7 +14,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://*.supabase.co; form-action 'none'; base-uri 'none'; object-src 'none'">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Carlito:wght@400;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   /* ══════════════════════════════════════════════════════════════════
      RHJ — sistem visual
@@ -227,12 +227,16 @@
   .dok-pnw .dp-info > span{color:var(--redup,#5a6672)}
   .dok-pnw .dp-info > div{min-width:0;overflow-wrap:anywhere}
   .dok-pnw .dp-catatan{margin-top:12px;font-size:13px}
-  /* #55: template penawaran (contoh Hannes 9 Okt, 040/PQ/RSG/IX/2026) — kertas A4 di layar; cetak lihat #cetak-pnw */
+  /* #55: template penawaran (contoh penawaran Hannes 9 Okt) — kertas A4 di layar; cetak lihat #cetak-pnw.
+     Review #55: Carlito (pengganti Calibri yang ukurannya sama, Google Fonts) dipakai bila Calibri tidak ada (HP, Mac);
+     tanpa ligatur ("ti" tetap dua huruf, seperti contoh). */
   .pnw-kertas{background:#fff;color:#111;max-width:794px;margin:0 auto;border:1px solid #d6dbde;border-radius:0;padding:0;
-    box-shadow:0 1px 8px rgba(0,0,0,.12);font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif;font-size:14.5px;line-height:1.32}
+    box-shadow:0 1px 8px rgba(0,0,0,.12);font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif;font-size:14.5px;line-height:1.32;
+    font-variant-ligatures:none}
   .pnw-kertas .pk-kop{display:block;width:100%;height:auto}
   .pnw-kertas .pk-kaki{display:block;width:96.5%;height:auto;margin-top:22px}
-  .pk-isi{padding:26px 7% 6px}   /* layar; cetak memakai 25,4 mm seperti contoh */
+  .pk-isi{padding:26px 7% 6px;overflow-wrap:anywhere}   /* layar; cetak memakai 25,4 mm seperti contoh. Review #55: teks
+                                                          panjang tanpa spasi (tautan, e-mail) dipatahkan, tidak melebar */
   .pk-isi p{margin:0 0 1.05em}
   .pk-isi table{width:auto;min-width:0;background:transparent;border-collapse:collapse}
   .pk-isi td,.pk-isi th{font-family:inherit;font-size:inherit;color:#111;white-space:normal;letter-spacing:0;font-variant-numeric:normal}
@@ -256,12 +260,26 @@
   .pk-note{margin:0 0 1.2em}
   .pk-note-judul{font-weight:700;text-decoration:underline;margin-bottom:.55em}
   .pk-note ol{margin:0;padding-left:2.6em}
-  .pk-note li{margin:0 0 .2em;padding-left:.2em}
-  .pk-rek{font-weight:700;margin:.15em 0 .1em 2.4em;line-height:1.45}
+  .pk-note li{margin:0 0 .2em;padding-left:.66em}   /* review #55: inden sama dengan contoh */
+  .pk-rek{font-weight:700;margin:.15em 0 .1em 3.27em;line-height:1.45}
   .pk-ttd{margin-top:3.2em}
   .pk-ttd-nama{font-weight:700;text-decoration:underline}
-  @media (max-width:560px){ .pnw-kertas{font-size:12.5px} .pk-isi{padding:18px 6% 4px} }
+  @media (max-width:560px){ .pnw-kertas{font-size:12.5px} .pk-isi{padding:18px 6% 4px}
+    .pk-tabel td.r,.pk-tabel td.q{white-space:normal} }   /* review #55: kolom TOTAL tidak terpotong di HP */
+  .pnw-catat{font-size:12px;color:#5b6770;margin:0 0 6px}
   #cetak-pnw{display:none}
+  /* Review #55: ukuran cetak — dipakai #cetak-pnw (cetak) DAN wadah ukur tersembunyi di layar (pemenggalan halaman
+     dihitung dari tinggi yang diukur dengan aturan yang sama persis). */
+  .ck-cetak .pnw-kertas{width:210mm;max-width:none;border:0;box-shadow:none;font-size:11pt;line-height:1.3;margin:0}
+  .ck-cetak .pk-isi{padding:0 25.4mm}
+  .ck-cetak .pk-tw{overflow:visible}
+  .ck-cetak .pk-nohal td:first-child{width:12.7mm}
+  .ck-cetak .pk-tabel{width:calc(100% + 4mm)!important}   /* tepi kanan tabel 4 mm lewat margin teks, seperti contoh */
+  .ck-cetak .pk-tabel td.r,.ck-cetak .pk-tabel td.q{white-space:normal}
+  .ck-cetak .pk-tabel td.pk-desk,.ck-cetak .pk-tabel td.pk-spek{overflow-wrap:anywhere}
+  .ck-cetak .pk-tabel.pk-rapat th,.ck-cetak .pk-tabel.pk-rapat td{padding:2px 4px}
+  .ck-cetak .pk-tabel.pk-tetap{table-layout:fixed}
+  .ck-ukur{position:absolute;left:-10000px;top:0;visibility:hidden;pointer-events:none}
   .jumlahan-alur .besar{font-size:16px;font-weight:700;border-top:1px solid var(--garis,#dfe4e6);
     margin-top:6px;padding-top:9px}
   .bi-hasil b{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
@@ -681,22 +699,31 @@
     .laci-head,.laci-kaki{padding:14px 16px}
   }
   @media print{
-    /* #55: unduh PDF penawaran — hanya dokumennya yang tercetak (A4, margin @page 0 dipasang sementara oleh cetakPenawaran) */
+    /* #55: unduh PDF penawaran — hanya dokumennya yang tercetak (A4, @page margin 0). Review #55: elemen cetak terpasang
+       selama laci detail penawaran terbuka (juga untuk cetak dari menu browser / Ctrl+P), dan halamannya DIPENGGAL SENDIRI
+       (halamanPnwHtml): tiap halaman A4 membawa kop & kaki statisnya — tidak bergantung pada position:fixed / thead / tfoot
+       yang tidak diulang WebKit (iPhone/Safari). */
     body.cetak-pnw > *:not(#cetak-pnw){display:none!important}
     body.cetak-pnw{background:#fff!important;margin:0!important;padding:0!important}
     body.cetak-pnw #cetak-pnw{display:block;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    #cetak-pnw .ck-kop{position:fixed;top:0;left:0;width:210mm;height:auto}
-    #cetak-pnw .ck-kaki{position:fixed;bottom:4.6mm;left:0;width:202.8mm;height:auto}
+    #cetak-pnw .ck-hlm{position:relative;width:210mm;height:296.6mm;overflow:hidden;background:#fff;
+      break-after:page;page-break-after:always}
+    #cetak-pnw .ck-hlm:last-child{break-after:auto;page-break-after:auto}
+    #cetak-pnw .ck-hlm .ck-kop{position:absolute;top:0;left:0;width:210mm;height:auto}
+    #cetak-pnw .ck-hlm .ck-kaki{position:absolute;bottom:4.6mm;left:0;width:202.8mm;height:auto}   /* kaki contoh mulai 270,5 mm */
+    #cetak-pnw .ck-hlm .ck-badan{position:absolute;top:38mm;left:0;width:210mm}
+    /* cadangan (satu baris lebih tinggi dari satu halaman): alur biasa, kop & kaki fixed seperti versi pertama */
+    #cetak-pnw.ck-alir .ck-kop{position:fixed;top:0;left:0;width:210mm;height:auto}
+    #cetak-pnw.ck-alir .ck-kaki{position:fixed;bottom:4.6mm;left:0;width:202.8mm;height:auto}
     #cetak-pnw .ck-hal{width:210mm;border-collapse:collapse;background:#fff}
     #cetak-pnw .ck-hal > thead > tr > td,#cetak-pnw .ck-hal > tfoot > tr > td,#cetak-pnw .ck-hal > tbody > tr > td{
       padding:0;border:0;background:#fff;text-align:left;white-space:normal}
     #cetak-pnw .ck-atas{height:38mm}
-    #cetak-pnw .ck-bawah{height:28mm}   /* kaki contoh mulai 270,5 mm dari atas */
-    #cetak-pnw .pnw-kertas{max-width:none;border:0;box-shadow:none;font-size:11pt;line-height:1.3}
-    #cetak-pnw .pk-isi{padding:0 25.4mm}
-    #cetak-pnw .pk-tw{overflow:visible}
-    #cetak-pnw .pk-tabel tr,#cetak-pnw .pk-ttd,#cetak-pnw .pk-note li{break-inside:avoid;page-break-inside:avoid}
-    #cetak-pnw .pk-tutup,#cetak-pnw .pk-hormat{break-after:avoid;page-break-after:avoid}
+    #cetak-pnw .ck-bawah{height:28mm}
+    #cetak-pnw.ck-alir .pk-tabel tr,#cetak-pnw.ck-alir .pk-ttd,#cetak-pnw.ck-alir .pk-note li{break-inside:avoid;page-break-inside:avoid}
+    #cetak-pnw.ck-alir .pk-note-judul{break-after:avoid;page-break-after:avoid}
+    #cetak-pnw.ck-alir .pk-penutup{break-inside:avoid;page-break-inside:avoid}
+    .pk-internal,.pnw-catat{display:none!important}   /* review #55: penanda internal tidak pernah tercetak */
     .sidebar,header,.saring{display:none!important}
     .utama{margin-left:0}
     .tw{box-shadow:none;border-color:#ccc}
@@ -1371,7 +1398,8 @@ var PESAN_CHECK = {
   po_lines_diskon_sen: "Diskon baris PO harus habis dalam sen: diskon Rp paling banyak 2 angka di belakang koma, "
                      + "dan diskon % tidak boleh menghasilkan potongan di bawah sen.",
   po_lines_set_qty_bulat: "Jumlah set di baris PO harus bilangan bulat.",
-  po_lines_set_bukan_produk: "Baris set di PO tidak boleh sekaligus menunjuk produk."
+  po_lines_set_bukan_produk: "Baris set di PO tidak boleh sekaligus menunjuk produk.",
+  sales_reps_dokumen_sah: "Data dokumen sales tidak valid: nama paling banyak 120 karakter, No. HP 9–16 angka, e-mail berbentuk nama@domain."   /* review #55 */
 };
 function pesanGalat(j, res){
   if (j && j.message) {
@@ -8696,6 +8724,8 @@ var GALAT_BERKAS = [
     berkas:"38-schema-massal-tanggal-sama.sql" },
   { pola:/quotes(_\d+)?\.(up|email|top)\b|quote_lines(_\d+)?\.diskon|customers(_\d+)?\.email|'email' column of 'customers'|'(up|email|top)' column of 'quotes'|'(diskon|diskon_tipe)' column of 'quote_lines'|quotes_jaga_top|quote_lines_diskon/i,   /* #60 */
     berkas:"129-penawaran-up-email-top-diskon.sql" },
+  { pola:/quote_lines(_\d+)?\.set_isi|'set_isi' column of 'quote_lines'/i,   /* review #55: isi set master dibekukan */
+    berkas:"139u-isi-set-penawaran.sql" },
   { pola:/quotes(_\d+)?\.kepada_grup|'kepada_grup' column of 'quotes'|customer_groups|daftar_grup_pelanggan|simpan_grup_pelanggan|atur_anggota_grup|customers(_\d+)?\.grup_id/i,   /* #58 */
     berkas:"132-grup-pelanggan.sql" },
   { pola:/sales_order_lines(_\d+)?\.set_(grup|nama|qty|isi)|'set_(grup|nama|qty|isi)' column of 'sales_order_lines'|sol_set_lengkap/i,   /* #57: penanda set di SP (embed PostgREST: sales_order_lines_1.…) */
@@ -10073,7 +10103,7 @@ function masaPenawaran(q){
 }
 /* Kolom yang diminta untuk daftar, pencarian (#44), dan laci detail. */
 var PNW_SELECT = "id,nomor,tanggal,berlaku_hari,kepada,catatan,customer_id,sales_rep_id,lead_id,mode_ppn,up,email,top,kepada_grup,"   /* #42; #60; #58 */
-  + "customers(nama,hp,sales_rep_id),quote_lines(id,urut,product_id,set_id,set_komponen,deskripsi,spesifikasi,qty,satuan,harga,harga_list,diskon,diskon_tipe)";   /* #28 #47 #60 */
+  + "customers(nama,hp,sales_rep_id),quote_lines(id,urut,product_id,set_id,set_komponen,set_isi,deskripsi,spesifikasi,qty,satuan,harga,harga_list,diskon,diskon_tipe)";   /* #28 #47 #60; 139u set_isi */
 
 function muatPenawaran(){
   var P = LANJUT.penawaran;
@@ -11076,7 +11106,7 @@ function periksaPenawaran(f){
   return { salah: "", isi: isi };
 }
 
-/* ── #55: TEMPLATE PENAWARAN (contoh Hannes 9 Okt — "040 PENAWARAN PT Zioflex Mandiri Indonesia") ─────────────────
+/* ── #55: TEMPLATE PENAWARAN (contoh penawaran Hannes 9 Okt) ─────────────────
    Satu tata letak untuk pratinjau (sebelum simpan), detail (sesudah simpan), dan Unduh PDF (cetak browser, A4):
    kop & kaki = gambar dari contoh; "Jakarta, <tanggal>"; No./Hal; Kepada (UP + No. HP, perusahaan); tabel No. |
    DESKRIPSI | (SPESIFIKASI, #56 — hanya bila ada) | QTY | UNIT PRICE | (DISKON, #60 — hanya bila ada) | TOTAL; Note
@@ -11103,7 +11133,16 @@ function namaDokProduk(pr){
   if (pr.usulan) return pr.usulan_teks || pr.kode || "";   /* #59: tanpa "(usulan)" */
   var kode = String(pr.kode || "").trim(), f = String(pr.fungsi || "").toLowerCase();
   var kata = /^hidup/.test(f) ? "hidup" : (/^mati/.test(f) ? "mati" : (/^rem/.test(f) ? "rem" : ""));
-  if (kata) kode = kode.replace({ hidup:/\s+H$/i, mati:/\s+M$/i, rem:/\s+[RB]$/i }[kata], "");
+  /* Review #55: huruf fungsi dibuang sebagai KATA — di akhir maupun di tengah kode ("TSH PU 8" M Heavy Duty"); untuk rem
+     huruf B hanya bila berdiri sendiri dan bukan bagian "TYPE B" (dulu B di "TYPE B" ikut terbuang). */
+  if (kata) {
+    var tok = kode.split(/\s+/), huruf = { hidup:["H"], mati:["M"], rem:["R","B"] }[kata];
+    for (var i = tok.length - 1; i > 0; i--) {
+      var t = tok[i].toUpperCase();
+      if (huruf.indexOf(t) > -1 && !(t === "B" && tok[i - 1].toUpperCase() === "TYPE")) { tok.splice(i, 1); break; }
+    }
+    kode = tok.join(" ").replace(/\s+-$/, "").trim();
+  }
   var b = String(pr.brand || "").trim(), bu = b.toUpperCase();
   var merek = Object.prototype.hasOwnProperty.call(MEREK_DOK, bu) ? MEREK_DOK[bu] : (MEREK_DOK_LEWATI.indexOf(bu) > -1 ? "" : b);
   if (merek && (kode.toUpperCase() + " ").indexOf(merek.toUpperCase() + " ") === 0) merek = "";
@@ -11115,11 +11154,35 @@ function tglSurat(s){
   var b = parseInt(s.slice(5,7), 10) - 1;
   return (b < 0 || b > 11) ? "" : s.slice(8,10) + " " + BULAN[b] + " " + s.slice(0,4);
 }
-/* Tanda tangan: data dokumen sales (berkas 139p, diisi owner/GM di tab Pengguna); kosong → nama sales saja. */
+/* Tanda tangan: data dokumen sales (berkas 139p, diisi owner di tab Pengguna); kosong → nama sales saja. Review #55: tidak
+   pernah mencetak nomor internal ("#24") — sales yang belum termuat → kosong (Unduh PDF menolak, lihat unduhPenawaran). */
 function salesDokPnw(rep){
   var r = rep ? repAlurById(rep) : null;
-  if (!r) return { nama: rep ? (namaRepAlur(rep) || ("#" + rep)) : "", hp: "", email: "" };
-  return { nama: r.nama_dokumen || r.nama || "", hp: r.hp_dokumen ? hpTampil(r.hp_dokumen) : "", email: r.email_dokumen || "" };
+  if (!r) return { nama: rep ? (namaRepAlur(rep) || "") : "", hp: "", email: "", ada: false };
+  return { nama: r.nama_dokumen || r.nama || "", hp: r.hp_dokumen ? hpTampil(r.hp_dokumen) : "", email: r.email_dokumen || "", ada: true };
+}
+/* Review #55: data tanda tangan dibaca SEGAR dari database (daftar sales di memori bisa basi sepanjang sesi). */
+function segarkanSalesDok(rep){
+  if (!rep) return Promise.resolve(false);
+  return api("GET", "/sales_reps?id=eq." + Number(rep) + "&select=*")
+    .then(function(r){
+      var x = Array.isArray(r) ? r[0] : null;
+      if (!x) return !!repAlurById(rep);
+      var ada = false;
+      ALUR.rep = ALUR.rep.map(function(o){ if (String(o.id) === String(x.id)) { ada = true; return Object.assign({}, o, x); } return o; });
+      if (!ada) ALUR.rep = ALUR.rep.concat([x]);
+      return true;
+    })
+    .catch(function(){ return !!repAlurById(rep); });
+}
+/* Review #55: tanda inci lurus → ” seperti contoh (hanya di dokumen; kode master tetap) */
+function inciDok(t){ return String(t == null ? "" : t).replace(/(\d)"/g, "$1\u201D"); }
+/* "2× RHJ 03 ER 4” hidup, …" — nama dokumen komponen set; komponen yang produknya tidak terbaca dilewati (bukan "#id") */
+function rinciKomponenDok(komp){
+  return (komp || []).map(function(c){
+    var pr = produkById(c.product_id);
+    return pr ? angkaTeks(Number(c.qty) || 0) + "× " + namaDokProduk(pr) : "";
+  }).filter(Boolean).join(", ");
 }
 function topDokPnw(top){
   top = String(top || "").trim();
@@ -11138,11 +11201,13 @@ function docPenawaranHtml(d, cetak){
   if (d.up) kepada.push(esc(d.up) + (hp ? " (" + esc(hp) + ")" : ""));   /* #60: UP */
   kepada.push(esc(d.kepada || "—") + (!d.up && hp ? " (" + esc(hp) + ")" : ""));
   if (d.email) kepada.push("E-mail: " + esc(d.email));
+  /* Review #55: penanda internal ("di bawah list") TIDAK di dalam surat — dicatat di atas kertas (layar saja) */
+  var bawah = [];
   var baris = d.baris.map(function(b, i){
+    if (b.bawah) bawah.push(i + 1);
     return '<tr><td class="c">' + (i + 1) + '.</td>'
-      + '<td class="c pk-desk">' + esc(b.judul || "—")
-      +   (b.sub ? '<div class="pk-sub">' + esc(b.sub) + '</div>' : '')
-      +   (!cetak && b.bawah ? '<div class="pk-internal"><span class="pill p-belum">di bawah list</span> tanda internal — tidak ikut tercetak</div>' : '')
+      + '<td class="c pk-desk">' + esc(inciDok(b.judul || "—"))
+      +   (b.sub ? '<div class="pk-sub">' + esc(inciDok(b.sub)) + '</div>' : '')
       + '</td>'
       + (adaSpek ? '<td class="pk-spek">' + esc(String(b.spesifikasi || "").trim()) + '</td>' : '')
       + '<td class="c q">' + esc(angkaTeks(b.qty)) + ' ' + esc(b.satuan || "") + '</td>'
@@ -11155,7 +11220,7 @@ function docPenawaranHtml(d, cetak){
       + '<td class="r">' + rp(nilai) + '</td></tr>';
   }
   /* #42: rincian PPN tetap ditampilkan (ATURAN B); contoh Hannes hanya TOTAL untuk Exclude — lihat HANDOFF #55 */
-  baris += mode === "include" ? jmlBaris("DPP", t.dpp) + jmlBaris("PPN 11% (sudah termasuk)", t.ppn) + jmlBaris("TOTAL", t.grand, true)
+  var ringkas = mode === "include" ? jmlBaris("DPP", t.dpp) + jmlBaris("PPN 11% (sudah termasuk)", t.ppn) + jmlBaris("TOTAL", t.grand, true)
          : (mode === "non" ? jmlBaris("TOTAL", t.grand, true)
          : jmlBaris("TOTAL", jml, true) + jmlBaris("PPN 11%", t.ppn) + jmlBaris("TOTAL + PPN 11%", t.grand, true));
   var note = [];
@@ -11171,68 +11236,219 @@ function docPenawaranHtml(d, cetak){
   }
   if (String(d.catatan || "").trim()) note.push(esc(String(d.catatan).trim()).replace(/\n/g, "<br>"));
   var sd = salesDokPnw(d.rep);
+  /* Blok-blok bernama (kepala, tabel: judul / baris / ringkasan, Note: judul / butir, penutup) — dipakai pemenggalan
+     halaman Unduh PDF (halamanPnwHtml). */
   var isi = '<div class="pk-isi">'
-    + '<p class="pk-tgl">' + esc(DOK_PNW.kota) + ', ' + esc(tglSurat(d.tanggal) || "—") + '</p>'
-    + '<table class="pk-nohal" data-tanpa-urut><tbody>'
-    +   '<tr><td>No.</td><td>: ' + (d.nomor ? esc(d.nomor) : '<i class="pk-internal">diberikan otomatis saat disimpan</i>') + '</td></tr>'
-    +   '<tr><td>Hal</td><td>: Penawaran Harga</td></tr></tbody></table>'
-    + '<p class="pk-kepada">Kepada :<br>' + kepada.join("<br>") + '</p>'
-    + '<p>Berikut kami sampaikan penawaran harga sesuai permintaan Bapak/Ibu, sebagai berikut:</p>'
-    + '<div class="pk-tw"><table class="pk-tabel" data-tanpa-urut><thead><tr><th>No.</th><th>DESKRIPSI</th>'
+    + '<div class="pk-kepala">'
+    +   '<p class="pk-tgl">' + esc(DOK_PNW.kota) + ', ' + esc(tglSurat(d.tanggal) || "—") + '</p>'
+    +   '<table class="pk-nohal" data-tanpa-urut><tbody>'
+    +     '<tr><td>No.</td><td>: ' + (d.nomor ? esc(d.nomor) : '(nomor otomatis)') + '</td></tr>'
+    +     '<tr><td>Hal</td><td>: Penawaran Harga</td></tr></tbody></table>'
+    +   '<p class="pk-kepada">Kepada :<br>' + kepada.join("<br>") + '</p>'
+    +   '<p class="pk-pembuka">Berikut kami sampaikan penawaran harga sesuai permintaan Bapak/Ibu, sebagai berikut:</p>'
+    + '</div>'
+    + '<div class="pk-tw"><table class="pk-tabel' + (nKol >= 7 ? ' pk-rapat' : '') + '" data-tanpa-urut><thead><tr><th>No.</th><th>DESKRIPSI</th>'
     +   (adaSpek ? '<th>SPESIFIKASI</th>' : '') + '<th>QTY</th><th>UNIT PRICE</th>' + (adaDiskon ? '<th>DISKON</th>' : '')
-    +   '<th>TOTAL</th></tr></thead><tbody>' + baris + '</tbody></table></div>'
+    +   '<th>TOTAL</th></tr></thead><tbody class="pk-item">' + baris + '</tbody><tbody class="pk-ringkas">' + ringkas + '</tbody></table></div>'
     + '<div class="pk-note"><div class="pk-note-judul">Note:</div><ol>'
     +   note.map(function(n){ return '<li>' + n + '</li>'; }).join("") + '</ol></div>'
-    + '<p class="pk-tutup">Demikianlah penawaran harga dari kami.<br>Besar harapan kami, penawaran ini sesuai dengan '
-    +   'budget dan kebutuhan Perusahaan Bapak/Ibu.<br>Terima kasih.</p>'
-    + '<p class="pk-hormat">Hormat kami,</p>'
-    + '<div class="pk-ttd"><div class="pk-ttd-nama">' + esc(sd.nama || "—") + '</div>'
-    +   (sd.hp ? '<div>' + esc(sd.hp) + '</div>' : '') + (sd.email ? '<div>' + esc(sd.email) + '</div>' : '') + '</div>'
+    + '<div class="pk-penutup">'
+    +   '<p class="pk-tutup">Demikianlah penawaran harga dari kami.<br>Besar harapan kami, penawaran ini sesuai dengan '
+    +     'budget dan kebutuhan Perusahaan Bapak/Ibu.<br>Terima kasih.</p>'
+    +   '<p class="pk-hormat">Hormat kami,</p>'
+    +   '<div class="pk-ttd"><div class="pk-ttd-nama">' + esc(sd.nama || "—") + '</div>'
+    +     (sd.hp ? '<div>' + esc(sd.hp) + '</div>' : '') + (sd.email ? '<div>' + esc(sd.email) + '</div>' : '') + '</div>'
+    + '</div>'
     + '</div>';
   if (cetak) return isi;
-  return '<div class="pnw-kertas dok-pnw"><img class="pk-kop" src="' + KOP_PNW + '" alt="Hammerindo">' + isi
+  return '<p class="pnw-catat">Tampilan layar — tata letak cetak (Unduh PDF) bisa sedikit berbeda.'
+    + (bawah.length ? ' <span class="pill p-belum">di bawah list</span> baris ' + bawah.join(", ")
+                      + ' — tanda internal, tidak tercetak.' : '') + '</p>'
+    + '<div class="pnw-kertas dok-pnw"><img class="pk-kop" src="' + KOP_PNW + '" alt="Hammerindo">' + isi
     + '<img class="pk-kaki" src="' + KAKI_PNW + '" alt="PT Roda Hammerindo Jaya"></div>';
 }
+/* ── Review #55: Unduh PDF dipenggal sendiri ────────────────────────────────────────────────────────────────────────
+   Surat diukur di wadah tersembunyi dengan aturan cetak yang sama (.ck-cetak: 210 mm, 11 pt), lalu dibagi ke halaman A4
+   yang masing-masing membawa kop & kaki statis (badan 38–269 mm). Aturan: kepala surat utuh; baris tabel utuh dan judul
+   tabel diulang di halaman lanjutan; baris TOTAL/PPN menempel ke baris barang terakhir; "Note:" menempel ke butir pertama;
+   penutup + "Hormat kami," + tanda tangan utuh. Lebar kolom dikunci (colgroup) supaya sama di semua halaman. Satu baris
+   yang lebih tinggi dari satu halaman → cadangan alur biasa (null). */
+var TINGGI_BADAN_PNW_MM = 231;   /* 297 − 38 (kop) − 28 (kaki) */
+function halamanPnwHtml(d){
+  var ukur = document.createElement("div");
+  ukur.className = "ck-cetak ck-ukur";
+  ukur.innerHTML = '<div class="pnw-kertas">' + docPenawaranHtml(d, true) + '</div>';
+  document.body.appendChild(ukur);
+  try {
+    var kertas = ukur.firstChild, isi = kertas.querySelector(".pk-isi");
+    var mm = kertas.getBoundingClientRect().width / 210;
+    if (!(mm > 0)) return null;
+    var batas = TINGGI_BADAN_PNW_MM * mm;
+    var tabel = isi.querySelector(".pk-tabel");
+    var lebar = Array.prototype.map.call(tabel.querySelectorAll("thead th"), function(th){ return th.getBoundingClientRect().width / mm; });
+    tabel.insertAdjacentHTML("afterbegin", '<colgroup>' + lebar.map(function(w){
+      return '<col style="width:' + w.toFixed(2) + 'mm">'; }).join("") + '</colgroup>');
+    tabel.classList.add("pk-tetap");
+    var atas0 = isi.getBoundingClientRect().top;
+    var y = function(el){ return el.getBoundingClientRect().top - atas0; };
+    var note = isi.querySelector(".pk-note");
+    var urut = [{ jenis:"kepala", el:isi.querySelector(".pk-kepala") }, { jenis:"thead", el:tabel.tHead }]
+      .concat(Array.prototype.map.call(tabel.querySelectorAll("tbody.pk-item > tr"), function(r){ return { jenis:"baris", el:r }; }))
+      .concat([{ jenis:"ringkas", el:tabel.querySelector("tbody.pk-ringkas") }, { jenis:"judul", el:note.querySelector(".pk-note-judul") }])
+      .concat(Array.prototype.map.call(note.querySelectorAll("ol > li"), function(l, i){ return { jenis:"li", el:l, no:i + 1 }; }))
+      .concat([{ jenis:"penutup", el:isi.querySelector(".pk-penutup") }]);
+    urut.forEach(function(a, i){
+      var nx = urut[i + 1];
+      a.h = (nx ? y(nx.el) : a.el.getBoundingClientRect().bottom - atas0) - y(a.el);
+    });
+    var hThead = urut[1].h;
+    var hal = [[]], pakai = 0;
+    var halIni = function(){ return hal[hal.length - 1]; };
+    var taruh = function(a){ halIni().push(a); pakai += a.h; };
+    var halBaru = function(){ hal.push([]); pakai = 0; };
+    var judulTabel = function(){ taruh({ jenis:"thead", el:tabel.tHead, h:hThead }); };
+    urut.forEach(function(a, i){
+      var perlu = a.h + ((a.jenis === "thead" || a.jenis === "judul") ? urut[i + 1].h : 0);   /* menempel ke berikutnya */
+      if (pakai + perlu <= batas + 0.5 || !halIni().length) { taruh(a); return; }
+      if (a.jenis === "ringkas") {   /* TOTAL/PPN ikut baris barang terakhir ke halaman berikutnya */
+        var bawa = [];
+        if (halIni().length && halIni()[halIni().length - 1].jenis === "baris") bawa.push(halIni().pop());
+        if (halIni().length && halIni()[halIni().length - 1].jenis === "thead") halIni().pop();
+        halBaru(); judulTabel(); bawa.forEach(taruh); taruh(a); return;
+      }
+      halBaru();
+      if (a.jenis === "baris") judulTabel();
+      taruh(a);
+    });
+    hal = hal.filter(function(p){ return p.length; });
+    var lewat = hal.some(function(p){ return p.reduce(function(s, a){ return s + a.h; }, 0) > batas + 1; });
+    if (lewat) return null;
+    var kelasTabel = tabel.className, theadHtml = tabel.querySelector("colgroup").outerHTML + tabel.tHead.outerHTML;
+    var halaman = hal.map(function(p){
+      var html = "", t = null, n = null;
+      var tutupT = function(){
+        if (!t) return;
+        html += '<div class="pk-tw"><table class="' + kelasTabel + '" data-tanpa-urut>' + theadHtml
+          + (t.baris.length ? '<tbody class="pk-item">' + t.baris.join("") + '</tbody>' : '') + t.ringkas + '</table></div>';
+        t = null;
+      };
+      var tutupN = function(){
+        if (!n) return;
+        html += '<div class="pk-note">' + n.judul + '<ol start="' + n.mulai + '">' + n.li.join("") + '</ol></div>';
+        n = null;
+      };
+      p.forEach(function(a){
+        if (a.jenis === "kepala" || a.jenis === "penutup") { tutupT(); tutupN(); html += a.el.outerHTML; }
+        else if (a.jenis === "thead" || a.jenis === "baris" || a.jenis === "ringkas") {
+          tutupN();
+          if (!t) t = { baris:[], ringkas:"" };
+          if (a.jenis === "baris") t.baris.push(a.el.outerHTML);
+          else if (a.jenis === "ringkas") t.ringkas = a.el.outerHTML;
+        } else {
+          tutupT();
+          if (!n) n = { judul:"", li:[], mulai:1 };
+          if (a.jenis === "judul") n.judul = a.el.outerHTML;
+          else { if (!n.li.length) n.mulai = a.no; n.li.push(a.el.outerHTML); }
+        }
+      });
+      tutupT(); tutupN();
+      return '<section class="ck-hlm"><img class="ck-kop" src="' + KOP_PNW + '" alt=""><div class="ck-badan"><div class="pnw-kertas">'
+        + '<div class="pk-isi">' + html + '</div></div></div><img class="ck-kaki" src="' + KAKI_PNW + '" alt=""></section>';
+    });
+    return halaman.join("");
+  } catch (e) {
+    return null;
+  } finally {
+    if (ukur.parentNode) ukur.parentNode.removeChild(ukur);
+  }
+}
 /* #55: Unduh PDF — jendela cetak browser ("Simpan sebagai PDF"; di HP: Bagikan/Cetak → PDF). Hanya penawaran yang sudah
-   disimpan (bernomor). Nama berkas bawaan mengikuti contoh: "040_PENAWARAN_PT_Zioflex_Mandiri_Indonesia". */
-function cetakPenawaran(d){
-  var lama = $("cetak-pnw"); if (lama) lama.parentNode.removeChild(lama);
-  var el = document.createElement("div");
-  el.id = "cetak-pnw";
+   disimpan (bernomor). Nama berkas bawaan: "<nomor depan>_PENAWARAN_<nama perusahaan>".
+   Review #55: elemen cetak dipasang SELAMA laci detail penawaran terbuka dan dilepas saat laci ditutup — bukan sesudah
+   afterprint/1,5 detik (Chrome Android ≤150 memicu afterprint sebelum mencetak → yang tercetak layar ERP). Cetak dari
+   menu browser / Ctrl+P pun mencetak surat ini. Huruf (Calibri/Carlito) & gambar ditunggu sebelum dipenggal & dicetak. */
+var CETAK_PNW = { d: null, el: null, gaya: null, judul: null, siap: null };
+function hurufPnwSiap(){
+  if (!document.fonts || !document.fonts.load) return Promise.resolve();
+  var muat = Promise.all([document.fonts.load("11pt Carlito"), document.fonts.load("700 11pt Carlito"),
+                          document.fonts.load("11pt Calibri"), document.fonts.load("700 11pt Calibri")]).catch(function(){});
+  return Promise.race([muat, new Promise(function(ok){ setTimeout(ok, 3000); })]);
+}
+function susunCetakPnw(d){
+  var el = CETAK_PNW.el; if (!el) return;
+  var hal = halamanPnwHtml(d);
+  if (hal) { el.className = "ck-cetak"; el.innerHTML = hal; return; }
+  el.className = "ck-cetak ck-alir";   /* cadangan: alur biasa, kop & kaki fixed */
   el.innerHTML = '<img class="ck-kop" src="' + KOP_PNW + '" alt=""><img class="ck-kaki" src="' + KAKI_PNW + '" alt="">'
     + '<table class="ck-hal" data-tanpa-urut><thead><tr><td><div class="ck-atas"></div></td></tr></thead>'
     + '<tfoot><tr><td><div class="ck-bawah"></div></td></tr></tfoot>'
     + '<tbody><tr><td><div class="pnw-kertas">' + docPenawaranHtml(d, true) + '</div></td></tr></tbody></table>';
+}
+function lepasCetakPnw(){
+  if (CETAK_PNW.el && CETAK_PNW.el.parentNode) CETAK_PNW.el.parentNode.removeChild(CETAK_PNW.el);
+  if (CETAK_PNW.gaya && CETAK_PNW.gaya.parentNode) CETAK_PNW.gaya.parentNode.removeChild(CETAK_PNW.gaya);
+  document.body.classList.remove("cetak-pnw");
+  if (CETAK_PNW.judul !== null) document.title = CETAK_PNW.judul;
+  CETAK_PNW.d = null; CETAK_PNW.el = null; CETAK_PNW.gaya = null; CETAK_PNW.judul = null; CETAK_PNW.siap = null;
+}
+function pasangCetakPnw(d){
+  lepasCetakPnw();
+  CETAK_PNW.d = d;
+  var el = document.createElement("div");
+  el.id = "cetak-pnw";
   document.body.appendChild(el);
+  CETAK_PNW.el = el;
   var gaya = document.createElement("style");
   gaya.id = "gaya-cetak-pnw";
   gaya.textContent = "@page{size:A4;margin:0}";
   document.head.appendChild(gaya);
-  var judulLama = document.title;
-  document.title = String(d.nomor || "").split("/")[0] + "_PENAWARAN_"
-    + String(d.kepada || "").replace(/[^0-9A-Za-z]+/g, "_").replace(/^_+|_+$/g, "");
+  CETAK_PNW.gaya = gaya;
   document.body.classList.add("cetak-pnw");
-  var selesai = false;
-  function bersih(){
-    if (selesai) return; selesai = true;
-    document.body.classList.remove("cetak-pnw");
-    document.title = judulLama;
-    if (gaya.parentNode) gaya.parentNode.removeChild(gaya);
-    if (el.parentNode) el.parentNode.removeChild(el);
-    window.removeEventListener("afterprint", bersih);
-  }
-  window.addEventListener("afterprint", bersih);
-  var gambar = Array.prototype.slice.call(el.querySelectorAll("img"));
-  Promise.all(gambar.map(function(g){ return g.decode ? g.decode().catch(function(){}) : null; })).then(function(){
-    window.print();
-    setTimeout(bersih, 1500);   /* afterprint tidak selalu terpicu (iOS/Android) — jendela cetak sudah membawa salinannya */
-  });
+  susunCetakPnw(d);
+  CETAK_PNW.siap = hurufPnwSiap().then(function(){ if (CETAK_PNW.d === d) susunCetakPnw(d); });
+  return CETAK_PNW.siap;
 }
+function namaBerkasPnw(d){
+  return String(d.nomor || "").split("/")[0] + "_PENAWARAN_"
+    + String(d.kepada || "").replace(/[^0-9A-Za-z]+/g, "_").replace(/^_+|_+$/g, "");
+}
+function cetakPenawaran(d){
+  if (CETAK_PNW.d !== d || !CETAK_PNW.el || !CETAK_PNW.el.isConnected) pasangCetakPnw(d);
+  sibuk(true, "Menyiapkan PDF…");
+  return Promise.resolve(CETAK_PNW.siap)
+    .then(function(){ return segarkanSalesDok(d.rep); })
+    .then(function(ada){
+      if (d.rep && !ada) throw new Error("Data sales penawaran ini belum termuat — tekan Muat ulang, lalu unduh lagi.");
+      if (CETAK_PNW.d !== d) throw new Error("Laci penawaran sudah ditutup.");
+      susunCetakPnw(d);   /* data tanda tangan segar */
+      var gambar = Array.prototype.slice.call(CETAK_PNW.el.querySelectorAll("img"));
+      return Promise.all(gambar.map(function(g){
+        return g.decode ? Promise.race([g.decode().catch(function(){}), new Promise(function(ok){ setTimeout(ok, 1000); })]) : null;
+      }));
+    })
+    .then(function(){
+      sibuk(false);
+      if (CETAK_PNW.judul === null) CETAK_PNW.judul = document.title;
+      document.title = namaBerkasPnw(d);
+      window.print();
+    })
+    .catch(function(e){ sibuk(false); toast(e.message || String(e), true); });
+}
+window.addEventListener("afterprint", function(){
+  if (CETAK_PNW.judul !== null) { document.title = CETAK_PNW.judul; CETAK_PNW.judul = null; }
+});
+window.addEventListener("beforeprint", function(){   /* jaga-jaga: elemen cetak hilang selagi laci masih terbuka */
+  if (CETAK_PNW.d && (!CETAK_PNW.el || !CETAK_PNW.el.isConnected)) pasangCetakPnw(CETAK_PNW.d);
+});
 /* baris form → baris dokumen; mode = mode PPN (#42: bawah list dari DPP) */
 function barisDokPenawaran(b, mode){
   var pr = b.kode ? produkById(b.kode) : null, isSet = !!(b.set_id || b.setInline);
+  /* review #55: komponen set dengan nama dokumen (bukan kode) */
+  var komp = b.setInline ? (b.setKomp || null)
+           : (b.set_id ? (((LANJUT.set && LANJUT.set.baris) || []).filter(function(x){ return String(x.id) === String(b.set_id); })[0] || {}).komponen : null);
+  var rinciDok = komp && komp.length ? rinciKomponenDok(komp) : "";
   return { judul: isSet ? (b.deskripsi || "Set") : (pr ? namaDokProduk(pr) : (b.usulanTeks || b.deskripsi || "—")),   /* #55 */
-           sub: isSet ? ("1 set = " + (b.setRinci || "—")) : "",
+           sub: isSet ? ("1 set = " + (rinciDok || b.setRinci || "—")) : "",
            spesifikasi: String(b.spesifikasi || "").trim(), qty: b.qty, satuan: b.satuan || (isSet ? "set" : "pcs"),
            harga: b.harga, diskon: Number(b.diskon) || 0, diskon_tipe: b.diskon_tipe || "rp",   /* #60 */
            set: isSet, bawah: bawahListPnw(b, b.list, mode) };
@@ -11433,12 +11649,11 @@ function dataDokPenawaranQ(q, lines){
     baris: lines.map(function(l){
       var pr = l.product_id ? produkById(l.product_id) : null;
       var isSet = !!l.set_id || l.satuan === "set" || adaSet(l);   /* set yang sudah dihapus: set_id NULL, satuan tetap "set"; #28 set inline */
-      var rinci = "";
-      if (Array.isArray(l.set_komponen) && l.set_komponen.length) rinci = rinciKomponen(l.set_komponen);
-      else if (l.set_id) {
-        var s = ((LANJUT.set && LANJUT.set.baris) || []).filter(function(x){ return String(x.id) === String(l.set_id); })[0];
-        if (s) rinci = setRincian(s);
-      }
+      /* review #55: isi set yang DIBEKUKAN saat penawaran disimpan — set inline (set_komponen) atau set master (set_isi,
+         berkas 139u); baris lama tanpa salinan → tanpa "1 set = …" (bukan isi set sekarang dari daftar yang kebetulan termuat) */
+      var komp = Array.isArray(l.set_komponen) && l.set_komponen.length ? l.set_komponen
+               : (Array.isArray(l.set_isi) && l.set_isi.length ? l.set_isi : null);
+      var rinci = komp ? rinciKomponenDok(komp) : "";
       return { judul: pr ? namaDokProduk(pr) : (l.deskripsi || "—"),   /* #55: nama dokumen; #59 usulan tanpa "(usulan)" */
                sub: isSet && rinci ? "1 set = " + rinci : "",
                spesifikasi: l.spesifikasi, qty: l.qty, satuan: l.satuan, harga: l.harga, set: isSet,
@@ -11460,13 +11675,20 @@ function formDetailPenawaran(q){
   if (q.kepada_grup) h += '<p class="muted" style="margin:0 0 8px;font-size:12px">Ditujukan ke grup — tercatat milik <b>'
     + esc(namaPenawaran(q)) + '</b>.</p>';   /* #58 */
   var dokQ = dataDokPenawaranQ(q, lines);   /* #55 */
-  h += docPenawaranHtml(dokQ);
+  h += '<div id="pnw-dok">' + docPenawaranHtml(dokQ) + '</div>';
   $("laci-form").innerHTML = h;
   $("laci-kaki").innerHTML = '<button class="btn utama" id="btn-pnw-unduh" type="button">Unduh PDF</button> '   /* #55 */
     + (bolehBuatPenawaran()
       ? '<button class="btn" id="btn-pnw-salin" type="button">Buat penawaran baru dari ini</button> ' : '')   /* #44 */
     + '<button class="btn" id="btn-pnw-detail-tutup" type="button">Tutup</button>';
   bukaLaci("Detail penawaran — " + q.nomor);
+  /* review #55: surat siap cetak selama laci terbuka (juga Ctrl+P / menu browser); tanda tangan dibaca segar */
+  pasangCetakPnw(dokQ);
+  segarkanSalesDok(q.sales_rep_id).then(function(){
+    if (CETAK_PNW.d !== dokQ || !$("pnw-dok")) return;
+    $("pnw-dok").innerHTML = docPenawaranHtml(dokQ);
+    susunCetakPnw(dokQ);
+  });
   $("btn-pnw-unduh").addEventListener("click", function(){ cetakPenawaran(dokQ); });
   $("btn-pnw-detail-tutup").addEventListener("click", tutupLaci);
   if ($("btn-pnw-salin")) $("btn-pnw-salin").addEventListener("click", function(){ salinPenawaran(q); });
@@ -17799,39 +18021,52 @@ function blokSalesDokumen(){
     repAlur().then(function(){ if (tabAktif === "pengguna" && ALUR.rep.length) panelPengguna(); }).catch(function(){});
     return '';
   }
-  var reps = ALUR.rep.filter(function(r){ return r.aktif !== false; });
-  if (!reps.length) return '';
-  var adaKolom = reps.some(function(r){ return Object.prototype.hasOwnProperty.call(r, "nama_dokumen"); });
-  if (!adaKolom) return '';   /* database tanpa berkas 139p */
+  if (!ALUR.rep.some(function(r){ return Object.prototype.hasOwnProperty.call(r, "nama_dokumen"); })) return '';   /* tanpa berkas 139p */
+  /* review #55: sales nonaktif ikut (terlipat) — penawaran lama mereka masih bisa diunduh, kontaknya bisa dikosongkan */
+  var aktif = ALUR.rep.filter(function(r){ return r.aktif !== false; }), nonaktif = ALUR.rep.filter(function(r){ return r.aktif === false; });
+  if (!aktif.length && !nonaktif.length) return '';
+  var baris = function(r){
+    return '<tr data-sd-baris="' + r.id + '"><td class="l">' + esc(r.nama) + '</td>'
+      + '<td class="l"><input type="text" class="sd-nama" data-id="' + r.id + '" maxlength="120" value="' + esc(r.nama_dokumen || "") + '" placeholder="' + esc(r.nama) + '"></td>'
+      + '<td class="l"><input type="tel" class="sd-hp" data-id="' + r.id + '" value="' + esc(r.hp_dokumen ? hpTampil(r.hp_dokumen) : "") + '" placeholder="0812…"></td>'
+      + '<td class="l"><input type="email" class="sd-email" data-id="' + r.id + '" maxlength="200" value="' + esc(r.email_dokumen || "") + '" placeholder="nama@rodahammerindo.com"></td>'
+      + '<td><button type="button" class="btn kecil sd-simpan" data-id="' + r.id + '">Simpan</button></td></tr>';
+  };
+  var kepala = '<thead><tr><th class="l">Sales</th><th class="l">Nama di tanda tangan</th>'
+    + '<th class="l">No. HP</th><th class="l">E-mail kantor</th><th></th></tr></thead>';
   return '<h3 class="sec">Data sales di dokumen penawaran</h3>'
     + '<div class="flag"><span class="f-ico">i</span><div>Dicetak di bawah "Hormat kami," pada penawaran yang diunduh '
-    + '(contoh: <b>Riksa Sri Gustiana,S.Sos</b> · +62 878-0017-3413 · riksa@rodahammerindo.com). Kosong → nama sales saja.</div></div>'
-    + '<div class="tw"><table data-tanpa-urut><thead><tr><th class="l">Sales</th><th class="l">Nama di tanda tangan</th>'
-    + '<th class="l">No. HP</th><th class="l">E-mail kantor</th><th></th></tr></thead><tbody>'
-    + reps.map(function(r){
-        return '<tr><td class="l">' + esc(r.nama) + '</td>'
-          + '<td class="l"><input type="text" class="sd-nama" data-id="' + r.id + '" maxlength="120" value="' + esc(r.nama_dokumen || "") + '" placeholder="' + esc(r.nama) + '"></td>'
-          + '<td class="l"><input type="tel" class="sd-hp" data-id="' + r.id + '" value="' + esc(r.hp_dokumen ? hpTampil(r.hp_dokumen) : "") + '" placeholder="0812…"></td>'
-          + '<td class="l"><input type="email" class="sd-email" data-id="' + r.id + '" maxlength="200" value="' + esc(r.email_dokumen || "") + '" placeholder="nama@rodahammerindo.com"></td>'
-          + '<td><button type="button" class="btn kecil sd-simpan" data-id="' + r.id + '">Simpan</button></td></tr>';
-      }).join("")
-    + '</tbody></table></div>';
+    + '(contoh: <b>Nama Lengkap, S.E.</b> · +62 812-xxxx-xxxx · nama@rodahammerindo.com). Kosong → nama sales saja.</div></div>'
+    + '<div class="tw"><table data-tanpa-urut>' + kepala + '<tbody>' + aktif.map(baris).join("") + '</tbody></table></div>'
+    + (nonaktif.length ? '<details style="margin-top:8px"><summary class="muted">Sales nonaktif (' + nonaktif.length + ') — kontak '
+        + 'di penawaran lama mereka</summary><div class="tw"><table data-tanpa-urut>' + kepala + '<tbody>'
+        + nonaktif.map(baris).join("") + '</tbody></table></div></details>' : '');
 }
 function pasangSalesDokumen(){
   Array.prototype.forEach.call(document.querySelectorAll("#p-pengguna .sd-simpan"), function(b){
     b.addEventListener("click", function(){
       var id = b.dataset.id, ambil = function(k){ var e = document.querySelector("#p-pengguna .sd-" + k + '[data-id="' + id + '"]'); return e ? e.value.trim() : ""; };
       var nama = ambil("nama"), hpKetik = ambil("hp"), email = ambil("email").toLowerCase();
+      if (/[A-Za-z]/.test(hpKetik)) { toast('No. HP "' + hpKetik + '" berisi huruf — isi angka saja, mis. 0812xxxxxxx.', true); return; }
       var hp = hpKetik ? hpNormal(hpKetik) : null;
       if (hpKetik && !(hp && /^[1-9][0-9]{8,15}$/.test(hp))) { toast('No. HP "' + hpKetik + '" tidak valid — 9 sampai 16 angka, mis. 0812xxxxxxx.', true); return; }
       if (email && (email.length > 200 || !EMAIL_POLA.test(email))) { toast('E-mail "' + email + '" tidak valid.', true); return; }
+      /* review #55: hanya kolom yang berubah dari nilai yang tergambar (dua owner menyimpan bersamaan tidak saling timpa) */
+      var lama = repAlurById(id) || {}, badan = {};
+      if ((nama || null) !== (lama.nama_dokumen || null)) badan.nama_dokumen = nama || null;
+      if ((hp || null) !== (lama.hp_dokumen || null)) badan.hp_dokumen = hp;
+      if ((email || null) !== (lama.email_dokumen || null)) badan.email_dokumen = email || null;
+      if (!Object.keys(badan).length) { toast("Tidak ada yang berubah."); return; }
       sibuk(true, "Menyimpan…");
-      api("PATCH", "/sales_reps?id=eq." + Number(id), { nama_dokumen: nama || null, hp_dokumen: hp, email_dokumen: email || null }, "return=representation")
+      api("PATCH", "/sales_reps?id=eq." + Number(id), badan, "return=representation")
         .then(function(r){
           var baru = Array.isArray(r) ? r[0] : r;
           if (!baru) throw new Error("Data sales tidak tersimpan — hanya owner atau GM yang boleh mengubahnya.");
           ALUR.rep = ALUR.rep.map(function(x){ return String(x.id) === String(id) ? Object.assign({}, x, baru) : x; });
-          sibuk(false); toast("Data dokumen " + (baru.nama || "sales") + " tersimpan."); panelPengguna();
+          sibuk(false); toast("Data dokumen " + (baru.nama || "sales") + " tersimpan.");
+          /* hanya baris ini yang digambar ulang — isian baris lain yang belum disimpan tidak hilang */
+          var set = function(k, v){ var e = document.querySelector("#p-pengguna .sd-" + k + '[data-id="' + id + '"]'); if (e) e.value = v; };
+          set("nama", baru.nama_dokumen || ""); set("hp", baru.hp_dokumen ? hpTampil(baru.hp_dokumen) : ""); set("email", baru.email_dokumen || "");
         })
         .catch(function(e){ sibuk(false); toast(e.message, true); });
     });
@@ -18264,6 +18499,7 @@ function pasangKeteranganTanggal(){
 }
 
 function bukaLaci(judul){
+  if (CETAK_PNW.d && !/^Detail penawaran/.test(judul)) lepasCetakPnw();   /* review #55: laci lain → surat cetak dilepas */
   $("laci-judul").textContent = judul;
   pasangKeteranganTanggal();
   $("tirai").hidden = false; $("laci").hidden = false;
@@ -18271,6 +18507,7 @@ function bukaLaci(judul){
   setTimeout(function(){ var f = $("laci-form").querySelector("input:not([disabled]),select:not([disabled])"); if (f) f.focus(); }, 40);
 }
 function tutupLaci(){
+  lepasCetakPnw();   /* review #55 */
   $("tirai").hidden = true; $("laci").hidden = true;
   $("laci-form").innerHTML = ""; $("laci-kaki").innerHTML = "";
   document.body.style.overflow = "";

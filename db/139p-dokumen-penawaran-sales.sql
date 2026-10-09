@@ -1,11 +1,10 @@
 -- ═══════════════════════════════════════════════════════════════════════
--- 139p · #55 (contoh penawaran dari Hannes 9 Okt — "040 PENAWARAN PT Zioflex Mandiri Indonesia"): data sales untuk
---        tanda tangan dokumen penawaran
+-- 139p · #55 (contoh penawaran dari Hannes 9 Okt): data sales untuk tanda tangan dokumen penawaran
 -- (nomor 139p: jatah nomor sesi ini 120–139; "p" = penawaran, diurutkan sesudah 139k dan sebelum berkas EHC 140+.)
 --
--- Template penawaran menutup dokumen dengan "Hormat kami," lalu nama lengkap sales beserta gelarnya (mis. "Riksa Sri
--- Gustiana,S.Sos"), No. HP, dan e-mail kantor (@rodahammerindo.com). Data itu belum ada: sales_reps.nama hanya nama
--- panggilan ("Riksa"), profiles.email adalah e-mail login pribadi, dan No. HP sales tidak tercatat di mana pun.
+-- Template penawaran menutup dokumen dengan "Hormat kami," lalu nama lengkap sales beserta gelarnya, No. HP, dan e-mail
+-- kantor (@rodahammerindo.com). Data itu belum ada: sales_reps.nama hanya nama panggilan, profiles.email adalah e-mail
+-- login pribadi, dan No. HP sales tidak tercatat di mana pun.
 --
 -- Perubahan:
 --  · sales_reps + nama_dokumen, hp_dokumen, email_dokumen (boleh kosong — dokumen memakai nama sales & tanpa baris
@@ -13,8 +12,9 @@
 --    sudah membaca sales_reps (rep_baca) — memang dicetak untuk customer.
 --  · Dirapikan trigger: spasi tepi dibuang, kosong → NULL, e-mail huruf kecil, No. HP dibakukan (hp_baku, sama dengan
 --    No. HP pelanggan). CHECK: nama ≤ 120 karakter, No. HP 9–16 angka, e-mail berbentuk nama@domain.
---  · Riksa diisi dari contoh penawaran Hannes (hanya bila masih kosong).
--- Tidak ada objek yang dibuang; data lain tidak berubah.
+--  · Review #55: berkas ini TIDAK lagi mengisi data sales mana pun (repo publik — data pribadi tidak ditulis di migrasi);
+--    owner mengisinya di tab Pengguna sesudah rilis. Bergantung pada public.hp_baku (berkas 115/131).
+-- Tidak ada objek yang dibuang; tidak ada data yang diubah.
 -- ═══════════════════════════════════════════════════════════════════════
 
 alter table public.sales_reps add column if not exists nama_dokumen  text;
@@ -47,11 +47,6 @@ do $$ begin
                                      and email_dokumen ~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$')));
   end if;
 end $$;
-
--- contoh penawaran Hannes 9 Okt (040/PQ/RSG/IX/2026)
-update public.sales_reps
-   set nama_dokumen = 'Riksa Sri Gustiana,S.Sos', hp_dokumen = '+62 878-0017-3413', email_dokumen = 'riksa@rodahammerindo.com'
- where nama = 'Riksa' and jenis = 'orang' and nama_dokumen is null and hp_dokumen is null and email_dokumen is null;
 
 do $$ begin
   if not exists (select 1 from pg_trigger where tgrelid = 'public.sales_reps'::regclass and tgname = 'sales_reps_dokumen_rapi') then

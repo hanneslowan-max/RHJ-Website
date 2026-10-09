@@ -280,7 +280,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 - Urutan kerja: #3 → #4 → #2 (+9, 10, 17) → #7 → #1.
 
 ## #55 — template penawaran & Unduh PDF (contoh Hannes 9 Okt)
-- Contoh: "040_PENAWARAN_PT_Zioflex_Mandiri_Indonesia.pdf" (Riksa). Kop & kaki = dua gambar JPEG dari PDF contoh (21 KB +
+- Contoh: PDF penawaran dari Hannes (9 Okt). Kop & kaki = dua gambar JPEG dari PDF contoh (21 KB +
   30 KB), ditanam sebagai data URI di index.html (CSP img-src data:). Ukuran/posisi dari PDF: kop 210 × 30 mm di atas, kaki
   202,8 × 22 mm, 4,6 mm dari bawah; teks Calibri 11 pt, margin kiri/kanan 25,4 mm.
 - FE: `docPenawaranHtml(d, cetak)` = satu template untuk pratinjau, detail, dan cetak; `cetakPenawaran(d)` = window.print
@@ -288,8 +288,9 @@ persen saat menyetujui harga (boleh 0, maks 50%).
   tabel tidak terpotong; nama berkas "040_PENAWARAN_<perusahaan>"). Tombol **Unduh PDF** di laci detail penawaran.
   `namaDokProduk` (merek + kode tanpa akhiran H/M/R/B + kata fungsi), `salesDokPnw` (tanda tangan), `tglSurat`.
   Owner: tab Pengguna › "Data sales di dokumen penawaran". Penanda "di bawah list" hanya di layar.
-- DB berkas 139p: sales_reps.nama_dokumen / hp_dokumen / email_dokumen (owner/GM; dirapikan trigger, CHECK); Riksa diisi
-  dari contoh. Sales lain perlu diisi owner (No. HP & e-mail kantor belum ada di data mana pun).
+- DB berkas 139p: sales_reps.nama_dokumen / hp_dokumen / email_dokumen (owner/GM; dirapikan trigger, CHECK). Sesudah review
+  #55 berkas ini tidak mengisi data sales mana pun (repo publik); DEV sudah terisi untuk satu sales dari contoh — di PROD
+  owner mengisinya di tab Pengguna.
 - Uji: render contoh → PDF 1 halaman, isi sama dengan contoh (tanggal, nomor, Kepada UP+HP, deskripsi "Hammer 500HPR-CU
   8\" mati" / "RHJ 03 ER 4\" hidup|mati", total, Note 1–5, rekening, penutup, tanda tangan Riksa); include + TOP 30 hari +
   diskon + spesifikasi + set inline + usulan + masa berlaku + catatan + tanda tangan tanpa data dokumen; non-PPN tanpa TOP;
@@ -298,12 +299,48 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 - **Beda dengan contoh yang menunggu keputusan Hannes** (sekarang mengikuti ATURAN B yang berlaku):
   (Q23) rupiah tampil sampai sen "Rp 1.451.500,00" — contoh "Rp.1.451.500,-";
   (Q24) mode Exclude menampilkan TOTAL, PPN 11%, TOTAL + PPN 11% (#42) — contoh hanya TOTAL + catatan "Belum termasuk PPN";
-  (Q25) nomor tetap format sistem "040/PQ/MCE/X/2026" (berkas 93) — contoh "040/PQ/RSG/IX/2026" (kode sales);
+  (Q25) nomor tetap format sistem "040/PQ/MCE/X/2026" (berkas 93) — contoh memakai kode sales di tengah nomor;
   (Q26) nama barang otomatis "RHJ 03 ER 4\" hidup" (RHJ-TW → RHJ) — mohon konfirmasi aturan penamaannya;
   (Q27) catatan 3–5 (tidak ada garansi, free delivery Jabodetabek, ekspedisi luar Jabodetabek) & rekening BCA dipakai untuk
   SEMUA penawaran (termasuk Non-PPN) — mohon konfirmasi.
-- **Rilis PROD:** 139p + index.html bersamaan (layar membaca kolom baru lewat select=*; tanpa 139p tanda tangan memakai nama
-  sales saja dan bagian owner tidak tampil).
+- **Rilis PROD:** 139p + 139u + index.html bersamaan (layar membaca kolom baru lewat select=*; daftar penawaran meminta
+  quote_lines.set_isi — tanpa 139u daftar penawaran gagal dengan petunjuk "jalankan berkas 139u"). Sesudah rilis owner mengisi
+  data dokumen sales di tab Pengguna.
+- **Review adversarial #55** (32 agen; 25 terkonfirmasi) → index.html + **berkas 139u (DEV 9 Okt)**:
+  (1, tinggi) tanpa Calibri (HP, Mac) huruf jatuh ke Arial/Roboto dan contoh 3 baris jadi 2 halaman → Carlito (Google Fonts,
+  ukuran sama dengan Calibri) dimuat & ditunggu sebelum cetak. (2/13) pemenggalan halaman ("Note:" yatim, penutup terbelah,
+  TOTAL terpisah) & (11) WebKit/iPhone tidak mengulang kop/kaki → **halaman dipenggal sendiri** (`halamanPnwHtml`): surat
+  diukur di wadah tersembunyi dengan aturan cetak yang sama (`.ck-cetak`), dibagi ke `section.ck-hlm` A4 yang masing-masing
+  membawa kop & kaki statis; kepala utuh, judul tabel diulang, TOTAL/PPN ikut baris terakhir, "Note:" ikut butir pertama,
+  penutup + tanda tangan utuh, lebar kolom dikunci (colgroup); satu baris lebih tinggi dari halaman → cadangan alur lama
+  (`ck-alir`). (8) 7 kolom harga besar melebar dari A4 → sel uang boleh patah, deskripsi/spesifikasi `overflow-wrap`,
+  padding rapat ≥ 7 kolom. (10/14/20) cetak bergantung afterprint/1,5 detik (Chrome Android ≤150 memicu afterprint sebelum
+  mencetak → layar ERP tercetak) & Ctrl+P mencetak layar → elemen cetak dipasang selama laci detail terbuka, dilepas saat
+  laci ditutup/laci lain dibuka; judul berkas dikembalikan saat afterprint. (9/21) data tanda tangan dari cache sesi →
+  dibaca segar saat laci dibuka & sebelum cetak; sales tak dikenal → tidak dicetak (tanpa "#24"). (12) "1 set = …" set
+  master dari daftar yang kebetulan termuat → `quote_lines.set_isi` dibekukan trigger saat disimpan (139u). (16) huruf
+  fungsi di tengah kode & "TYPE B" → dibuang per kata. (19) penanda "di bawah list" di dalam surat → catatan di atas kertas,
+  `.pk-internal/.pnw-catat` disembunyikan di cetak. (3/15) layar HP: TOTAL terpotong & teks panjang melebar → sel uang boleh
+  patah, `overflow-wrap:anywhere`, label "tata letak cetak bisa sedikit berbeda". (4/5/6) inden catatan & rekening sama
+  dengan contoh, tanpa ligatur, tanda inci ”, tabel 4 mm lebih lebar. (22/24) form owner: sales nonaktif ikut (terlipat),
+  PATCH hanya kolom yang berubah, baris lain tidak tergambar ulang, pesan CHECK terbaca. (23) data pribadi sales & nama
+  pelanggan contoh dihapus dari index.html, 139p, ATURAN, HANDOFF (riwayat git: Q31). (17) uji usulan diperbaiki.
+  Uji: uji55b 18/18 (contoh 1 halaman; Ctrl+P → surat; laci ditutup → dilepas; 4–30 baris × 3 mode: kop & kaki tiap
+  halaman, penutup utuh, TOTAL ikut baris terakhir, Note tidak yatim, judul tabel diulang; 7 kolom ±1,2 M tidak melebar;
+  baris raksasa → cadangan; nama dokumen 3 kasus; "di bawah list" tidak tercetak; set beku; tanda tangan segar; sales tak
+  dikenal ditolak; HP 390 px) + 9/9 tanpa Carlito lokal (webfont tertanam, 1 halaman); WebKitGTK (mesin Safari/iOS): 3/12/30
+  baris → kop & kaki tiap halaman, teks 38–267 mm; uji55 44/44, form owner 10/10; regresi uji_pnw 31/31, uji60 28/28,
+  uji60b 28/28, uji58 25/25, uji59b 16/16, uji_usulan 7/7. DB 139u (rollback): set master → set_isi dari komponen saat
+  disimpan, kiriman layar diabaikan, perubahan set sesudahnya tidak mengubah salinan.
+  **Diterima (dicatat):** garis tabel 1 px (Chromium tidak menggambar garis < 1 px; contoh ±0,5 pt); pratinjau layar tidak
+  berskala persis (berlabel); cetak di HP sungguhan (Android lama & iOS) belum diuji di perangkat — mohon dicoba sekali.
+  **Pertanyaan baru:** (Q30) baris Hal di contoh "Penawaran Harga –" (tanda pisah tanpa isi, sisa isian Word?) — kita cetak
+  "Penawaran Harga" saja; perlu kolom perihal? (Q31) **data pribadi di riwayat git publik**: nama lengkap, No. HP, e-mail
+  sales contoh dan nama pelanggan contoh sudah ter-push di cabang ini (commit ddb0d51; main belum) — sekarang dihapus dari
+  isi berkas, tetapi riwayatnya masih memuat. Tulis ulang riwayat cabang (force-push) atau diterima? (Q32) penawaran lama
+  sales NONAKTIF tetap mencetak No. HP & e-mail terakhirnya — owner kini bisa mengosongkannya di tab Pengguna; perlu
+  otomatis (mis. dikosongkan saat sales dinonaktifkan / hanya nama)? Q26 ditambah contoh DEV: "TSH PU 8" M Heavy Duty"
+  (mati) → "Osaka TSH PU 8” Heavy Duty mati", "03 NB 4" R - TYPE B" (rem) → "RHJ 03 NB 4” - TYPE B rem".
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
