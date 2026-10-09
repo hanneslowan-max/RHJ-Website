@@ -498,6 +498,47 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    `select s.no_sp, s.status, s.kepada from sales_orders s where not s.batal and s.no_surat_jalan is null and
    public.sp_pelanggan_hitam(s.customer_id, s.po_id, s.kepada, s.telp) is not null;` (atau sebelum migrasi: SP tidak batal
    tanpa surat jalan yang pelanggannya `blacklist`).
+   **Koreksi (review 139 no. 7):** kalimat "Pengiriman menandai & mengunci surat jalan pelanggan daftar hitam" di atas
+   hanya benar untuk owner/GM pada SP yang tertaut (penandanya dari data pelanggan, yang tidak terbaca Lie Sian) — sejak
+   139s penandanya dihitung database untuk semua peran.
+   **Review adversarial 139** (pemeriksa + verifikator; 8 terkonfirmasi) → **berkas 139s (DEV 9 Okt)** + FE:
+   (1, tinggi) SP yang hanya cocok nama/No. HP bisa dilepas sales/staff/Lie Sian dengan mengubah Kepada/No. HP atau sales
+   menempelkan PO-nya sendiri (sesudah kirim sebagian cek Vonny tidak gugur) → trigger `so_jaga_c_tahan_hitam`: SP yang
+   (baris lamanya) tertahan daftar hitam hanya diubah Kepada/No. HP/pelanggan/PO-nya oleh owner/GM (23514). (2, tinggi)
+   kembaran pelanggan daftar hitam (dibuat staff, atau sesudah nama/No. HP pelanggan daftar hitam diganti/dikosongkan)
+   lolos semua gerbang → tabel internal `pelanggan_hitam_jejak` (kunci nama & No. HP yang pernah dipakai pelanggan daftar
+   hitam; trigger `zz_jejak_hitam`; RLS tanpa kebijakan), `pelanggan_hitam_cocok`, `sp_pelanggan_hitam_rinci` (cara:
+   pelanggan / kembar / nama / hp) — `sp_pelanggan_hitam` kini juga menahan SP yang tertaut ke kembaran; SP & PO baru
+   untuk kembaran hanya owner/GM (`jaga_daftar_hitam_sp`, `jaga_blacklist_po`); ketikan Kepada dibandingkan sesudah
+   dirapikan; RPC `nama_pelanggan_kembar_rinci` (layar menyebut kembaran DAFTAR HITAM). (3/6) Vonny mengetik No. HP lain
+   → `lengkapi_pelanggan_sp` menolak selain owner/GM (23514) bila nama, No. HP tersimpan, atau No. HP ketikan cocok;
+   `cek_kelayakan_vonny` memeriksa No. HP tersimpan DAN ketikan. (4, rendah) pesan menyebut nama & alasan pelanggan/PO
+   sales lain sebelum RLS → sales yang bukan pemegang: RLS yang menolak / pesan umum; `sp_daftar_hitam_cek` null untuk
+   pelanggan/PO yang tidak boleh ia lihat; juga `jaga_blacklist_po`. (5) "tautkan ke pelanggan yang benar" menautkan ke
+   pelanggan daftar hitam & menimpa industrinya → `lengkapi_pelanggan_sp`/`tautkan_pelanggan_sp` menolak pelanggan
+   daftar hitam/kembarannya (22023), teks semua pesan → "ubah Kepada lewat Minta ubah SP (beri pembeda)", owner/GM diberi
+   peringatan saat membuat SP yang cocok ('peringatan: …' → konfirmasi layar). (7, rendah) penanda Pengiriman → RPC
+   `sp_status_kirim(p_ids)` (SP yang boleh dibaca pemanggil, `sp_terbaca`; nama pelanggan hanya untuk boleh_baca). (8,
+   rendah) koreksi nomor surat jalan yang sudah terbit ditolak → gerbang 0 hanya saat nomor PERTAMA KALI diisi; layar
+   memperingatkan sebelum membatalkan/mengosongkan surat jalan pelanggan daftar hitam.
+   Uji DEV rollback: Iwan ubah Kepada/No. HP SP tertahan → 23514; tempel PO (simulasi) → 23514; owner → boleh; staff
+   ganti nama & kosongkan HP pelanggan daftar hitam → ketikan nama lama tetap cocok (jejak), Iwan membuat pelanggan
+   bernama lama → kembar, PO untuknya → 23514; kembaran buatan staff → kembar, cek Iwan pesan umum, SP Iwan → 23514, owner
+   cek → peringatan, owner tautkan ke kembaran → 22023, kandidat bertanda, cek Vonny 'blacklist' (kembar), loloskan
+   22023, gerbang 23514; HP: cek tanpa/dengan ketikan HP lain → blacklist, Vonny lengkapi → 23514, ketik HP daftar hitam →
+   blacklist; Hendri cek pelanggan/PO Iwan → null, SP/PO → 42501 RLS (tanpa nama); owner lengkapi "CV Jumbo…" → 22023,
+   industri tetap; sp_status_kirim Lie Sian → ditandai tanpa nama, owner → bernama, Hendri → 0 baris; owner daftar
+   hitamkan 4849 → jejak 1; Lie Sian koreksi nomor SJ → boleh, kosongkan lalu isi baru → 23514. Layar uji139s 17/17;
+   regresi uji139r 23/23, uji_pelanggan 15/15, uji_hitam 16/16, uji_vonny 32/32, uji_vonny2 16/16, uji_set 46/46,
+   uji_nama 12/12, uji119 36/36, uji_hp 35/35, uji_lampiran 23/23, uji12 29/29, uji_nomor 10/10, uji_segar 34/34,
+   uji_komisi 33/33.
+   **Diterima (dicatat):** kembaran dengan pembeda yang TERLIHAT (mis. "… Cabang Bekasi") tidak tertangkap kunci nama —
+   sama dengan 8a; jejak juga menyimpan nama/No. HP lama pelanggan daftar hitam yang diganti karena salah data, sehingga
+   perusahaan lain bernama itu ikut tertahan sampai diberi pembeda (owner/GM).
+   **Cek PROD sebelum rilis 139s:** (informasi) SP yang akan tertahan sebagai kembaran: `select s.no_sp, s.kepada from
+   sales_orders s where not s.batal and s.no_surat_jalan is null and exists (select 1 from sp_pelanggan_hitam_rinci(
+   s.customer_id, s.po_id, s.kepada, s.telp) r where r.cara = 'kembar');` (jalankan sesudah migrasi); 139s naik bersama
+   index.html baru (sp_status_kirim, peringatan owner/GM) — index.html lama tetap jalan.
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
    → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada

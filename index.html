@@ -1855,7 +1855,7 @@ function formLeadBaru(){
     kotak.innerHTML = '<div class="flag kuning"><span class="f-ico">!</span><div><b>Nama ini sama dengan pelanggan lain.</b> '
       + 'Satu perusahaan sebaiknya satu data pelanggan — pakai yang sudah ada bila memang sama:'
       + rows.map(function(x){
-          return '<div style="margin-top:4px">' + esc(x.nama) + ' <span class="muted">(' + esc(x.sales ? "sales " + x.sales : "belum bertuan")
+          return '<div style="margin-top:4px">' + esc(x.nama) + ' <span class="muted">(' + esc(ketKembar(x))
             + ')</span> <button type="button" class="btn kecil" data-nb-pakai="' + Number(x.id) + '">Pakai pelanggan ini</button></div>';
         }).join("")
       + '<div style="margin-top:8px"><button type="button" class="btn kecil" id="nb-pisah">Tetap simpan sebagai pelanggan terpisah</button></div>'
@@ -4650,9 +4650,15 @@ function bolehPindahSales(c){
 /* 139r (review 138 no. 9): baris kembarannya sendiri (Lead baru menampilkannya sebagai pilihan) — gagal → [] */
 function barisNamaKembar(nama, kecuali){
   if (peranSales() || !String(nama || "").trim()) return Promise.resolve([]);
-  return api("POST", "/rpc/nama_pelanggan_kembar", { p_nama: String(nama).trim(), p_kecuali: kecuali || null })
+  var badan = { p_nama: String(nama).trim(), p_kecuali: kecuali || null };
+  /* 139s (review 139 no. 2d): versi rinci menyebut kembaran yang masuk daftar hitam; database lama → versi 138 */
+  return api("POST", "/rpc/nama_pelanggan_kembar_rinci", badan)
+    .catch(function(e){ if (rpcBelumAda(e)) return api("POST", "/rpc/nama_pelanggan_kembar", badan); throw e; })
     .then(function(r){ return Array.isArray(r) ? r : []; })
     .catch(function(){ return []; });
+}
+function ketKembar(x){
+  return (x.sales ? "sales " + x.sales : "belum bertuan") + (x.hitam ? " · DAFTAR HITAM" : "");
 }
 function konfirmasiNamaKembar(nama, kecuali){
   if (peranSales() || !String(nama || "").trim()) return Promise.resolve(true);
@@ -4660,8 +4666,11 @@ function konfirmasiNamaKembar(nama, kecuali){
     .then(function(r){
       if (!r.length) return true;
       return confirm("Nama ini sama dengan pelanggan lain:\n"
-        + r.map(function(x){ return "• " + x.nama + " (" + (x.sales ? "sales " + x.sales : "belum bertuan") + ")"; }).join("\n")
+        + r.map(function(x){ return "• " + x.nama + " (" + ketKembar(x) + ")"; }).join("\n")
         + "\n\nSatu perusahaan sebaiknya satu data pelanggan — pakai yang sudah ada bila memang sama. "
+        + (r.some(function(x){ return x.hitam; })
+            ? "Kembaran pelanggan DAFTAR HITAM: PO & SP untuk data baru ini akan ditahan (hanya owner/GM, barangnya tertahan) "
+              + "sampai namanya diberi pembeda atau daftar hitamnya dicabut. " : "")
         + "Tetap simpan sebagai pelanggan terpisah?");
     })
     .catch(function(){ return true; });
@@ -8457,7 +8466,16 @@ function simpanSp(khusus){
     return api("POST", "/rpc/sp_daftar_hitam_cek", { p_customer: f.customer_id || null, p_po: f.po_id || null,
                                                      p_kepada: f.kepada.trim(), p_telp: f.telp || null })
       .catch(function(e){ if (rpcBelumAda(e)) return null; throw e; })
-      .then(function(m){ if (typeof m === "string" && m.trim()) throw new Error(m); });
+      .then(function(m){
+        if (typeof m !== "string" || !m.trim()) return;
+        /* 139s (review 139 no. 5c): owner/GM — nama/No. HP/pelanggan cocok dengan pelanggan daftar hitam: SP boleh dibuat,
+           tetapi barangnya ditahan; diberi tahu dulu */
+        if (/^peringatan:\s*/i.test(m)) {
+          if (!confirm(m.replace(/^peringatan:\s*/i, "") + "\n\nTetap buat SP ini?")) throw { batal: true };
+          return;
+        }
+        throw new Error(m);
+      });
   })
   .then(function(){
     return hpCek ? api("POST", "/rpc/hp_terdaftar", { p_hp: hpCek })
@@ -8562,6 +8580,7 @@ function simpanSp(khusus){
     panelSp();
   })
   .catch(function(e){
+    if (e && e.batal) return;   /* 139s: owner/GM membatalkan sesudah peringatan daftar hitam */
     /* Galat RLS yang berbunyi "new row violates…" tidak menolong siapa
        pun. Kalau ia yang datang, lacinya dibuka dengan penjelasan —
        toast sekilas terlalu sempit untuk kalimat yang menyebut jalan
@@ -12644,6 +12663,23 @@ function tandaBaruLolosVonny(s){
   if (!t || Date.now() - t.getTime() > 3 * 86400000) return "";
   return '<div><span class="pill p-jalan" title="lolos cek Vonny ' + esc(waktuJkt(s.vonny_pada)) + '">baru lolos cek Vonny</span></div>';
 }
+/* 139s (review 139 no. 7): penanda daftar hitam & konfirmasi di Pengiriman dihitung database (sp_status_kirim) — Lie Sian
+   tidak membaca data pelanggan (RLS), dan SP yang belum tertaut / tertaut ke kembaran pelanggan daftar hitam tidak punya
+   penanda di data pelanggannya. Belum termuat (database tanpa 139s / gagal) → dari data pelanggan seperti dulu. */
+var STATUS_KIRIM = {};
+function muatStatusKirim(ids){
+  ids = (ids || []).filter(function(x){ return x != null; });
+  if (!ids.length) return Promise.resolve();
+  return api("POST", "/rpc/sp_status_kirim", { p_ids: ids })
+    .then(function(r){ (Array.isArray(r) ? r : []).forEach(function(t){ STATUS_KIRIM[t.so_id] = t; }); })
+    .catch(function(){ /* penanda dari data pelanggan; database tetap menjaga */ });
+}
+function statusKirimSp(s){
+  var t = s && STATUS_KIRIM[s.id], c = (s && s.customers) || {};
+  if (t) return { hitam: !!t.hitam, pesan: t.hitam_pesan || "Pelanggan Surat Pesanan ini masuk daftar hitam", konfirmasi: !!t.konfirmasi, db: true };
+  return { hitam: !!c.blacklist, konfirmasi: !!c.perlu_konfirmasi, db: false,
+           pesan: "Pelanggan Surat Pesanan ini masuk daftar hitam" + (c.alasan_blacklist ? " (" + c.alasan_blacklist + ")" : "") };
+}
 function muatKirim(){
   var K = LANJUT.kirim;
   var d = KIRIM_HAL.filter(function(x){ return x.id === K.hal; })[0] || KIRIM_HAL[0];
@@ -12656,7 +12692,8 @@ function muatKirim(){
       /* #52: dua tarikan bisa bertumpuk (diam-diam + tindakan pengguna). Ringkasan hanya menimpa baris
          yang ia ringkas; kalau baris sudah diganti tarikan lain, tarikan itulah yang meringkasnya. */
       var b = H.baris;
-      return ringkasSoUntuk(b).then(function(x){ if (H.baris === b) H.baris = x; });
+      return Promise.all([ringkasSoUntuk(b).then(function(x){ if (H.baris === b) H.baris = x; }),
+                          muatStatusKirim((b || []).map(function(x){ return x.id; }))]);   /* 139s */
     });
 }
 
@@ -12815,7 +12852,8 @@ function formKirim(s){
   var tahanKirim = (s.kirim_ok === false);
   /* Keamanan #7 (berkas 139): pelanggan daftar hitam → surat jalan ditahan total (izin kirim tidak membuka);
      invoice & pelunasan barang yang sudah keluar tetap boleh. */
-  var hitamKirim = !!(s.customers && s.customers.blacklist) && !s.no_surat_jalan;
+  var stKirim = statusKirimSp(s);   /* 139s: dihitung database (sp_status_kirim) */
+  var hitamKirim = stKirim.hitam && !s.no_surat_jalan;
   var belumVonny = (s.vonny_ok !== true) && !s.no_surat_jalan;   /* #8: surat jalan tertahan sampai Vonny nyatakan layak */
   /* #8: tombol cek hanya untuk SP yang memang 'menunggu vonny' — draft (belum ada
      baris) & 'menunggu gm' ditolak database (putuskan_vonny_cek, berkas 86). */
@@ -12838,10 +12876,11 @@ function formKirim(s){
         + '<b>Menunggu Konfirmasi GM</b>.</div></div>'
       : '');
   if (hitamKirim)
-    h += '<div class="flag merah"><span class="f-ico">!</span><div><b>Pelanggan Surat Pesanan ini masuk daftar hitam</b>'
-      + (s.customers.alasan_blacklist ? ' (' + esc(s.customers.alasan_blacklist) + ')' : '') + '. Barangnya ditahan total — '
+    h += '<div class="flag merah"><span class="f-ico">!</span><div><b>' + esc(stKirim.pesan) + '</b>. Barangnya ditahan total — '
       + 'surat jalan dikunci di sini dan ditolak database, izin kirim tidak membukanya. Owner/GM mencabut daftar hitam '
-      + 'di tab Pelanggan atau membatalkan sisa SP. Invoice & pelunasan barang yang sudah keluar tetap bisa.</div></div>';
+      + 'di tab Pelanggan atau membatalkan sisa SP; bila ini perusahaan/orang lain, nama/No. HP-nya diberi pembeda dulu '
+      + '(Minta ubah SP, atau tab Pelanggan untuk pelanggan yang tertaut). Invoice & pelunasan barang yang sudah keluar '
+      + 'tetap bisa.</div></div>';
   h += '<div class="tiles" style="margin-bottom:4px">'
     + tile("No SP", s.no_sp, tglTampil(s.tanggal))
     + tile("Nilai", rp(r ? r.grand_total : null), ketPpn(r))   /* #30 */
@@ -12934,6 +12973,13 @@ function formKirim(s){
   if (kunci) return;
   $("btn-kr-simpan").addEventListener("click", function(){
     var sjNo = nilaiForm("kr_sj_no"),  sjTgl = nilaiForm("kr_sj_tgl");
+    /* 139s (review 139 no. 8): nomor surat jalan yang sudah terbit boleh DIKOREKSI; mengosongkannya berarti barang dianggap
+       belum keluar — pada pelanggan daftar hitam, surat jalan pengganti akan ditolak database */
+    if (s.no_surat_jalan && !sjNo && statusKirimSp(s).hitam
+        && !confirm("Pelanggan Surat Pesanan ini masuk daftar hitam (atau cocok dengannya). Mengosongkan nomor surat jalan "
+                    + "berarti barangnya dianggap belum keluar, dan surat jalan pengganti akan DITOLAK sampai owner/GM "
+                    + "mencabut daftar hitamnya. Untuk memperbaiki salah ketik, ganti nomornya saja (jangan dikosongkan). "
+                    + "Tetap kosongkan?")) return;
     var inNo = nilaiForm("kr_inv_no"),  inTgl = nilaiForm("kr_inv_tgl");
     var fkNo = nilaiForm("kr_fak_no"),  fkTgl = nilaiForm("kr_fak_tgl");
     if (sjNo && !sjTgl) { tampilPesan("Tanggal surat jalan belum diisi."); return; }
@@ -12984,8 +13030,9 @@ function gambarKirimPartial(s, lines, kirimList){
   var semuaTerkirim = rows.length > 0 && rows.every(function(r){ return r.sisa <= 0; });
   /* #15: cermin gerbang database (gerbang_kirim_sp) — berlaku di SETIAP surat jalan, bukan hanya
      yang terakhir. Tombol hanya disembunyikan; penolakan sebenarnya di database. */
-  var perluKonf = !!(s.customers && s.customers.perlu_konfirmasi) && s.kirim_ok !== true;
-  var hitamKirim = !!(s.customers && s.customers.blacklist);   /* 139: daftar hitam → ditahan total, izin kirim tidak membuka */
+  var stKirim = statusKirimSp(s);   /* 139s: dihitung database — juga untuk Lie Sian & SP yang belum tertaut */
+  var perluKonf = stKirim.konfirmasi && s.kirim_ok !== true;
+  var hitamKirim = stKirim.hitam;   /* 139: daftar hitam → ditahan total, izin kirim tidak membuka */
   var tanpaPo = !s.po_id && !s.po_menyusul && !s.tanpa_po_ok;
   var bolehTerbitDasar = bolehTerbitkan() && s.vonny_ok === true && s.status !== "menunggu gm"
                     && s.kirim_ok !== false && !s.no_invoice && !s.no_surat_jalan;
@@ -13068,9 +13115,9 @@ function gambarKirimPartial(s, lines, kirimList){
   } else {
     h += tabel;
     if (hitamKirim && rows.some(function(r){ return r.sisa > 0; }))
-      h += '<div class="flag merah"><span class="f-ico">!</span><div><b>Pelanggan masuk daftar hitam</b>'
-        + (s.customers.alasan_blacklist ? ' (' + esc(s.customers.alasan_blacklist) + ')' : '') + '. Sisa barangnya ditahan '
-        + 'total — izin kirim tidak membukanya. Owner/GM mencabut daftar hitam atau membatalkan sisa SP.</div></div>';
+      h += '<div class="flag merah"><span class="f-ico">!</span><div><b>' + esc(stKirim.pesan) + '</b>. Sisa barangnya ditahan '
+        + 'total — izin kirim tidak membukanya. Owner/GM mencabut daftar hitam atau membatalkan sisa SP; bila ini '
+        + 'perusahaan/orang lain, nama/No. HP-nya diberi pembeda dulu.</div></div>';
     else if (bolehTerbitDasar && perluKonf)
       h += '<div class="flag merah"><span class="f-ico">!</span><div><b>Pelanggan perlu konfirmasi.</b> '
         + 'Vonny atau GM harus mengizinkan pengiriman dulu — berlaku juga untuk pengiriman sebagian.</div></div>';
@@ -13086,7 +13133,12 @@ function gambarKirimPartial(s, lines, kirimList){
   if ($("kr-sj-terbit")) $("kr-sj-terbit").addEventListener("click", function(){ terbitkanSjPartial(s); });
   Array.prototype.forEach.call(box.querySelectorAll(".kr-sj-batal"), function(b){
     b.addEventListener("click", function(){
-      if (!confirm("Batalkan surat jalan ini? Qty-nya kembali jadi sisa.")) return;
+      /* 139s (review 139 no. 8): pelanggan daftar hitam — sisa yang kembali tidak bisa dikirim ulang */
+      if (!confirm(hitamKirim
+          ? "Pelanggan Surat Pesanan ini masuk daftar hitam (atau cocok dengannya). Bila surat jalan ini dibatalkan, qty-nya "
+            + "kembali jadi sisa dan surat jalan pengganti akan DITOLAK — barang yang sudah keluar tidak bisa di-invoice sampai "
+            + "owner/GM mencabut daftar hitamnya. Lanjutkan membatalkan?"
+          : "Batalkan surat jalan ini? Qty-nya kembali jadi sisa.")) return;
       sibuk(true, "Membatalkan…");
       api("POST", "/rpc/batal_surat_jalan", { p_kirim: Number(b.dataset.id) })
         .then(function(m){ sibuk(false); toast(String(Array.isArray(m)?m[0]:m) || "Dibatalkan."); segarkanKirim(s.id); })
@@ -21357,6 +21409,8 @@ window.__segar = {
   detailSp: function(row){ formDetailDoc("sp", row); },    /* #51: uji detail SP */
   cekVonny: function(row){ formCekVonny(row); },            /* #57: uji laci Double Check */
   kirimPartial: function(s, l, k){ gambarKirimPartial(s, l, k); },   /* #57: uji Pengiriman bertahap */
+  kirim: function(row){ formKirim(row); },                /* 139s: uji laci Pengiriman */
+  statusKirim: function(ids){ return muatStatusKirim(ids); },
   pelangganTab: function(c){ formPelangganTab(c); },        /* keamanan #2: uji laci pelanggan */
   pelangganCrm: function(c){ formPelanggan(c); },
   leadBaru: function(){ formLeadBaru(); },
