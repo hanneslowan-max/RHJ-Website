@@ -1841,6 +1841,38 @@ function formLeadBaru(){
   hpEl.addEventListener("change", cariPelanggan);
   hpEl.addEventListener("blur", cariPelanggan);
 
+  function pakaiPelangganLead(ada){
+    pilihan = ada;
+    $("nb-temuan").innerHTML = '<div class="flag ok"><span class="f-ico">✓</span><div>Pelanggan lama: <b>' + esc(ada.nama)
+      + '</b>. Tekan Simpan lead lagi.</div></div>';
+    $("f_nb_nama").value = ada.nama || ""; $("f_nb_pic").value = ada.pic || ""; $("f_nb_lokasi").value = ada.lokasi || "";
+  }
+  /* 139r (review 138 no. 9): owner/GM/staff — nama sama dengan pelanggan lain → pilih memakai yang sudah ada, atau tetap
+     simpan sebagai pelanggan terpisah (dulu hanya confirm: batal = lead tidak tersimpan, tanpa jalan memakai yang ada). */
+  var izinKembar = false;
+  function tawarkanKembarLead(rows){
+    var kotak = $("nb-temuan"); if (!kotak) return;
+    kotak.innerHTML = '<div class="flag kuning"><span class="f-ico">!</span><div><b>Nama ini sama dengan pelanggan lain.</b> '
+      + 'Satu perusahaan sebaiknya satu data pelanggan — pakai yang sudah ada bila memang sama:'
+      + rows.map(function(x){
+          return '<div style="margin-top:4px">' + esc(x.nama) + ' <span class="muted">(' + esc(x.sales ? "sales " + x.sales : "belum bertuan")
+            + ')</span> <button type="button" class="btn kecil" data-nb-pakai="' + Number(x.id) + '">Pakai pelanggan ini</button></div>';
+        }).join("")
+      + '<div style="margin-top:8px"><button type="button" class="btn kecil" id="nb-pisah">Tetap simpan sebagai pelanggan terpisah</button></div>'
+      + '</div></div>';
+  }
+  $("nb-temuan").addEventListener("click", function(e){
+    var b = e.target.closest("[data-nb-pakai]");
+    if (b) {
+      api("GET", "/customers?select=id,nama,hp,pic,lokasi&id=eq." + Number(b.getAttribute("data-nb-pakai")))
+        .then(function(r){ if (r && r[0]) pakaiPelangganLead(r[0]); else tampilPesan("Data pelanggan itu tidak bisa dibaca."); })
+        .catch(function(e2){ tampilPesan(esc(e2.message)); });
+      return;
+    }
+    if (e.target.closest("#nb-pisah")) { izinKembar = true; $("btn-nb-simpan").click(); }
+  });
+  $("f_nb_nama").addEventListener("input", function(){ izinKembar = false; });
+
   $("btn-nb-simpan").addEventListener("click", function(){
     var hp = hpNormal(nilaiForm("nb_hp"));
     var nama = (nilaiForm("nb_nama") || "").trim();
@@ -1848,9 +1880,10 @@ function formLeadBaru(){
     if (!nama) { tampilPesan("Nama perusahaan wajib diisi. Kalau memang perorangan, tulis nama orangnya beserta pembeda (mis. kota)."); return; }
     var siapCustomer = pilihan
       ? Promise.resolve(pilihan.id)
-      /* Keamanan #2 (berkas 138): owner/GM/staff diberi tahu bila namanya sama dengan pelanggan lain */
-      : konfirmasiNamaKembar(nama, null).then(function(lanjut){
-          if (!lanjut) throw { batal: true };
+      /* Keamanan #2 (berkas 138): owner/GM/staff diberi tahu bila namanya sama dengan pelanggan lain — 139r: kembarannya
+         ditampilkan sebagai pilihan (sales: [] — database yang menolak, lalu ditawari di bawah) */
+      : (izinKembar ? Promise.resolve([]) : barisNamaKembar(nama, null)).then(function(kembar){
+          if (kembar.length) { tawarkanKembarLead(kembar); throw { batal: true }; }
           sibuk(true, "Menyimpan…");
           return api("POST", "/customers", { nama:nama, hp:hp, pic:nilaiForm("nb_pic"), lokasi:nilaiForm("nb_lokasi") },
                                       "return=representation")
@@ -1888,12 +1921,7 @@ function formLeadBaru(){
             + '</b>' + (ada.hp ? ' (HP ' + esc(ada.hp) + ')' : '') + '. <button type="button" class="btn kecil" id="nb-pakai">'
             + 'Pakai pelanggan ini</button><br><span class="muted">Lead dicatat ke pelanggan itu; No. HP yang Anda ketik '
             + 'tidak mengganti No. HP-nya.</span></div></div>';
-          $("nb-pakai").addEventListener("click", function(){
-            pilihan = ada;
-            kotak.innerHTML = '<div class="flag ok"><span class="f-ico">✓</span><div>Pelanggan lama: <b>' + esc(ada.nama)
-              + '</b>. Tekan Simpan lead lagi.</div></div>';
-            $("f_nb_nama").value = ada.nama || ""; $("f_nb_pic").value = ada.pic || ""; $("f_nb_lokasi").value = ada.lokasi || "";
-          });
+          $("nb-pakai").addEventListener("click", function(){ pakaiPelangganLead(ada); });
         }).catch(function(){});
     });
   });
@@ -4619,11 +4647,17 @@ function bolehPindahSales(c){
 /* Keamanan #2 (berkas 138): nama yang sama (kunci_nama_pelanggan) dengan pelanggan lain — sales ditolak database
    (beri pembeda); owner/GM/staff boleh menyimpan, tetapi diberi tahu dulu. Gagal memeriksa / database tanpa berkas 138
    → lanjut (database tetap menjaga sales). */
+/* 139r (review 138 no. 9): baris kembarannya sendiri (Lead baru menampilkannya sebagai pilihan) — gagal → [] */
+function barisNamaKembar(nama, kecuali){
+  if (peranSales() || !String(nama || "").trim()) return Promise.resolve([]);
+  return api("POST", "/rpc/nama_pelanggan_kembar", { p_nama: String(nama).trim(), p_kecuali: kecuali || null })
+    .then(function(r){ return Array.isArray(r) ? r : []; })
+    .catch(function(){ return []; });
+}
 function konfirmasiNamaKembar(nama, kecuali){
   if (peranSales() || !String(nama || "").trim()) return Promise.resolve(true);
-  return api("POST", "/rpc/nama_pelanggan_kembar", { p_nama: String(nama).trim(), p_kecuali: kecuali || null })
+  return barisNamaKembar(nama, kecuali)
     .then(function(r){
-      r = Array.isArray(r) ? r : [];
       if (!r.length) return true;
       return confirm("Nama ini sama dengan pelanggan lain:\n"
         + r.map(function(x){ return "• " + x.nama + " (" + (x.sales ? "sales " + x.sales : "belum bertuan") + ")"; }).join("\n")
@@ -6077,9 +6111,11 @@ function formDetailDoc(jenis, row){
   if ($("btn-dd-pelanggan")) $("btn-dd-pelanggan").addEventListener("click", function(){   /* #37 */
     var kat = nilaiForm("dd_kat");
     if (!kat) { tampilPesan("Pilih kategori customer dulu."); return; }
+    var hpDd = hpNormal(nilaiForm("dd_hp")) || nilaiForm("dd_hp") || null, alamatDd = nilaiForm("dd_alamat") || null;
     sibuk(true);
-    api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: row.id, p_industri: kat,
-        p_hp: hpNormal(nilaiForm("dd_hp")) || nilaiForm("dd_hp") || null, p_alamat: nilaiForm("dd_alamat") || null })
+    periksaSebelumTautkan(row.id, hpDd, alamatDd)   /* 139r */
+      .then(function(){ return api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: row.id, p_industri: kat,
+        p_hp: hpDd, p_alamat: alamatDd }); })
       .then(function(r){
         tutupLaci(); toast(("SP " + row.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, kat)).trim());
         ALUR.dimuatSp = false; if (LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;
@@ -6087,6 +6123,11 @@ function formDetailDoc(jenis, row){
       })
       .catch(function(e){ tampilPesan(esc(e.message)); })
       .then(function(){ sibuk(false); });
+  });
+  pasangKandidatPelangganSp(row, $("dd-kandidat"), function(){ return nilaiForm("dd_kat"); }, function(r){   /* 139r */
+    tutupLaci(); toast(("SP " + row.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, nilaiForm("dd_kat"))).trim());
+    ALUR.dimuatSp = false; if (LANJUT.vonnycek) LANJUT.vonnycek.dimuat = false;
+    if (tabAktif === "sp") panelSp();
   });
   if (isPo) return;
 
@@ -8711,8 +8752,20 @@ function galatKotak(e){
    dan untuk peran lain hanya bila ada sales acuan. */
 /* #41: kunci pencocokan nama — cermin kunci_nama_pelanggan() di DB (berkas 109):
    kata alfanumerik tanpa badan usaha, jadi "Surya Panel, PT" = "PT Surya Panel". */
+/* 139r (review 138 no. 1/2): cermin kunci_nama_pelanggan — NFKC, karakter format (tak terlihat) dibuang, huruf Kiril/Yunani
+   yang mirip huruf Latin dipetakan, huruf/angka non-ASCII ikut dihitung, bentuk badan usaha berhuruf tunggal ("P.T.",
+   "C V") dibuang — "P.T. X", "PT X", dan "P\u200bT X" berkunci sama. */
+function tanpaFormatTeks(t){
+  var s = String(t == null ? "" : t);
+  try { s = s.normalize("NFKC"); } catch (e) { /* peramban lama */ }
+  return s.replace(/[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\u{e0000}-\u{e0fff}]/gu, "");
+}
 function kunciNamaPelanggan(t){
-  return String(t || "").toLowerCase().replace(/[^0-9a-z]+/g, " ").trim().split(/\s+/)
+  var dari = "аеорсухіјѕкмнтвӏԁԛԝαβεζηικμνορτυχ", ke = "aeopcyxijskmhtbldqwabezhikmnoptyx";
+  var s = tanpaFormatTeks(t).toLowerCase().replace(/[^\x00-\x7f]/gu, function(ch){
+    var i = dari.indexOf(ch); return i > -1 ? ke.charAt(i) : ch; });
+  s = (" " + s.replace(/[^\p{L}\p{N}]+/gu, " ") + " ").replace(/ (t b k|p t|c v|u d|p d|t b)(?= )/g, " ");
+  return s.trim().split(/ +/)
     .filter(function(k){ return k && ["pt","cv","ud","pd","tb","tbk","toko"].indexOf(k) < 0; }).join(" ");
 }
 function pasangCariPelanggan(idInput, idHasil, pilih, opsi){
@@ -9375,10 +9428,7 @@ function muatGrup(paksa){
   return j;
 }
 function grupPelanggan(custId){ return (custId === null || custId === undefined) ? null : (GRUP.peta[custId] || null); }
-function kunciNamaFe(s){
-  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(pt|cv|ud|pd|tb|tbk|toko)\b/g, " ")
-    .replace(/\s+/g, " ").trim();
-}
+function kunciNamaFe(s){ return kunciNamaPelanggan(s); }   /* 139r: satu cermin kunci_nama_pelanggan */
 function indukGrup(g){ return String(g.nama_dokumen || "").trim() || String(g.nama || "").trim(); }
 /* = judul_grup_pelanggan (berkas 132) — untuk pratinjau; judul yang tersimpan dihitung database */
 function judulGrupFe(custId){
@@ -9763,17 +9813,21 @@ function formPelangganTab(c){
     + '</div>'
     + '<h3 class="sec">Sales penanggung jawab</h3>'
     + field({ nama:"plc_rep", label:"Sales", jenis:"select",
-              nilai: c.sales_rep_id == null ? "" : String(c.sales_rep_id),
+              /* 139r (review 138 no. 8): pelanggan baru buatan sales langsung miliknya (customers_sales_bawaan) */
+              nilai: baru && peranSales() ? String((repSayaAlur() || {}).id || "")
+                   : (c.sales_rep_id == null ? "" : String(c.sales_rep_id)),
               mati: !bolehPindahSales(c),
               pilihan: [{v:"",l:"— belum ada —"}].concat(
                 repPilihan(ALUR.rep, c.sales_rep_id).map(function(r){
                   return { v:String(r.id), l:labelRep(r) }; })),
-              bantu: (bolehPindahSales(c)
+              bantu: (baru && peranSales()
+                ? "Pelanggan baru yang Anda tambahkan langsung menjadi milik Anda (diisi database). Pemindahan ke sales lain diputuskan owner, GM, atau staff."
+                : bolehPindahSales(c)
                 ? "Satu pelanggan dipegang satu sales. Sales yang tertulis di sini yang terisi otomatis saat PO perusahaan ini masuk."
                 : (c.sales_rep_id
                     ? "Pelanggan ini sudah ada pemiliknya. Pemindahan diputuskan owner, GM, atau staff."
                     : (peranSales()
-                        ? "Pelanggan yang belum bertuan menjadi milik sales yang pertama membuat PO untuknya. Pemindahan lain diputuskan owner, GM, atau staff."
+                        ? "Pelanggan yang belum bertuan menjadi milik sales yang pertama membuat PO untuknya (pelanggan baru yang Anda tambahkan sendiri langsung milik Anda). Pemindahan lain diputuskan owner, GM, atau staff."
                         : "Hanya owner, GM, atau staff yang menetapkan sales penanggung jawab.")))
                 /* berkas 119: riwayat sales lama yang sudah nonaktif */
                 + (c.sales_rep_lama_id
@@ -12301,6 +12355,7 @@ function ketHasilLengkapi(r, kat){
   var t = r.dicocokkan === "baru" ? " Pelanggan baru " + (r.nama || "") + " dibuat di data pelanggan."
         : r.dicocokkan === "hp"   ? " Ditautkan ke pelanggan " + (r.nama || "") + " (No. HP sama)."
         : r.dicocokkan === "nama" ? " Ditautkan ke pelanggan " + (r.nama || "") + "."
+        : r.dicocokkan === "pilih" ? " Ditautkan ke pelanggan " + (r.nama || "") + " (dipilih owner/GM)."   /* 139r */
         : "";
   if (r.kategori_dipakai === false)
     t += " Kategori tetap " + (r.industri || "—") + " (sudah terisi di data pelanggan; pilihan " + (kat || "—")
@@ -12319,7 +12374,72 @@ function kotakLengkapiPelangganSp(row){
     + '</div>'
     + field({ nama:"dd_alamat", label:"Alamat", jenis:"textarea", nilai: row.alamat || "" })
     + '<button class="btn" id="btn-dd-pelanggan" type="button">Tautkan & isi kategori</button>'
+    + kotakKandidatPelangganSp("dd-kandidat")   /* 139r */
     + '</div></div>';
+}
+/* 139r (review 138 no. 5/7/11): sebelum lengkapi_pelanggan_sp, kelayakannya diperiksa dulu — SP yang cocok dengan
+   pelanggan sales lain / daftar hitam / Office / PO lain, atau No. HP/alamat yang belum sah, tidak dikirim ke database
+   (pesan & siapa yang membereskan langsung tampil). Kode lain (GM, draft, sudah terkirim, lampiran PO) bukan urusan
+   menautkan — diteruskan; database tetap menjaga (penolakannya kini HTTP 400, tidak dihitung batas keluar 401/403). */
+var KODE_TOLAK_TAUTKAN = ["nama_sales_lain","hp_sales_lain","blacklist","office","po_beda","hp_kosong","hp_salah",
+                          "alamat_kosong","nama_pendek","sales_kosong","sales_nonaktif"];
+function periksaSebelumTautkan(soId, hp, alamat){
+  return api("POST", "/rpc/cek_kelayakan_vonny", { p_so: soId, p_hp: hp || null, p_alamat: alamat || null })
+    .then(function(r){
+      var k = (Array.isArray(r) ? r[0] : r) || null;
+      if (k && !k.siap && KODE_TOLAK_TAUTKAN.indexOf(k.kode) > -1)
+        throw new Error((k.pesan || "Belum bisa ditautkan.")
+          + (k.tindakan ? " Yang perlu dilakukan (" + (k.siapa || "—") + "): " + k.tindakan : ""));
+    }, function(e){ if (rpcBelumAda(e)) return; throw e; });
+}
+/* 139r (review 138 no. 6/10): owner/GM menautkan SP yang belum tertaut ke pelanggan TERTENTU — kandidatnya pelanggan
+   yang nama (sesudah dirapikan) atau No. HP-nya cocok dengan SP; yang tidak bisa dipilih ditulis alasannya (dipegang
+   sales lain, daftar hitam, PO atas nama pelanggan lain). tautkan_pelanggan_sp memeriksa ulang semuanya. */
+function kotakKandidatPelangganSp(id){
+  if (!setaraOwner()) return "";
+  return '<div id="' + id + '" style="margin-top:10px"><button type="button" class="btn kecil" data-kandidat-muat>'
+    + 'Tautkan ke pelanggan tertentu…</button> <span class="muted" style="font-size:12px">owner/GM — mis. nama SP cocok '
+    + 'dengan lebih dari satu pelanggan</span></div>';
+}
+function pasangKandidatPelangganSp(so, wadah, kat, setelah){
+  if (!wadah) return;
+  wadah.addEventListener("click", function(e){
+    if (e.target.closest("[data-kandidat-muat]")) {
+      wadah.innerHTML = '<span class="muted" style="font-size:12.5px">Memuat pelanggan yang cocok…</span>';
+      api("POST", "/rpc/kandidat_pelanggan_sp", { p_so: so.id })
+        .then(function(r){
+          if (!wadah.isConnected) return;
+          r = Array.isArray(r) ? r : [];
+          wadah.innerHTML = !r.length
+            ? '<div class="flag"><span class="f-ico">i</span><div>Tidak ada data pelanggan yang nama/No. HP-nya cocok dengan '
+              + 'SP ini. Bila memang pelanggan lain, ubah Kepada lewat Minta ubah SP dulu.</div></div>'
+            : '<div style="font-size:12.5px;margin-bottom:4px"><b>Tautkan ke pelanggan tertentu</b> '
+              + '<span class="muted">— pelanggan yang nama/No. HP-nya cocok dengan SP ini:</span></div>'
+              + r.map(function(k){
+                  return '<div style="margin:3px 0;font-size:13px">' + esc(k.nama) + ' <span class="muted">('
+                    + esc(k.sales ? "sales " + k.sales : "belum bertuan") + ' · cocok ' + (k.cocok === "hp" ? "No. HP" : "nama")
+                    + ')</span> '
+                    + (k.bisa ? '<button type="button" class="btn kecil" data-kandidat="' + Number(k.id) + '" data-kandidat-nama="'
+                                + esc(k.nama) + '">Tautkan ke ini</button>'
+                              : '<span class="muted">— ' + esc(k.alasan || "tidak bisa dipilih") + '</span>')
+                    + '</div>';
+                }).join("");
+        })
+        .catch(function(e2){
+          if (wadah.isConnected) wadah.innerHTML = '<span class="muted">Gagal memuat pelanggan yang cocok: ' + esc(e2.message) + '</span>';
+        });
+      return;
+    }
+    var b = e.target.closest("[data-kandidat]");
+    if (!b) return;
+    if (!confirm('Tautkan SP ' + (so.no_sp || "") + ' ke pelanggan "' + b.getAttribute("data-kandidat-nama") + '"?')) return;
+    sibuk(true);
+    api("POST", "/rpc/tautkan_pelanggan_sp", { p_so: so.id, p_customer: Number(b.getAttribute("data-kandidat")),
+                                               p_industri: (kat && kat()) || null })
+      .then(function(r){ setelah(r); })
+      .catch(function(e3){ tampilPesan(esc(e3.message)); })
+      .then(function(){ sibuk(false); });
+  });
 }
 function bantuIndustriLama(s){
   var t = s && s.customers && s.customers.industri_lama;
@@ -12400,6 +12520,7 @@ function formCekVonny(s){
           +   field({ nama:"vk_hp", label:"No. HP pelanggan", nilai: s.telp || "", tempel:"wajib bila pelanggan belum ada" })
           +   field({ nama:"vk_alamat", label:"Alamat pelanggan", nilai: s.alamat || "", tempel:"wajib bila pelanggan belum ada" })
           + '</div>'
+          + kotakKandidatPelangganSp("vc-kandidat")   /* 139r */
         : '')
     +   (perluKat ? '<div style="margin-top:10px">'
         + field({ nama:"vk_kat", label:"Kategori customer (wajib diisi dulu)", jenis:"select", nilai:"",
@@ -12477,6 +12598,10 @@ function formCekVonny(s){
   }
   cekSegar();
   kotakK.addEventListener("click", function(e){ if (e.target.closest("[data-vc-ulang]")) cekSegar(); });
+  pasangKandidatPelangganSp(s, $("vc-kandidat"), function(){ return perluKat ? nilaiForm("vk_kat") : null; }, function(r){   /* 139r */
+    toast(("SP " + s.no_sp + " sudah tertaut ke data pelanggan." + ketHasilLengkapi(r, perluKat ? nilaiForm("vk_kat") : null)).trim());
+    segarkanBarisVonny();   /* pelanggan berubah → laci digambar ulang dari baris segar */
+  });
   ["vk_hp","vk_alamat"].forEach(function(n){
     var el = $("f_" + n);
     if (el) el.addEventListener("input", cekLangsung);
@@ -12779,7 +12904,8 @@ function formKirim(s){
         .then(function(){   /* #25; #37 (verifikator): SP tanpa pelanggan → ditautkan/dibuat, bukan dibuang diam-diam */
           if (!(perluKat && kat)) return null;
           return s.customer_id ? simpanIndustri(s.customer_id, kat)
-            : api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: s.id, p_industri: kat })
+            : periksaSebelumTautkan(s.id)   /* 139r */
+                .then(function(){ return api("POST", "/rpc/lengkapi_pelanggan_sp", { p_so: s.id, p_industri: kat }); })
                 .then(function(r){ if (r) toast(ketHasilLengkapi(r, kat).trim()); });
         })
         .then(function(){ return api("POST", "/rpc/putuskan_vonny_cek", { p_so: s.id, p_ok: true }); })
@@ -21234,6 +21360,8 @@ window.__segar = {
   pelangganTab: function(c){ formPelangganTab(c); },        /* keamanan #2: uji laci pelanggan */
   pelangganCrm: function(c){ formPelanggan(c); },
   leadBaru: function(){ formLeadBaru(); },
+  kunciNama: function(t){ return kunciNamaPelanggan(t); },   /* 139r: uji cermin kunci_nama_pelanggan */
+  kunciNamaFe: function(t){ return kunciNamaFe(t); },
   detailPnw: function(q){ formDetailPenawaran(q); },        /* #55: uji template penawaran */
   dokPnwQ: function(q){ return dataDokPenawaranQ(q, (q.quote_lines || []).slice()); }
 };

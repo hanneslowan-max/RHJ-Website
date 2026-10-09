@@ -358,8 +358,50 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    uji_nama 12/12, uji_lampiran 23/23, uji_usulan 4/4, uji_pnw 31/31.
    **Sisa (pertanyaan 21, menunggu Hannes):** kembaran nama LAMA yang belum bertuan (termasuk kembaran pelanggan
    Office) masih bisa diambil lewat PO oleh sales lain — PO memilih pelanggan dari daftar, jadi kembarannya tetap
-   "pelanggan belum bertuan" biasa. Pilihan: (a) biarkan, owner/GM/staff merapikan kembaran lama dari tab Pelanggan;
-   (b) PO ditolak bila pelanggan belum bertuan yang dipilih punya kembaran nama yang sudah bertuan.
+   "pelanggan belum bertuan" biasa. **Diperluas sesudah review 138 (no. 12):** kembaran lama itu juga bisa dipilih
+   langsung untuk **SP tanpa PO** (mis. Arie memilih 1 dari 8 kembaran "PT Asiaparts Indotech" yang belum bertuan,
+   padahal Iwan memegang 122) — cek Vonny lalu "ok" tanpa tahanan nama_sales_lain, pelanggannya tetap belum bertuan.
+   Pilihan: (a) biarkan, owner/GM/staff merapikan kembaran lama dari tab Pelanggan (menutup kedua jalur);
+   (b) PO **dan SP** ditolak bila pelanggan belum bertuan yang dipilih punya kembaran nama yang sudah bertuan milik
+   sales lain, dan cek Vonny menahan SP yang sudah tertaut ke kembaran seperti itu (nama_sales_lain, owner/GM).
+   **Pertanyaan 28 (baru, review 138 no. 3, menunggu Hannes):** pelanggan belum bertuan bisa diklaim dengan PO yang
+   lalu langsung dibatalkan (PO tanpa lampiran → pelanggan jadi milik sales itu → `batalkan_po` → pelanggan tetap
+   miliknya; jejaknya ada: PO batal beralasan + audit). Sudah ada sejak berkas 79; DEV punya ±2.678 pelanggan belum
+   bertuan. Rekomendasi: (a) klaim dicatat pada PO-nya dan **dilepas lagi saat PO itu dibatalkan** bila sales itu tidak
+   punya PO/SP hidup lain untuk pelanggan tersebut (PO yang batal karena alasan wajar juga melepas pelanggannya);
+   pilihan lain (b) klaim baru terjadi saat PO berlampiran, atau (c) biarkan — jejak audit sebagai kontrol.
+   **Review adversarial 138** (5 pemeriksa + verifikator; 12 terkonfirmasi) → **berkas 139r (DEV 9 Okt)** + FE:
+   (1, tinggi) "P.T. X" / "C. V. X" / "P T X" berkunci beda dengan nama tersimpan "PT X" → cek Vonny (10a) lolos dan
+   lengkapi_pelanggan_sp/buat_pelanggan_baru (Vonny) membuat kembaran persis untuk sales penyerang → `kunci_nama_pelanggan`
+   membuang badan usaha berhuruf tunggal; ketikan dibandingkan sesudah `rhj_nama_rapi` (cek Vonny, lengkapi,
+   buat_pelanggan_baru, nama_pelanggan_kembar, jaga_pelanggan_sp_sales); 8a berlaku untuk semua peran selain
+   owner/GM/staff. (2) karakter tak terlihat & huruf Kiril/Yunani yang mirip → `teks_tanpa_format` (NFKC + karakter
+   format dibuang) di kunci & `rhj_nama_rapi`, kunci memetakan huruf mirip, nama pelanggan & Kepada SP berhuruf
+   non-Latin ditolak untuk selain owner/GM/staff (`ada_huruf_non_latin`), Kepada SP dibersihkan (trigger
+   `so_a_kepada_bersih`). (4) sales POST /customers untuk sales lain/Office → `customers_sales_bawaan` P0001.
+   (5/7/11) aturan bisnis 42501 → P0001 (lengkapi_pelanggan_sp, customers_jaga_sales, buat_pelanggan_baru,
+   jaga_pelanggan_sp_sales); layar memeriksa `cek_kelayakan_vonny` dulu sebelum lengkapi (detail SP & laci
+   Pengiriman). (6/10) pesan nama_sales_lain menyebut dua pelanggan bila sales SP juga punya kembaran; RPC owner/GM
+   `kandidat_pelanggan_sp` + `tautkan_pelanggan_sp` (nama/No. HP cocok, milik sales SP / belum bertuan, bukan daftar
+   hitam, sama dengan pelanggan PO) + tombol "Tautkan ke pelanggan tertentu…" di laci cek & detail SP. (8) teks
+   tab Pelanggan: pelanggan baru buatan sales langsung miliknya. (9) Lead baru owner/GM/staff: kembaran tampil
+   sebagai pilihan "Pakai pelanggan ini" / "Tetap simpan sebagai pelanggan terpisah". (3) → Q28, (12) → Q21.
+   Uji DEV rollback 23 kasus: Iwan zero-width → 23505; Kiril → P0001; pemegang Hendri/Office → P0001; milik sendiri /
+   kosong → rep 5; Kepada "P.T. Tokai…" → cek nama_sales_lain, lengkapi P0001; Kepada zero-width tersimpan bersih;
+   Kepada Kiril → P0001; Vonny buat_pelanggan_baru "P.T. …" → ditolak; nama_pelanggan_kembar("P.T. …") → 338; kembar
+   Ibu Inge Arie/Hendri → pesan dua pelanggan, lengkapi P0001, kandidat Arie bisa / Hendri tidak, Vonny kandidat &
+   tautkan 42501, owner tautkan ke Hendri P0001, ke Arie ok (status & vonny tetap, industri terisi), ulang P0001,
+   daftar hitam 22023, tidak cocok P0001; Iwan pindah pemegang → P0001; ganti pelanggan SP → P0001; staff kembar &
+   Kiril → boleh; Vonny Kepada Kiril → P0001; jalur baru Vonny "Bp Untung" → baru. Layar uji139r 23/23; regresi
+   uji_pelanggan 15/15 (P5 kini pilihan, bukan confirm), uji_hitam 16/16, uji_vonny 32/32, uji_vonny2 16/16,
+   uji_set 46/46, uji_nama 12/12, uji119 36/36, uji_rek 6/6, uji_hp 35/35, uji_lampiran 23/23.
+   Diterima (dicatat): varian nama yang TERLIHAT beda (salah ketik, akhiran kota) tetap dianggap nama lain (8a);
+   pencocokan nama ke pelanggan daftar hitam (`sp_pelanggan_hitam`) dikerjakan di 139s.
+   **Cek PROD sebelum rilis 139r:** (1) `select datlocprovider from pg_database where datname = current_database();`
+   — 'i' (ICU; DEV 'i'), kelas [[:alnum:]] menganggap huruf Kiril huruf; bila 'c' laporkan dulu; (2) informasi:
+   jumlah kunci yang berubah `select count(*) from customers where kunci_nama_pelanggan(nama) is distinct from
+   <kunci lama>` dihitung sebelum menjalankan (DEV 0); (3) 139r naik bersama index.html baru (tombol tautkan owner/GM,
+   pra-cek) — index.html lama tetap jalan (hanya pesan 403 jadi 400).
    **Cek PROD sebelum rilis 138:** `select to_regprocedure('public.catat_perubahan()') is not null;` (wajib true) dan
    (informasi untuk Hannes) jumlah kunci nama kembar lama: `select count(*) from (select kunci_nama_pelanggan(nama) k
    from customers group by 1 having count(*) > 1) x;`.
