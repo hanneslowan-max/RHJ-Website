@@ -384,6 +384,28 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    pct & pct_berlaku kosong. **Sesi EHC:** view komisi yang dibuat ulang harus MEMANGGIL `boleh_lihat_nilai_klaim()`
    langsung di definisinya (view pembungkus di atas view lain ditolak) dan tetap boleh menulis `security_invoker = on`
    atau `= true`. **Cek PROD sebelum rilis 139t:** sama dengan 139k (izin event trigger).
+   **Review adversarial 139t** (7 terkonfirmasi, semuanya rendah — hanya DDL pemegang akun postgres) → **berkas 139v
+   (DEV 9 Okt)**: (1/5) kedua event trigger mode 'O' tidak menyala saat `session_replication_role = replica` (pola migrasi
+   126/128/130/135) → ENABLE ALWAYS; (2/6) rule tambahan yang menyebut predikat meloloskan `_RETURN` tanpa predikat, dan
+   kolom tambahan `k.pct AS pct_mentah` lolos (ketergantungan tetap ada) → hanya `_RETURN` yang dihitung, rule lain pada
+   ke-4 view ditolak, **daftar kolom ke-4 view dibekukan** di `view_komisi_cacat()`; (2) uji perilaku bergantung data
+   (tanpa profil Vonny dilewati diam-diam; tanpa SP menunggu cash, cash_belum_cocok tidak teruji) → `periksa_view_komisi()`
+   menyusun sendiri SP uji (SP sales lain dijadikan menunggu keputusan cash) & profil Vonny bila tidak ada, di subtransaksi
+   yang selalu dibatalkan, gagal keras bila tidak bisa disusun; (3/7) CREATE TABLE/CTAS/SELECT INTO/MATERIALIZED VIEW/
+   FOREIGN TABLE (juga lewat rename) bernama view komisi — relasi tanpa RLS, terbaca anon → event trigger ketiga
+   `jaga_view_komisi_c`; (4) periksa meninggalkan pemanggil sebagai session user → semua perubahan peran/klaim/replica di
+   dalam subtransaksi yang dibatalkan. Uji diri 139v: replica + reset invoker, rule tambahan, ganti nama kolom, CTAS &
+   materialized view lewat rename → ditolak; buat ulang view dengan definisinya sendiri & tabel lain → lolos; peran
+   pemanggil tetap. Uji DEV rollback: kolom pct_mentah → ditolak; profil Vonny dinonaktifkan + masker `kv.boleh OR true`
+   → lolos trigger, periksa menolak (so_baris_hitung 66); nol SP menunggu cash + predikat `IS NOT NULL` → periksa menolak
+   (cash_belum_cocok 1); pemanggil service_role tetap service_role; data sesudah periksa utuh (cash_belum_cocok 13).
+   139k/139t: uji diri kini menerima evtenabled 'A' (jalankan ulang aman). **Diterima (dicatat):** mengganti ISI fungsi
+   predikat (`boleh_lihat_nilai_klaim`, `peran_saya`, `sales_rep_saya`) tidak dijaga event trigger — hanya uji perilaku
+   periksa_view_komisi(); menjalankan ulang 139k/139t SESUDAH 139v mengembalikan versi lama view_komisi_cacat/periksa →
+   jalankan 139v lagi sesudahnya. **Sesi EHC / migrasi berikutnya:** kolom baru di ke-4 view → perbarui daftar kolom di
+   `view_komisi_cacat()` dulu (pesan galat menyebutnya). **Cek PROD sebelum rilis 139v:** sesudah rilis
+   `select evtname, evtenabled from pg_event_trigger where evtname like 'jaga_view_komisi%';` → 3 baris 'A'; daftar kolom
+   ke-4 view di PROD sama dengan DEV (uji diri gagal keras bila beda).
    **Pertanyaan 29 (baru, review 139k no. 1, menunggu Hannes — objek sesi EHC):** klaim EHC cara "reimburse" menyalin
    rekening master SALES ke `ehc_klaim` (bank, no_rekening, atas_nama), yang terbaca Vonny, Lie Sian, Ichi, staff, dan
    Lenni (juga lewat `ehc_cepat_siap` dan snapshot `ehc_klaim_log` untuk staff & Lenni) — padahal keputusan 6 menutup

@@ -141,8 +141,8 @@ revoke all on function public.periksa_view_komisi() from public, anon, authentic
 do $$
 begin
   perform public.periksa_view_komisi();
-  if not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi' and evtenabled = 'O')
-     or not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi_b' and evtenabled = 'O') then
+  if not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi' and evtenabled in ('O','A'))
+     or not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi_b' and evtenabled in ('O','A')) then
     raise exception '139t: event trigger jaga_view_komisi / jaga_view_komisi_b tidak aktif.';
   end if;
   if position('kv.boleh IS NOT TRUE' in pg_get_viewdef('public.so_baris_hitung'::regclass)) = 0 then

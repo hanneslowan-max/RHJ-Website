@@ -226,7 +226,7 @@ do $$ begin
   if (select count(*) from public.komisi_klaim) <> (select count(*) from public.komisi_klaim_rekening) then
     raise exception '139k: salinan rekening klaim komisi tidak lengkap';
   end if;
-  if not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi' and evtenabled = 'O') then
+  if not exists (select 1 from pg_event_trigger where evtname = 'jaga_view_komisi' and evtenabled in ('O','A')) then
     raise exception '139k: event trigger jaga_view_komisi tidak aktif';
   end if;
 end $$;
