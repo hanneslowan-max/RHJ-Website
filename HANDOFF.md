@@ -118,19 +118,20 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
    (cutoff 18, proses 20, tunggu lunas, EHC cepat). 4. Komisi (cutoff 23, transfer 25, potongan, tutup EHC → kas
    sales, #61). 5. #54 edit EHC di SP. 6. Laporan finance.
 
-### Posisi tahap 1 (6 Okt malam)
+### Posisi tahap 1 (selesai 9 Okt)
 - **`db/140-ehc-saldo-pemakaian.sql` SUDAH diterapkan di DEV** (`apply_migration 140_ehc_saldo_pemakaian`).
   Sebelumnya diuji utuh dalam transaksi rollback di DEV: **46/46 skenario lulus** (konversi klaim lama, saldo per SP,
   simpan/ubah/batal klaim, lampiran dibuang lunak, hak per peran & RLS, Vonny tidak melihat nominal, gerbang batal
   SP/qty, EHC cepat, ajukan transfer sesudah cutoff, PIC terkunci, rekening PIC ≠ rekening sales, laporan komisi,
   `so_ringkas` tidak berubah). Diperiksa sesudah diterapkan: klaim lama #6/#7 → `diajukan`, periode 2026-10,
   alokasi SP 41 Rp 5.000 & SP 35 Rp 20.000; md5 `so_ringkas` tetap; kas sales 0 baris.
-- **`db/140b-ehc-buang-batas-lama.sql` BELUM dijalankan — tugas Hannes** di SQL Editor DEV (isinya hanya DROP
-  indeks `ehck_so_uniq` + check `ehck_cara_bayar_sah`; MCP macet untuk DROP). Sebelum 140b: satu SP baru bisa
-  dipakai satu klaim aktif dan cara bayar *reimburse* masih ditolak (layar menampilkan pesan yang menunjuk 140b).
-- Sesudah 140b: jalankan uji pasca-140b (scratchpad `uji/uji2.py` → `uji2.sql`, rollback, ±17 skenario: dua klaim
-  pada SP yang sama, reimburse menyalin rekening sales, ubah klaim sampai pas sisa, batal → saldo kembali,
-  klaim multi-SP beda customer = lintas & tidak bisa cepat, lepas SP saat ubah).
+- **`db/140b-ehc-buang-batas-lama.sql` SUDAH dijalankan Hannes di SQL Editor DEV (9 Okt)** — indeks `ehck_so_uniq`
+  dan check lama `ehck_cara_bayar_sah` hilang; `ehck_cara_bayar_sah2` tetap.
+- **Uji pasca-140b lulus 15/15** (rollback, 9 Okt; scratchpad `uji/uji2.py` → `uji2.sql`): dua klaim pada SP yang sama,
+  reimburse menyalin rekening sales (atau kosong bila belum diisi finance), klaim melebihi sisa ditolak per sen, ubah
+  sampai pas sisa, batal → saldo kembali, owner membatalkan klaim lama, klaim multi-SP beda customer = lintas & tidak
+  bisa EHC cepat, ubah melepas SP → tidak lintas lagi (alokasi 0), log ajukan+ubah tercatat. DEV bersih sesudahnya.
+- **TAHAP 1 SELESAI di DEV** (DB 140+140b, layar index.html). PROD belum — ikut paket rilis.
 - Layar (index.html) sudah memakai struktur 140; uji Playwright 14/14 (harness di scratchpad `layar/`).
 - Catatan teknis MCP Supabase: DROP dan fungsi berisi `DELETE … WHERE` macet → 140 ditulis tanpa DELETE.
   Panggilan besar (>80 KB) kadang terputus di tengah; skrip uji diringkas dengan fungsi bantu `pg_temp.c`/`pg_temp.u`.
