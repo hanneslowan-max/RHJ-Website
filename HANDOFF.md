@@ -650,6 +650,44 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    sales_orders s where not s.batal and s.no_surat_jalan is null and exists (select 1 from sp_pelanggan_hitam_rinci(
    s.customer_id, s.po_id, s.kepada, s.telp) r where r.cara = 'kembar');` (jalankan sesudah migrasi); 139s naik bersama
    index.html baru (sp_status_kirim, peringatan owner/GM) — index.html lama tetap jalan.
+   **Review adversarial 139s** (17 agen; 11 terkonfirmasi, 2 dibantah) → **berkas 139x (DEV 9 Okt)** + FE:
+   (1/10, tinggi) sales/staff melepas SP tertahan lewat **batalkan → ubah Kepada/No. HP → hidupkan lagi** (jaga_tahan
+   _hitam_sp melewati SP batal, pemeriksaan saat dihidupkan hanya baris BARU, vonny_ok tetap — Lie Sian mengirim, juga
+   sisa kiriman bertahap) → baris LAMA diperiksa walau SP batal; dihidupkan lagi oleh selain owner/GM → baris lama juga
+   diperiksa (23514); trigger `so_vonny_gugur` kini juga menyala saat SP dihidupkan lagi (selain owner/GM/Vonny → cek
+   Vonny gugur bila barangnya belum keluar). (2, sedang) Minta ubah SP disetujui GM **tanpa tahu** bahwa itu melepas
+   penahanan (satu huruf "Tehnik → Teknik") → `putuskan_ubah` menolak (P0001) persetujuan yang melepas penahanan kecuali
+   lewat `setujui_ubah_lepas_hitam` (bendera transaksi `rhj.lepas_hitam`, catatan GM diberi awalan "[melepas penahanan
+   daftar hitam]"); `usul_lepas_hitam(p_id)` untuk layar: laci GM menampilkan tanda merah + tombol "Setujui & lepas
+   penahanan" + konfirmasi; jalur "ubah langsung" owner/GM juga minta konfirmasi; sesudah dilepas → cek Vonny gugur bila
+   barangnya belum keluar. (3/5/8, sedang) "owner/GM memberi pembeda" tidak melepas kembaran yang punya nama_lama (4.670
+   dari 5.403 pelanggan DEV; nama_lama terkunci) → di `sp_pelanggan_hitam_rinci` nama_lama kembaran dihitung hanya bila
+   `rhj_nama_sidik(nama) = rhj_nama_sidik(nama_lama)` (masih bentuk rapi nama asli, cara pulihkan_nama_pelanggan);
+   trigger `customers_zz_jaga_kembar_hitam`: nama (kuncinya) & No. HP pelanggan yang sedang menjadi kembaran hanya diubah
+   owner/GM (23514). (4/9/11, rendah) `sp_status_kirim` & `nama_pelanggan_kembar_rinci` memberi sales nama/alasan
+   daftar hitam pelanggan sales lain (lewat No. HP, pelanggan yang dipindah) → nama/alasan bagi sales hanya pada cara
+   'pelanggan' yang ia pegang; rinci: penanda hitam hanya pelanggan yang ia pegang, cabang jejak hanya selain sales.
+   (6, rendah) cek Vonny "siap / Akan ditautkan" ke kembaran, lengkapi lalu 22023; putuskan_vonny_cek bisa meloloskan
+   tanpa menautkan → cek melaporkan 'blacklist' (owner/GM) dengan pesan kembaran, pesan lengkapi dibedakan (kembaran →
+   pembeda di data pelanggan oleh owner/GM), `putuskan_vonny_cek` menolak (22023). (7, rendah) "(tanpa nama)" dianggap
+   identitas (1 lead di daftar hitam → 257 kembaran) → kunci "tanpa nama" tidak dipakai untuk pencocokan nama (No. HP
+   tetap), jejak tidak mencatatnya (DEV 0 baris dibuang).
+   Uji DEV rollback: Iwan batal → ubah Kepada selama batal 23514, hidupkan+telp 23514, hidupkan saja 23514; staff ubah
+   selama batal 23514; owner hidupkan boleh; SP tak tertahan dihidupkan lagi oleh Iwan → vonny_ok null; Minta ubah
+   "Tehnik → Teknik": usul_lepas_hitam bertanda, putuskan_ubah biasa P0001, setujui_ubah_lepas_hitam diterapkan → vonny_ok
+   null, catatan berawalan; kembaran "CV Sungaiberkat…" untuk 4303 (nama_lama terisi): Iwan ganti nama → P0001 (aturan
+   lama: nama dipakai SP/PO), staff → 23514, owner beri pembeda "… Cikarang" → rinci kosong (lepas), nama_lama tetap;
+   5395 dipindah ke Hendri + HP = HP SP 161 → Iwan sp_status_kirim tanpa nama, rinci hitam=false, owner bernama; 343
+   "Bengkel Las" HP = HP SP 161 + 240 dihitamkan → cek Vonny 'blacklist' (kembaran), loloskan 22023, lengkapi 22023 pesan
+   kembaran; lead 12 "(tanpa nama)" dihitamkan → rinci(16) kosong, jejak 0. Layar uji139x 15/15; regresi uji12 29/29,
+   uji_hp 35/35, uji_komisi 33/33, uji_set 46/46, uji139r 23/23, uji139s 17/17, uji_hitam 16/16, uji139w 9/9.
+   **Diterima / dibantah (dicatat):** HP diketik berawalan "0062" / berakhiran lain lolos pencocokan HP (perilaku
+   berkas 131 — pembeda yang TERLIHAT, sama dengan "Cabang Bekasi"); "Tempelkan PO" pada SP tertahan hanya owner/GM
+   (sesuai ATURAN). SP tertahan yang dihidupkan lagi oleh owner/GM tetap memakai cek Vonny lamanya (owner/GM/Vonny
+   memang tidak menggugurkan cek, berkas 88).
+   **Cek PROD sebelum rilis 139x:** jalankan sesudah 139s; (informasi) kembaran yang LEPAS karena nama asli tidak lagi
+   dihitung: jalankan kueri kembaran 139s di atas sebelum & sesudah 139x; 139x naik bersama index.html baru — index.html
+   lama: persetujuan GM yang melepas penahanan ditolak dengan pesan (tanpa tombol "Setujui & lepas penahanan").
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
    → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada

@@ -6650,8 +6650,17 @@ function formMintaUbah(jenis, id){
          angkanya sama bentuknya siapa pun yang mengubah. */
       if (!langsung) return null;
       idUsulLangsung = Number(idUsul);
-      return api("POST", "/rpc/putuskan_ubah",
-                 { p_id: idUsulLangsung, p_setuju: true, p_catatan: "diubah langsung" })
+      /* 139x (review 139s no. 2): perubahan yang MELEPAS penahanan daftar hitam SP diterapkan dengan sadar */
+      return (jenis === "sp"
+                ? api("POST", "/rpc/usul_lepas_hitam", { p_id: idUsulLangsung }).catch(function(e){ if (rpcBelumAda(e)) return null; throw e; })
+                : Promise.resolve(null))
+        .then(function(lepas){
+          lepas = typeof lepas === "string" && lepas.trim() ? lepas.trim() : null;
+          if (lepas && !confirm(lepas + ".\n\nTerapkan dan LEPAS penahanannya? Pastikan ini memang perusahaan/orang lain."))
+            throw new Error("Dibatalkan — perubahan ini melepas penahanan daftar hitam");
+          return lepas ? api("POST", "/rpc/setujui_ubah_lepas_hitam", { p_id: idUsulLangsung, p_catatan: "diubah langsung" })
+                       : api("POST", "/rpc/putuskan_ubah", { p_id: idUsulLangsung, p_setuju: true, p_catatan: "diubah langsung" });
+        })
         .catch(function(e){
           /* Koneksi putus (TypeError dari fetch): server mungkin SUDAH menerapkan — jangan ditutup otomatis. */
           if (e instanceof TypeError)
@@ -15909,10 +15918,32 @@ function formGmUsulUbah(ref){
       + '<button class="btn utama" id="btn-uu-setuju" type="button">Setujui &amp; terapkan</button>';
     if (bolehApprove()) muatKonteksHpp("ubah", ref, isPoUsul ? "po" : "sp");   /* #21 */
 
+    /* 139x (review 139s no. 2): persetujuan yang MELEPAS penahanan daftar hitam SP harus disadari GM — database menolak
+       putuskan_ubah biasa untuk usulan seperti itu; tombolnya berganti "Setujui & lepas penahanan" + konfirmasi. */
+    var lepasHitam = null;
+    if (!isPoUsul && bolehApprove()) {
+      api("POST", "/rpc/usul_lepas_hitam", { p_id: Number(ref) })
+        .catch(function(e){ if (rpcBelumAda(e)) return null; throw e; })
+        .then(function(m){
+          if (typeof m !== "string" || !m.trim() || !$("btn-uu-setuju")) return;
+          lepasHitam = m.trim();
+          var el = document.createElement("div");
+          el.className = "flag merah"; el.id = "uu-lepas-hitam";
+          el.innerHTML = '<span class="f-ico">!</span><div><b>' + esc(lepasHitam) + '.</b> Setujui hanya bila Kepada/No. HP '
+            + 'baru memang perusahaan/orang lain — sesudahnya SP kembali ke cek Vonny bila barangnya belum keluar.</div>';
+          $("laci-form").insertBefore(el, $("laci-form").firstChild);
+          $("btn-uu-setuju").textContent = "Setujui & lepas penahanan";
+        })
+        .catch(function(e){ toast("Pemeriksaan daftar hitam gagal dimuat: " + e.message, true); });
+    }
+
     function kirim(setuju){
+      if (setuju && lepasHitam && !confirm(lepasHitam + ".\n\nSetujui dan LEPAS penahanannya? Pastikan ini memang "
+                                           + "perusahaan/orang lain.")) return;
       sibuk(true);
-      api("POST", "/rpc/putuskan_ubah",
-          { p_id: ref, p_setuju: setuju, p_catatan: nilaiForm("uu_catatan") })
+      (setuju && lepasHitam
+        ? api("POST", "/rpc/setujui_ubah_lepas_hitam", { p_id: ref, p_catatan: nilaiForm("uu_catatan") })
+        : api("POST", "/rpc/putuskan_ubah", { p_id: ref, p_setuju: setuju, p_catatan: nilaiForm("uu_catatan") }))
       .then(function(pesan){
         tutupLaci();
         /* Pesan dari database bisa membawa peringatan bahwa SP-nya kini
