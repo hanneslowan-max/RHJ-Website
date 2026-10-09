@@ -34,6 +34,16 @@
 -- Tidak ada data yang diubah (selain jejak awal pelanggan daftar hitam yang sudah ada); tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
+--      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on';` dulu.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '139s: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → 139y berurutan sesudah set rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 -- 0 · prasyarat (review 139r no. 9): 139 & 139r sudah dijalankan
 do $$ begin
   if position('v_hitam_alasan' in pg_get_functiondef('public.cek_kelayakan_vonny(bigint,text,text)'::regprocedure)) = 0

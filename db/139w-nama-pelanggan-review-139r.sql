@@ -27,6 +27,16 @@
 -- DEV: tidak ada kunci yang berubah); tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
+--      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on';` dulu.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '139w: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → 139y berurutan sesudah set rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 do $$ begin
   if to_regprocedure('public.teks_tanpa_format(text)') is null
      or position('v_milik' in pg_get_functiondef('public.lengkapi_pelanggan_sp(bigint,text,text,text)'::regprocedure)) = 0 then

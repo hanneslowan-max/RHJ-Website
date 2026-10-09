@@ -28,6 +28,16 @@
 -- Tidak ada data yang diubah selain jejak berkunci "tanpa nama" (DEV 0 baris); tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
+--      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on';` dulu.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '139x: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → 139y berurutan sesudah set rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 do $$ begin
   if to_regprocedure('public.sp_pelanggan_hitam_rinci(bigint,bigint,text,text)') is null
      or to_regprocedure('public.tautkan_pelanggan_sp(bigint,bigint,text)') is null then

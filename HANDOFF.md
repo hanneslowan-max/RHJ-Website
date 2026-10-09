@@ -402,7 +402,8 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    139k/139t: uji diri kini menerima evtenabled 'A' (jalankan ulang aman). **Diterima (dicatat):** mengganti ISI fungsi
    predikat (`boleh_lihat_nilai_klaim`, `peran_saya`, `sales_rep_saya`) tidak dijaga event trigger — hanya uji perilaku
    periksa_view_komisi(); menjalankan ulang 139k/139t SESUDAH 139v mengembalikan versi lama view_komisi_cacat/periksa →
-   jalankan 139v lagi sesudahnya. **Sesi EHC / migrasi berikutnya:** kolom baru di ke-4 view → perbarui daftar kolom di
+   (sejak 139y) berkas lama menolak dijalankan ulang sendirian; jalankan ulang rantai 138 → 139y berurutan sesudah
+   `set rhj.ulang_rantai = 'on'`. **Sesi EHC / migrasi berikutnya:** kolom baru di ke-4 view → perbarui daftar kolom di
    `view_komisi_cacat()` dulu (pesan galat menyebutnya). **Cek PROD sebelum rilis 139v:** sesudah rilis
    `select evtname, evtenabled from pg_event_trigger where evtname like 'jaga_view_komisi%';` → 3 baris 'A'; daftar kolom
    ke-4 view di PROD sama dengan DEV (uji diri gagal keras bila beda).
@@ -501,7 +502,7 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    — 'i' (ICU; DEV 'i'), kelas [[:alnum:]] = huruf + angka desimal; bila 'c' laporkan dulu. (2) SIMPAN dulu badan
    `select pg_get_functiondef('public.customers_sales_bawaan()'::regprocedure);` (139r bagian D menggantinya utuh dan
    versi lamanya tidak ada di repo — hanya di PROD). (3) Urutan: 138 → 139 → 139k → 139p → 139r → 139s → 139t → 139u →
-   139v → 139w (`sort -t- -k1,1V`). (4) Informasi SESUDAH 139w — kunci yang berubah dibanding kunci lama berkas 109
+   139v → 139w → 139x → 139y (`sort -t- -k1,1V`). (4) Informasi SESUDAH 139w — kunci yang berubah dibanding kunci lama berkas 109
    (DEV 0 / 0 / 0 / 0):
    `select count(*) filter (where kunci_nama_pelanggan(c.nama) is distinct from l.k) nama_berubah, count(*) filter (where
    c.nama_lama is not null and kunci_nama_pelanggan(c.nama_lama) is distinct from ll.k) nama_lama_berubah, count(*)
@@ -688,6 +689,44 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    **Cek PROD sebelum rilis 139x:** jalankan sesudah 139s; (informasi) kembaran yang LEPAS karena nama asli tidak lagi
    dihitung: jalankan kueri kembaran 139s di atas sebelum & sesudah 139x; 139x naik bersama index.html baru — index.html
    lama: persetujuan GM yang melepas penahanan ditolak dengan pesan (tanpa tombol "Setujui & lepas penahanan").
+   **Review adversarial gabungan 139v/139w/139x/#55b** (15 agen; 10 terkonfirmasi, 1 dibantah) → **berkas 139y (DEV 9 Okt)**
+   + index.html: (139x-7, tinggi) SP tertahan dilepas lewat PO-nya — batalkan SP, buat SP saudara dari PO yang sama,
+   Vonny menautkannya (pelanggan PO ikut terisi), hidupkan SP lama; rinci untuk SP belum tertaut hanya membaca pelanggan
+   PO → `sp_pelanggan_hitam_rinci`: pelanggan PO MENAMBAH pemeriksaan, SP belum tertaut tetap diperiksa nama/No. HP-nya.
+   (139w-3, sedang) karakter tak terlihat di luar daftar (U+1D173–1D17A, U+FFF0–FFFB, …) & simbol mirip huruf (∣ × ∪)
+   membuat kembaran yang tampak sama → `teks_tanpa_format` membuang sisa karakter format; `ada_huruf_non_latin` memakai
+   DAFTAR IZIN (huruf Latin biasa/beraksen umum, ASCII, tanda umum) — simbol lain & tanda aksen lepas ditolak untuk
+   selain owner/GM/staff. (139w-4, sedang) Kepada non-Latin lewat Minta ubah SP diterapkan GM; cek Vonny "baru/siap" lalu
+   lengkapi Vonny gagal → `ajukan_ubah` menolak (P0001), `putuskan_ubah` memeriksa peran PENGAJU, cek Vonny kode
+   'nama_non_latin' (owner/GM); layar Minta ubah memeriksa sebelum mengirim. (139w-5) ư ơ (Vietnam) kini diterima, ligatur
+   PDF ﬀ–ﬆ ditulis huruf biasa; ș ț tetap ditolak (dicatat). (139w-6) jejak daftar hitam menyimpan kunci versi lama →
+   kolom `pelanggan_hitam_jejak.teks`, `segarkan_jejak_hitam()`, baris jejak dari nama sekarang dibangun ulang (kunci
+   139r dikenali lewat fungsi sementara). (139v-1) kolom lama yang ekspresinya diganti angka komisi (mis. `sumber_pct =
+   'tier ' || pct`) lolos penjaga & periksa → `periksa_view_komisi()` + uji DIFERENSIAL (komisi_pct_baris, flat pct, gm
+   pct diganti dua kali per cabang tier/cash/flat di subtransaksi yang dibatalkan; sidik kolom lain yang terbaca Vonny
+   harus sama). (139v-2) menjalankan ulang 139k sesudah 139v diam-diam menurunkan penjaga → 139y memuat ulang seluruh
+   penjaga; berkas 139k/139t/139v/139r/139s/139w/139x menolak dijalankan ulang sendirian sesudah 139y (menjalankan ulang
+   rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on'` dulu). (139x-8, FE) jawaban `usul_lepas_hitam` yang
+   terlambat menulis tanda merah ke laci usulan lain → diikat ke laci yang memintanya. (#55b-9, sedang) `overflow-wrap:
+   anywhere` di `.pk-isi` mematahkan angka rupiah & judul kolom (PDF 6/7 kolom, HP) → hanya teks bebas (paragraf, catatan,
+   deskripsi, spesifikasi, tanda tangan); di HP tabel 11 px. (#55b-10) baris terakhir tinggi (±205 mm) menjatuhkan surat
+   ke alur cadangan & TOTAL+PPN terpisah → baris terakhir dibawa hanya bila muat bersama ringkasan; cadangan juga
+   menjaga ringkasan utuh. Dibantah: uji perilaku hanya mensimulasikan Vonny (Lie Sian/Ichi) — fungsi predikat sama.
+   Uji diri 139y: huruf/teks 13 kasus, jejak sesuai kunci, SP belum tertaut di PO tertaut diperiksa nama-nya,
+   periksa_view_komisi lolos & MENOLAK view dengan `sumber_pct = 'tier ' || pct`. Uji DEV rollback: alur SP 61/PO 51
+   (batal → SP saudara → Vonny lengkapi → batal → hidupkan) → 23514, SP 61 tetap tertahan; Iwan ajukan Kepada ǀ → P0001;
+   GM menerapkan usulan lama Iwan → P0001; cek Vonny Kepada non-Latin (disimpan owner) → nama_non_latin; Iwan pelanggan
+   "PT DH\u{1D173}L Supply Chain Indonesia" → 23505 (kembar), "…∣ndonesia" → P0001, "Trương Phương" & "Oﬁce" → tersimpan;
+   penjaga ulang-jalan menolak tanpa izin. Cermin layar = DB 49 kasus. Layar uji139x 17/17, uji139w 9/9, uji55b 21/21
+   (baru: angka/judul kolom tidak patah 1366 & 390 px, baris ±205 mm tetap dipenggal), skrip pemeriksa review 55b: 0
+   patahan angka, 40–44 baris spesifikasi tetap dipenggal; regresi uji55 44/44, uji_pengguna 10/10, uji_hp 35/35,
+   uji12 29/29, uji139r 23/23, uji139s 17/17, uji_hitam 16/16, uji_pnw 31/31, uji60 28/28, uji60b 28/28, uji58 25/25,
+   uji59b 16/16, uji_usulan 7/7, uji_set 46/46, uji_komisi 33/33. **Diterima (dicatat):** cabang harga khusus tidak
+   ikut uji diferensial (butuh data harga khusus — SP uji dipilih tanpa harga khusus); № · • ditolak untuk sales (tulis
+   "No."); jejak nama LAMA (sebelum ganti nama) yang tercatat sebelum 139y tidak bisa dihitung ulang (teks asalnya tidak
+   tersimpan). **Cek PROD sebelum rilis 139y:** jalankan sesudah 139x (urutan `sort -t- -k1,1V`); (informasi) nama
+   pelanggan/Kepada yang kini tergolong "di luar huruf Latin biasa": `select count(*) from customers where
+   ada_huruf_non_latin(nama);` sesudah rilis (DEV 0) — hanya berlaku saat diubah oleh selain owner/GM/staff.
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
    → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada

@@ -18,6 +18,16 @@
 -- Tidak ada data yang diubah; tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
+--      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on';` dulu.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '139t: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → 139y berurutan sesudah set rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 -- A · (no. 3) pct_berlaku: NULL dianggap tidak berhak
 do $$
 declare v text; a text := 'WHEN (NOT kv.boleh) THEN NULL::numeric'; b text := 'WHEN (kv.boleh IS NOT TRUE) THEN NULL::numeric'; n int;

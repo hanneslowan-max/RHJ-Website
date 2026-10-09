@@ -34,6 +34,16 @@
 -- tidak ada objek yang dibuang. Jangkar bergantung pada bentuk pg_get_viewdef PostgreSQL 17 — gagal keras bila beda.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
+--      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → 139y berurutan: `set rhj.ulang_rantai = 'on';` dulu.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '139k: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → 139y berurutan sesudah set rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 -- 0. pemeriksa internal (TANPA cabang current_user — dipakai fungsi definer)
 create or replace function public.boleh_lihat_komisi_sp(p_so bigint)
 returns boolean language sql stable security definer set search_path = public as $$
