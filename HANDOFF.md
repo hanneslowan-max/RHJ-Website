@@ -285,6 +285,34 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    (Rp 18.550.689,70) dan `komisi_belum_klaim` 51 baris; kemungkinan juga Lie Sian/Ichi/Lenni.
 2. **Nama pelanggan ganda**: sales bisa PATCH nama pelanggannya jadi persis nama pelanggan sales lain, dan POST
    `/customers` dengan nama ganda lolos (hanya `buat_pelanggan_baru` yang menolak). Uji: Iwan → "PT Garuda Metalindo".
+   → **SELESAI berkas 138 (DEV 9 Okt)** + FE — keputusan 8a, 9, 10a, 17a (menutup juga sisa (1) review 134):
+   `customers_tolak_nama_ganda` (BEFORE INSERT/UPDATE OF nama, nama_lama, id; sesudah customers_rapi_nama): id tidak
+   bisa diubah (22023); ganti nama pelanggan yang ada di SP/PO/penawaran/harga khusus oleh selain owner/GM/staff ditolak
+   bila sidik huruf atau kunci nama berubah (P0001 — merapikan penulisan tetap boleh); SALES: kunci nama BARU (nama &
+   nama_lama) yang sama dengan pelanggan lain ditolak (23505, advisory lock per kunci; pesan menyebut pelanggan &
+   pemegangnya — boleh dilihat sales, #49). `customers_rapi_nama`: ubahan nama oleh sales tidak mengisi nama_lama.
+   `customers_jaga_sales`: sales mengambil pelanggan belum bertuan hanya lewat PO (`po_auto_klaim_sales` memasang
+   bendera transaksi `rhj.klaim_po`). Audit `zz_audit_customers` → `catat_perubahan`. `cek_kelayakan_vonny` &
+   `lengkapi_pelanggan_sp`: kembaran nama milik sales lain didahulukan, lalu milik sales SP, lalu belum bertuan.
+   RPC `nama_pelanggan_kembar(p_nama, p_kecuali)` (boleh_ubah_crm/Vonny; anon dicabut) untuk peringatan layar.
+   FE: kotak Sales di laci pelanggan hanya owner/GM/staff (keterangan "milik sales yang pertama membuat PO"), catatan
+   ganti nama untuk sales, peringatan nama kembar (confirm) untuk owner/GM/staff di tab Pelanggan, CRM, dan Lead baru;
+   Lead baru sales yang ditolak karena nama kembar menawarkan "Pakai pelanggan ini" bila pelanggan itu terlihat (RLS
+   customers: miliknya / belum bertuan; lead_tambah tetap `pelanggan_saya`). Teks prinsip tab Pelanggan diperbarui.
+   Uji DEV rollback T1–T16: Iwan ganti nama pelanggan bertransaksi → P0001; rapikan → boleh; POST kembar pelanggan
+   Hendri → 23505; nama unik → ok (rep 5); ganti ke nama kembar → 23505; ubah id → 22023; klaim langsung → P0001;
+   klaim lewat PO → rep 5, bendera kosong lagi; nama_lama tetap kosong; Arie ganti nama 1666 (harga khusus) → P0001;
+   kembar 956/966 → cek Vonny `nama_sales_lain`, lengkapi → 42501; owner kembar → boleh; RPC kembar → daftar; owner
+   ganti nama → ok; audit 8 baris; tanpa sesi → ok. Layar uji_pelanggan 15/15; regresi uji_hp 35/35, uji_set 46/46,
+   uji58 25/25, uji_vonny 32/32, uji_vonny2 16/16, uji119 36/36, uji_segar 34/34, uji_segar2 14/14, uji_nomor 10/10,
+   uji_nama 12/12, uji_lampiran 23/23, uji_usulan 4/4, uji_pnw 31/31.
+   **Sisa (pertanyaan 21, menunggu Hannes):** kembaran nama LAMA yang belum bertuan (termasuk kembaran pelanggan
+   Office) masih bisa diambil lewat PO oleh sales lain — PO memilih pelanggan dari daftar, jadi kembarannya tetap
+   "pelanggan belum bertuan" biasa. Pilihan: (a) biarkan, owner/GM/staff merapikan kembaran lama dari tab Pelanggan;
+   (b) PO ditolak bila pelanggan belum bertuan yang dipilih punya kembaran nama yang sudah bertuan.
+   **Cek PROD sebelum rilis 138:** `select to_regprocedure('public.catat_perubahan()') is not null;` (wajib true) dan
+   (informasi untuk Hannes) jumlah kunci nama kembar lama: `select count(*) from (select kunci_nama_pelanggan(nama) k
+   from customers group by 1 having count(*) > 1) x;`.
 3. **View `usulan_produk`** (milik postgres, bukan security_invoker): semua sales membaca seluruh usulan, pembuatnya,
    dan customer PO sales lain.
    → **SELESAI berkas 136 (DEV 9 Okt)** + FE (teks): view `security_invoker = on` (isi/kolom/opsi B sama persis),
@@ -343,7 +371,7 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    patokan harga khusus dibekukan saat SP dibuat (so_baris_hitung — area komisi, perlu sesi EHC); (b) cek Vonny menahan
    SP yang pelanggannya datang dari PO menyusul bila PO-nya tanpa lampiran.
    **Review adversarial 134** (2 pemeriksa + verifikator per temuan; 4 terkonfirmasi — DEV `134b`):
-   (1, tinggi — BELUM ditutup, ikut pertanyaan 9) sales bisa mengganti nama pelanggannya sementara (UI biasa: ubah
+   (1, tinggi — DITUTUP berkas 138, lihat butir 2) sales bisa mengganti nama pelanggannya sementara (UI biasa: ubah
    nama → buat SP pilih pelanggan itu dengan Kepada nama palsu → kembalikan nama), atau menanam alias permanen di
    nama_lama (customers_rapi_nama mengisi nama_lama dari ketikan saat nama_lama kosong & nama dirapikan; tak bisa
    dihapus lewat REST) → Kepada lolos, harga khusus pelanggan itu dipakai, gerbang GM & cek HP/alamat Vonny terlewati;

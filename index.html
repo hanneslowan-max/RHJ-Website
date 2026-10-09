@@ -1747,7 +1747,8 @@ function formLeadBaru(){
   var pilihan = null;                       /* pelanggan lama yang ketemu */
   var h = '<div class="flag"><span class="f-ico">i</span><div>'
     + 'Ketik <b>nomor HP dulu</b>. Kalau nomornya sudah pernah masuk, nama pelanggan dan '
-    + 'riwayatnya langsung terisi — tidak perlu diketik ulang.</div></div>'
+    + 'riwayatnya langsung terisi — tidak perlu diketik ulang. Satu perusahaan satu data pelanggan: nama yang sama '
+    + 'dengan pelanggan lain ditolak untuk sales — beri pembeda (mis. kota) bila memang orang/perusahaan lain.</div></div>'
     + field({nama:"nb_hp", label:"Nomor HP", wajib:true, tempel:"0812…", bantu:"&nbsp;"})
     + '<div id="nb-temuan"></div>'
     + field({nama:"nb_nama", label:"Nama perusahaan", wajib:true, bantu:"&nbsp;"})   /* #20: pratinjau nama rapi */
@@ -1793,13 +1794,18 @@ function formLeadBaru(){
     var hp = hpNormal(nilaiForm("nb_hp"));
     var nama = (nilaiForm("nb_nama") || "").trim();
     if (!hp)   { tampilPesan("Nomor HP wajib diisi — itu kunci penggabungan pelanggan."); return; }
-    if (!nama) { tampilPesan("Nama perusahaan wajib diisi. Kalau memang perorangan, tulis nama orangnya."); return; }
-    sibuk(true, "Menyimpan…");
+    if (!nama) { tampilPesan("Nama perusahaan wajib diisi. Kalau memang perorangan, tulis nama orangnya beserta pembeda (mis. kota)."); return; }
     var siapCustomer = pilihan
       ? Promise.resolve(pilihan.id)
-      : api("POST", "/customers", { nama:nama, hp:hp, pic:nilaiForm("nb_pic"), lokasi:nilaiForm("nb_lokasi") },
-                                  "return=representation")
-          .then(function(r){ return r[0].id; });
+      /* Keamanan #2 (berkas 138): owner/GM/staff diberi tahu bila namanya sama dengan pelanggan lain */
+      : konfirmasiNamaKembar(nama, null).then(function(lanjut){
+          if (!lanjut) throw { batal: true };
+          sibuk(true, "Menyimpan…");
+          return api("POST", "/customers", { nama:nama, hp:hp, pic:nilaiForm("nb_pic"), lokasi:nilaiForm("nb_lokasi") },
+                                      "return=representation")
+            .then(function(r){ return r[0].id; });
+        });
+    if (pilihan) sibuk(true, "Menyimpan…");
     siapCustomer.then(function(cid){
       var badan = {
         customer_id: cid, tanggal: hariIni(),
@@ -1815,7 +1821,30 @@ function formLeadBaru(){
       CRM.dimuat = false; return muatCrm(true);
     }).then(function(){
       sibuk(false); tutupLaci(); panelCrm(); toast("Lead baru tersimpan.");
-    }).catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
+    }).catch(function(e){
+      sibuk(false);
+      if (e && e.batal) return;
+      tampilPesan(esc(e.message));
+      /* Keamanan #2 (berkas 138): nama sudah dipakai pelanggan lain — bila pelanggan itu terlihat (milik sendiri / belum
+         bertuan), tawarkan mencatat lead ke pelanggan itu. */
+      var m = /Pelanggan "([^"]+)" sudah ada di data pelanggan/.exec(String(e && e.message || ""));
+      if (!m || pilihan) return;
+      api("GET", "/customers?select=id,nama,hp,pic,lokasi&nama=eq." + encodeURIComponent(m[1]) + "&limit=1")
+        .then(function(r){
+          var ada = r && r[0], kotak = $("nb-temuan");
+          if (!ada || !kotak) return;
+          kotak.innerHTML = '<div class="flag"><span class="f-ico">↺</span><div>Nama ini sudah ada: <b>' + esc(ada.nama)
+            + '</b>' + (ada.hp ? ' (HP ' + esc(ada.hp) + ')' : '') + '. <button type="button" class="btn kecil" id="nb-pakai">'
+            + 'Pakai pelanggan ini</button><br><span class="muted">Lead dicatat ke pelanggan itu; No. HP yang Anda ketik '
+            + 'tidak mengganti No. HP-nya.</span></div></div>';
+          $("nb-pakai").addEventListener("click", function(){
+            pilihan = ada;
+            kotak.innerHTML = '<div class="flag ok"><span class="f-ico">✓</span><div>Pelanggan lama: <b>' + esc(ada.nama)
+              + '</b>. Tekan Simpan lead lagi.</div></div>';
+            $("f_nb_nama").value = ada.nama || ""; $("f_nb_pic").value = ada.pic || ""; $("f_nb_lokasi").value = ada.lokasi || "";
+          });
+        }).catch(function(){});
+    });
   });
 }
 function repSaya(){
@@ -1827,9 +1856,9 @@ function repSaya(){
 function panelPelanggan(){
   var el = $("p-crm");
   var h = '<div class="flag"><span class="f-ico">i</span><div>'
-    + 'Pelanggan digabungkan berdasarkan <b>nomor HP</b>, bukan nama — nama perusahaan '
-    + 'diketik berbeda-beda tiap kali, nomor HP tidak. Daftar ini dicari di server, '
-    + 'bukan ditarik semuanya saat login.</div></div>'
+    + 'Satu perusahaan satu data pelanggan. <b>Nomor HP</b> tetap kunci penggabungan; nama yang sama dengan '
+    + 'pelanggan lain ditolak untuk sales (beri pembeda, mis. kota/cabang) dan owner/GM/staff diberi peringatan. '
+    + 'Daftar ini dicari di server, bukan ditarik semuanya saat login.</div></div>'
     + '<div class="baris-alat"><input type="search" id="pl-cari" placeholder="Cari nama perusahaan atau nomor HP… (minimal 2 huruf)" value="'
     + esc(CRM.cariPelanggan) + '">'
     + (bolehKonfirmasiKirim() ? '<button class="btn" id="pl-rapi" type="button" title="Rapikan penulisan nama: PT/CV/UD ke depan, Tbk di belakang, huruf besar-kecil rapi, singkatan dipertahankan">🧹 Rapikan Nama</button>' : '')
@@ -1970,6 +1999,7 @@ function gambarHasilPelanggan(d){
 function formPelanggan(c){
   var h = field({nama:"pc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:!bolehUbahCrm(),
                  bantu:"&nbsp;"})   /* #20: pratinjau nama rapi */
+    + (peranSales() ? CATATAN_NAMA_SALES : '')   /* keamanan #2 (berkas 138) */
     + field({nama:"pc_hp", label:"Nomor HP", nilai:c.hp, mati:!bolehUbahCrm(),
              bantu:"Kunci penggabungan. Mengubahnya bisa memisahkan riwayat."})
     + field({nama:"pc_pic", label:"Nama PIC", nilai:c.pic, mati:!bolehUbahCrm()})
@@ -1994,13 +2024,18 @@ function formPelanggan(c){
     .catch(function(e){ $("pc-lead").textContent = e.message; });
 
   if ($("btn-pc-simpan")) $("btn-pc-simpan").addEventListener("click", function(){
-    var hp = hpNormal(nilaiForm("pc_hp"));
-    sibuk(true, "Menyimpan…");
-    api("PATCH", "/customers?id=eq." + c.id, {
-      nama: nilaiForm("pc_nama"), hp: hp, pic: nilaiForm("pc_pic"), lokasi: nilaiForm("pc_lokasi")
-    }, "return=minimal")
-      .then(function(){ sibuk(false); tutupLaci(); cariPelangganServer(); toast("Pelanggan disimpan."); })
-      .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
+    var hp = hpNormal(nilaiForm("pc_hp")), namaPc = nilaiForm("pc_nama");
+    /* Keamanan #2 (berkas 138): nama berubah kunci → owner/GM/staff diberi tahu bila sama dengan pelanggan lain */
+    (kunciNamaPelanggan(namaPc) !== kunciNamaPelanggan(c.nama) ? konfirmasiNamaKembar(namaPc, c.id) : Promise.resolve(true))
+    .then(function(lanjut){
+      if (!lanjut) return;
+      sibuk(true, "Menyimpan…");
+      return api("PATCH", "/customers?id=eq." + c.id, {
+        nama: namaPc, hp: hp, pic: nilaiForm("pc_pic"), lokasi: nilaiForm("pc_lokasi")
+      }, "return=minimal")
+        .then(function(){ sibuk(false); tutupLaci(); cariPelangganServer(); toast("Pelanggan disimpan."); })
+        .catch(function(e){ sibuk(false); tampilPesan(esc(e.message)); });
+    });
   });
 }
 
@@ -4526,10 +4561,30 @@ function cekPemilikPelanggan(q, rep){
    aturan database; yang di sini cuma supaya kotaknya tidak terlihat bisa
    diubah padahal akan ditolak. */
 function bolehPindahSales(c){
-  if (["owner","gm","staff"].indexOf(saya.peran) > -1) return true;
-  /* Sales cuma boleh mengambil yang belum bertuan, untuk dirinya sendiri. */
-  return saya.peran === "sales" && c && !c.sales_rep_id;
+  /* Keamanan #2/no. 17 (berkas 138, keputusan Hannes 9 Okt): sales tidak lagi mengambil sendiri pelanggan yang belum
+     bertuan — pelanggan itu menjadi miliknya otomatis saat ia membuat PO untuknya (po_auto_klaim_sales). */
+  return ["owner","gm","staff"].indexOf(saya.peran) > -1;
 }
+/* Keamanan #2 (berkas 138): nama yang sama (kunci_nama_pelanggan) dengan pelanggan lain — sales ditolak database
+   (beri pembeda); owner/GM/staff boleh menyimpan, tetapi diberi tahu dulu. Gagal memeriksa / database tanpa berkas 138
+   → lanjut (database tetap menjaga sales). */
+function konfirmasiNamaKembar(nama, kecuali){
+  if (peranSales() || !String(nama || "").trim()) return Promise.resolve(true);
+  return api("POST", "/rpc/nama_pelanggan_kembar", { p_nama: String(nama).trim(), p_kecuali: kecuali || null })
+    .then(function(r){
+      r = Array.isArray(r) ? r : [];
+      if (!r.length) return true;
+      return confirm("Nama ini sama dengan pelanggan lain:\n"
+        + r.map(function(x){ return "• " + x.nama + " (" + (x.sales ? "sales " + x.sales : "belum bertuan") + ")"; }).join("\n")
+        + "\n\nSatu perusahaan sebaiknya satu data pelanggan — pakai yang sudah ada bila memang sama. "
+        + "Tetap simpan sebagai pelanggan terpisah?");
+    })
+    .catch(function(){ return true; });
+}
+var CATATAN_NAMA_SALES = '<div class="muted" style="font-size:12px;margin:-4px 0 10px">Nama pelanggan yang sudah dipakai di '
+  + 'SP/PO/penawaran/harga khusus hanya bisa diganti owner/GM/staff — Anda hanya bisa merapikan penulisannya '
+  + '(huruf besar-kecil, tanda baca, letak PT/CV). Nama yang sama dengan pelanggan lain ditolak; beri pembeda '
+  + '(mis. kota atau cabang).</div>';
 
 /* ── kotak cari produk: master produk sudah ada di memori ────────────── */
 /* Produk usulan sengaja TIDAK ikut hasil pencarian biasa. Kalau ikut, ia
@@ -9513,10 +9568,12 @@ function panelPelangganTab(){
     h += halamanPelanggan(P);
   }
 
-  h += kotakGerbang('<b>Pelanggan digabungkan berdasarkan nomor HP, bukan nama.</b> '
-    + 'Nama perusahaan diketik berbeda-beda tiap kali; nomor HP tidak. Itu sebabnya nomor HP '
-    + 'punya indeks unik di database — dan kenapa mengubahnya bisa memisahkan riwayat lead '
-    + 'yang selama ini menempel di satu perusahaan.');
+  h += kotakGerbang('<b>Satu perusahaan satu data pelanggan.</b> '
+    + 'Nomor HP punya indeks unik di database dan tetap kunci penggabungan — mengubahnya bisa memisahkan riwayat '
+    + 'lead yang selama ini menempel di satu perusahaan. Nama yang sama dengan pelanggan lain ditolak untuk sales '
+    + '(beri pembeda, mis. kota atau cabang); owner/GM/staff diberi peringatan. Nama pelanggan yang sudah dipakai di '
+    + 'SP/PO/penawaran/harga khusus hanya diganti owner/GM/staff. Pelanggan yang belum bertuan menjadi milik sales '
+    + 'yang pertama membuat PO untuknya.');
 
   el.innerHTML = h;
   pasangPilihanTampilPelanggan(P);   /* #49 */
@@ -9624,6 +9681,7 @@ function formPelangganTab(c){
   var kunci = !bolehUbahCrm();
   var h = field({ nama:"plc_nama", label:"Nama perusahaan", nilai:c.nama, wajib:true, mati:kunci,
                   bantu: kunci ? "" : "&nbsp;" })   /* #20: pratinjau nama rapi */
+    + (peranSales() && !kunci ? CATATAN_NAMA_SALES : '')   /* keamanan #2 (berkas 138) */
     + '<div class="baris2">'
     +   field({ nama:"plc_hp", label:"Nomor HP", nilai:c.hp, mati:kunci,
                 bantu:"Kunci penggabungan. Mengubahnya bisa memisahkan riwayat lead." })
@@ -9656,7 +9714,9 @@ function formPelangganTab(c){
                 ? "Satu pelanggan dipegang satu sales. Sales yang tertulis di sini yang terisi otomatis saat PO perusahaan ini masuk."
                 : (c.sales_rep_id
                     ? "Pelanggan ini sudah ada pemiliknya. Pemindahan diputuskan owner, GM, atau staff."
-                    : "Hanya owner, GM, atau staff yang menetapkan sales penanggung jawab."))
+                    : (peranSales()
+                        ? "Pelanggan yang belum bertuan menjadi milik sales yang pertama membuat PO untuknya. Pemindahan lain diputuskan owner, GM, atau staff."
+                        : "Hanya owner, GM, atau staff yang menetapkan sales penanggung jawab.")))
                 /* berkas 119: riwayat sales lama yang sudah nonaktif */
                 + (c.sales_rep_lama_id
                     ? " Sales sebelumnya: <b>" + esc(namaRepAlur(c.sales_rep_lama_id) || "sales lama")
@@ -9758,6 +9818,11 @@ function simpanPelangganTab(c, baru){
     var rep = nilaiForm("plc_rep");
     badan.sales_rep_id = rep ? Number(rep) : null;
   }
+  /* Keamanan #2 (berkas 138): nama baru / berubah kunci → owner/GM/staff diberi tahu bila sama dengan pelanggan lain */
+  var cekNama = baru || kunciNamaPelanggan(nama) !== kunciNamaPelanggan(c.nama)
+    ? konfirmasiNamaKembar(nama, baru ? null : c.id) : Promise.resolve(true);
+  cekNama.then(function(lanjut){
+    if (!lanjut) return;
   var janji = baru
     ? api("POST", "/customers", badan, "return=representation")
     : api("PATCH", "/customers?id=eq." + c.id, badan, "return=representation");
@@ -9778,6 +9843,7 @@ function simpanPelangganTab(c, baru){
       tampilPesan("Nomor HP itu sudah dipakai pelanggan lain. Cari dulu nomornya di daftar — "
         + "kemungkinan besar perusahaan ini sudah ada dengan nama yang ditulis berbeda.");
     else tampilPesan(esc(m) + petunjukBerkas(m));   /* #60 review: galat skema → berkas migrasinya */
+  });
   });
 }
 
@@ -20901,7 +20967,10 @@ window.__segar = {
   cekDiskonPo: function(b, no){ return cekDiskonPo(b, no); },
   detailSp: function(row){ formDetailDoc("sp", row); },    /* #51: uji detail SP */
   cekVonny: function(row){ formCekVonny(row); },            /* #57: uji laci Double Check */
-  kirimPartial: function(s, l, k){ gambarKirimPartial(s, l, k); }   /* #57: uji Pengiriman bertahap */
+  kirimPartial: function(s, l, k){ gambarKirimPartial(s, l, k); },   /* #57: uji Pengiriman bertahap */
+  pelangganTab: function(c){ formPelangganTab(c); },        /* keamanan #2: uji laci pelanggan */
+  pelangganCrm: function(c){ formPelanggan(c); },
+  leadBaru: function(){ formLeadBaru(); }
 };
 /* Kait sesi — gate yang sama: hanya localhost / file:. Tidak membuka apa
    pun yang tidak bisa dilihat dari console; gunanya supaya penjaga sesi
