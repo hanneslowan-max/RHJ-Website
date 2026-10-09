@@ -381,6 +381,31 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    atau cascade hapus SP); klaim tidak ikut berubah bila EHC SP diubah (SP 007-IX: klaim 20.000, EHC jadi 5.000).
 7. **Daftar hitam terlewati** pada SP tanpa PO tanpa pelanggan (`jaga_blacklist_po` hanya di PO) — makin sering bila
    #50 meloloskan SP tanpa tautan.
+   → **SELESAI berkas 139 (DEV 9 Okt)** + FE — keputusan 14 (ditahan total), 15 (owner & GM saja), 16 (invoice &
+   pelunasan tetap). `sp_pelanggan_hitam(customer, po, kepada, telp)` (internal): pelanggan SP / pelanggan PO-nya; SP belum
+   tertaut → cocok nama (kunci nama & nama asli) lalu No. HP ke pelanggan daftar hitam. Trigger `so_jaga_b_daftar_hitam`
+   (BEFORE INSERT / UPDATE OF batal): SP baru & SP batal dihidupkan lagi ditolak (tertaut: semua peran; cocok nama/HP:
+   selain owner/GM). RPC `sp_daftar_hitam_cek` dipanggil layar SEBELUM nomor SP diambil (pesan cocok nama tanpa menyebut
+   pelanggannya). Gerbang surat jalan: `gerbang_kirim_sp` (setiap batch bertahap) & `jaga_urutan_dokumen_sp` (surat jalan
+   sekaligus; bukan saat rhj.sj_final — penutupan batch yang sudah terbit, mis. sisa dibatalkan) → `tahan_daftar_hitam_sp`
+   (23514), izin kirim tidak membukanya; invoice/faktur/lunas tidak diperiksa. `cek_kelayakan_vonny` kode 'blacklist'
+   (owner/GM) & `putuskan_vonny_cek` menolak meloloskan (22023). `customers_jaga_status`: blacklist/perlu_konfirmasi &
+   alasannya hanya owner/GM (P0001), daftar hitam wajib beralasan. Tiga fungsi panjang diubah dengan sisip teks + jangkar;
+   dibuktikan md5 definisi tanpa sisipan = md5 sebelum (DEV). FE: Status di laci pelanggan terkunci selain owner/GM (dan
+   tidak dikirim), toast pemilihan pelanggan di PO/SP menyebut penolakan, simpan SP memeriksa daftar hitam sebelum nomor,
+   Pengiriman (sekaligus & bertahap) menandai & mengunci surat jalan pelanggan daftar hitam. Uji DEV rollback T1–T15: sales/
+   staff ubah status → P0001; sales ubah PIC (status sama) → ok; owner tanpa alasan → P0001; owner daftar hitamkan → ok;
+   Iwan SP pelanggan 43 / teks "angkasa buana." → P0001; nama berpembeda → ok; owner teks cocok → boleh; Iwan cek → pesan
+   bernama / umum, owner → kosong; SP 161 "Bp Untung" cocok pelanggan hitam → cek 'blacklist', loloskan 22023, tahan ok,
+   SP 163 tetap ok; SP 149 surat jalan bertahap/sekaligus → 23514 (juga sesudah izin kirim); cabut → batch lolos; hitam
+   lagi → batch ke-2 ditolak, batal sisa → final, invoice & lunas ok; SP 164 batal dihidupkan → P0001. Layar uji_hitam
+   16/16; regresi uji_hp 35/35, uji_set 46/46, uji58 25/25, uji_vonny 32/32, uji_vonny2 16/16, uji119 36/36, uji_segar
+   34/34, uji_segar2 14/14, uji_nomor 10/10, uji_nama 12/12, uji_lampiran 23/23, uji_pelanggan 15/15, uji12 29/29,
+   uji_komisi 33/33, uji60b 28/28. DEV: tidak ada SP hidup yang tertahan (1 pelanggan daftar hitam, tanpa SP).
+   **Cek PROD sebelum rilis 139 (informasi untuk Hannes/GM — SP ini akan tertahan):** sesudah migrasi,
+   `select s.no_sp, s.status, s.kepada from sales_orders s where not s.batal and s.no_surat_jalan is null and
+   public.sp_pelanggan_hitam(s.customer_id, s.po_id, s.kepada, s.telp) is not null;` (atau sebelum migrasi: SP tidak batal
+   tanpa surat jalan yang pelanggannya `blacklist`).
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
    → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada
