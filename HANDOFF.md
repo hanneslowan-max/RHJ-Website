@@ -150,6 +150,21 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   **selesai oleh `db/134`** sesi 50–61 (trigger `so_jaga_pelanggan`).
 - Tahap berikut yang diusulkan: 3 (periode & pemeriksaan GM) sebelum 2 (kartu kredit), lalu 4, 5, 6.
 
+### Tahap 3 — periode & pemeriksaan GM (mulai 9 Okt)
+- Rancangan final: **`RANCANGAN-EHC-TAHAP3.md`** (workflow peta DEV/layar/aturan → 3 rancangan → juri → penyusun).
+  Berkas: db/141 (struktur), db/142 (fungsi), db/143 (view antrean_gm & ehc_cepat_siap) — masing-masing < 80 KB,
+  tanpa kata delete/drop.
+- **Keputusan Hannes 9 Okt:** P1 GM/owner **boleh** memutus klaim yang ia buat/ubah/minta cepat atau milik sales
+  yang tertaut ke akunnya (cukup tercatat); P2 tolak EHC cepat = hanya cepatnya ditolak, klaim ikut pemeriksaan biasa;
+  P3 ditolak sesudah komisi SP diklaim → saldo ke kas sales; P4 **Vonny/Lie Sian/Ichi tidak melihat klaim EHC**.
+- Inti: status diajukan → disetujui/ditolak oleh GM per klaim sesudah cutoff 18 (lintas boleh disetujui GM; massal
+  hanya non-lintas); rekening tujuan dikunci saat disetujui (`ehc_klaim_tujuan`); jejak `ehc_klaim_putusan`;
+  finance mengunci daftar bayar sekali per periode mulai tgl 20 WIB (`rekap_ehc_bulanan`, hanya SP lunas), transfer,
+  keluarkan yang gagal, isi referensi → `ditransfer_pada`; EHC cepat disetujui GM kapan saja, cair sebelum lunas.
+  EHC tidak lagi lewat `transfer_pengajuan` (komisi tetap jalur lama sampai tahap 4).
+- Urutan: FE prasyarat D1 (formGmPutus ELSE tidak lagi PATCH sales_orders untuk jenis tak dikenal) → 141/142/143 diuji
+  rollback lalu diterapkan di DEV → FE D2–D5 + Playwright → ATURAN B + HANDOFF + ALUR-KERJA.
+
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
 - **Revisi 29–49 selesai dikerjakan** di branch `claude/nice-cray-21r8g4` (belum di-merge, belum ada PR).
