@@ -283,6 +283,30 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
 1. **Komisi terbaca lewat REST oleh peran yang layarnya menyembunyikan**: Vonny membaca `so_ringkas.komisi` 54 SP
    (Rp 18.550.689,70) dan `komisi_belum_klaim` 51 baris; kemungkinan juga Lie Sian/Ichi/Lenni.
+   → **SELESAI berkas 139k (DEV 9 Okt)** + FE — keputusan 5a (tutup yang langsung terbaca; komisi tetap bisa diperkirakan
+   dari harga → dicatat di ATURAN B), 6 (rekening klaim komisi juga tertutup untuk staff & Lenni), 7 (objek EHC, dengan
+   sepengetahuan sesi EHC — pesan dikirim). Nomor 139k: jatah nomor sesi ini habis di 139; "k" diurutkan sesudah 139/139b
+   dan sebelum berkas EHC 140+. (A) so_baris_hitung.pct/pct_berlaku & so_ringkas.komisi → NULL, cash_belum_cocok tanpa
+   baris, bagi selain boleh_lihat_nilai_klaim (owner/GM/staff/finance/Lenni) & sales pemilik SP — penyaring hanya bila
+   current_user authenticated/anon (fungsi definer membaca angka utuh). (B) komisi_berlaku → boleh_lihat_komisi_sp
+   (internal); komisi_belum_klaim tanpa baris bagi peran lain; komk_baca, kkb_baca, rhj_komisi_bukti_baca →
+   boleh_lihat_nilai_klaim / sales pemilik (sama dengan EHC). (C) tabel `komisi_klaim_rekening` (salinan rekening diisi
+   trigger `komisi_klaim_zz_rekening`, RLS owner/GM/finance + sales pemilik klaim), SELECT kolom bank/no_rekening/atas_nama
+   komisi_klaim dicabut (hak per kolom; definer tetap). FE tab Komisi meng-embed `komisi_klaim_rekening(...)`. (D) event
+   trigger `jaga_view_komisi` (CREATE/ALTER VIEW atas 4 view itu tanpa predikat/invoker → ditolak) + `periksa_view_komisi()`.
+   Uji DEV: sidik md5 per peran sebelum = sesudah untuk postgres/owner/GM/staff/finance/Lenni/Hendri/Iwan (so_ringkas,
+   so_baris_hitung, komisi_belum_klaim, komisi_klaim, cash_belum_cocok, ehc_saldo_sp, antrean_gm); Vonny/Lie Sian/Ichi:
+   kolom non-komisi sama, komisi 0 terisi, pct 0, komisi_belum_klaim 0, klaim 0, cash 0, antrean_gm sama; rekening klaim:
+   owner/GM/finance 2, staff/Lenni/Vonny 0; kolom no_rekening komisi_klaim → 42501 untuk semua authenticated; Vonny
+   komisi_berlaku NULL & boleh_lihat_komisi_sp 42501, owner 51.600; Hendri ajukan_klaim_komisi(32) → salinan rekening
+   sama, Hendri melihatnya, Alfred tidak; ganti predikat so_ringkas / invoker off so_baris_hitung → ditolak event trigger;
+   view lain tidak terganggu. Layar uji_rek 6/6; regresi uji_komisi 33/33, uji_segar 34/34, uji_segar2 14/14, uji_vonny
+   32/32, uji_hp 35/35, uji58 25/25, uji_hitam 16/16, uji12 29/29.
+   **Rilis PROD:** 139k WAJIB naik bersama index.html baru (KOMISI_KOLOM lama meminta kolom rekening → 42501, dihitung batas
+   tolak layar). Cek PROD sebelum rilis: versi PostgreSQL 17 (jangkar pg_get_viewdef); `select count(*) from pg_event_trigger;`
+   (izin membuat event trigger — bila ditolak, hapus bagian D dan jalankan `periksa_view_komisi()` di akhir setiap migrasi
+   view komisi). Sesi EHC: setiap `create or replace view` atas 4 view itu wajib membawa predikat 139k; kolom baru di
+   komisi_klaim perlu `grant select (kolom)` ke authenticated bila layar membacanya.
 2. **Nama pelanggan ganda**: sales bisa PATCH nama pelanggannya jadi persis nama pelanggan sales lain, dan POST
    `/customers` dengan nama ganda lolos (hanya `buat_pelanggan_baru` yang menolak). Uji: Iwan → "PT Garuda Metalindo".
    → **SELESAI berkas 138 (DEV 9 Okt)** + FE — keputusan 8a, 9, 10a, 17a (menutup juga sisa (1) review 134):
