@@ -2,8 +2,19 @@
 -- 141 · EHC tahap 3 (1/3) — STRUKTUR: periode 19–18, pemeriksaan GM per
 --       klaim, daftar bayar finance tgl 20
 --
+-- Jalankan 141 → 142 → 143 berturut-turut (boleh satu transaksi). Bila 142
+-- atau 143 gagal, perbaiki lalu jalankan ulang berkas itu. Sesudah 141 saja
+-- sistem tetap aman (gagal-tertutup): jalur EHC lama tertutup —
+-- ajukan_transfer('ehc') ditolak 0A000 (bagian 0b), setujui EHC cepat versi
+-- lama ditolak mesin status/CHECK (bagian 5 & 6a), rekap_transfer('ehc') dan
+-- rekap_ehc_cepat lama ditolak mesin status — tidak ada klaim yang tertahan.
+--
 -- Isi berkas ini (urutan penting; 142 = fungsi/RPC, 143 = view):
---   0. pra-cek gagal-tertutup (pengajuan transfer EHC lama harus tuntas)
+--   0. pra-cek gagal-tertutup (pengajuan transfer EHC lama harus tuntas;
+--      transfer_pengajuan dikunci sampai transaksi selesai)
+--   0b. ajukan_transfer: blok 'ehc' diganti penolakan 0A000 (dibangun dari
+--      definisi DEV hidup; cabang komisi tidak disentuh) — satu transaksi
+--      dengan pra-cek, jadi tidak ada pengajuan EHC baru sesudah 141
 --   1. periode_bayar_ehc(date): tgl ≥ 20 → bulan itu, selain itu bulan lalu
 --   2. kolom putusan GM di ehc_klaim (gm_oleh/gm_pada/gm_catatan/gm_jalur,
 --      ditransfer_pada) + transfer_batch.periode_bayar
@@ -11,12 +22,15 @@
 --      dan ehc_klaim_putusan (jejak putusan append-only)
 --   4. konversi data lama: klaim ber-batch → 'disetujui' (konversi);
 --      cepat disetujui belum ber-batch → 'disetujui' (jalur cepat)
---   5. CHECK & indeks baru (dipasang SESUDAH konversi)
+--   5. CHECK & indeks baru (dipasang SESUDAH konversi), termasuk
+--      ehck_cepat_ok_diputus: EHC cepat yang disetujui tidak pernah
+--      tertinggal berstatus 'diajukan'
 --   6. penjaga: mesin status ehc_klaim, anak klaim (alokasi/berkas) beku
 --      sesudah diputus, riwayat tetap, tandai ditransfer saat referensi
 --      bank diisi, jaga_batch dikeraskan, jaga_nilai_terkunci (cabang EHC,
 --      dibangun dari definisi DEV hidup), periksa_saldo_ehc_sp
---   7. hak baca (keputusan P4)
+--   7. hak baca (keputusan P4) + salinan rekening dibuang dari ehc_klaim_log
+--      (hak baca kolom rekening di kepala ehc_klaim dicabut di AKHIR 143)
 --
 -- Keputusan Hannes 9 Okt 2026 (RANCANGAN-EHC-TAHAP3.md):
 --   P1 GM/owner BOLEH memutus klaim yang ia buat/ubah/minta cepat — cukup
@@ -43,9 +57,12 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- ── 0. pra-cek gagal-tertutup ───────────────────────────────────────────
+-- transfer_pengajuan dikunci (share row exclusive, sampai transaksi selesai)
+-- supaya tidak ada pengajuan EHC yang lahir di antara pra-cek dan bagian 0b.
 do $$
 declare v_n integer;
 begin
+  lock table public.transfer_pengajuan in share row exclusive mode;
   if to_regclass('public.ehc_klaim_alokasi') is null then
     raise exception 'Berkas 141 butuh berkas 140 (ehc_klaim_alokasi belum ada).';
   end if;
@@ -69,6 +86,43 @@ begin
    where ehc_dini_minta and not coalesce(ehc_dini_ok, false) and not batal;
   raise notice '141: % SP masih meminta EHC dini (cabang antrean ehc_dini dibuang di 143; jalurnya kini EHC cepat).', v_n;
 end $$;
+
+-- ── 0b. ajukan_transfer: hanya blok 'ehc' yang diganti ───────────────────
+-- Dibangun dari definisi DEV hidup (dipakai bersama alur komisi tgl 25):
+-- blok "if p_jenis = 'ehc' and … cutoff … end if;" diganti penolakan 0A000;
+-- seluruh teks lain (cabang komisi) tetap byte-identik. Pola harus cocok
+-- tepat satu kali. Ada di 141 (bukan 142) supaya pintu pengajuan EHC lama
+-- tertutup dalam transaksi yang sama dengan pra-cek bagian 0. Penanda
+-- idempoten: "(berkas 141)", juga menerima "(berkas 142)" dari draf lama.
+do $$
+declare
+  v_def  text;
+  v_pola text := $p$if p_jenis = 'ehc' and public.hari_ini_wib() <= public.cutoff_ehc(p_bulan) then$p$;
+  v_baru text := $b$if p_jenis = 'ehc' then
+    raise exception 'Pembayaran EHC tidak lagi lewat pengajuan transfer (berkas 141): GM memeriksa per klaim sesudah tgl 18, finance mengunci daftar bayar mulai tgl 20 (rekap_ehc_bulanan).'
+      using errcode = '0A000';
+  end if;$b$;
+  v_a integer; v_e integer; v_n integer;
+begin
+  select pg_get_functiondef(p.oid) into v_def
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'ajukan_transfer' and p.prokind = 'f';
+  if v_def is null then raise exception '141: ajukan_transfer tidak ada di DB.'; end if;
+  if strpos(v_def, '(berkas 141)') > 0 or strpos(v_def, '(berkas 142)') > 0 then
+    raise notice '141: ajukan_transfer sudah menolak EHC.';
+    return;
+  end if;
+  v_n := (length(v_def) - length(replace(v_def, v_pola, ''))) / length(v_pola);
+  if v_n <> 1 then
+    raise exception '141: blok EHC ajukan_transfer ditemukan % kali (harus 1) — definisi DEV berubah, periksa manual.', v_n;
+  end if;
+  v_a := strpos(v_def, v_pola);
+  v_e := strpos(substr(v_def, v_a), 'end if;');
+  if v_e = 0 then raise exception '141: akhir blok EHC ajukan_transfer tidak ditemukan.'; end if;
+  execute left(v_def, v_a - 1) || v_baru || substr(v_def, v_a + v_e - 1 + length('end if;'));
+end $$;
+revoke all on function public.ajukan_transfer(text, text, text) from public, anon;
+grant execute on function public.ajukan_transfer(text, text, text) to authenticated;
 
 -- ── 1. periode bayar ─────────────────────────────────────────────────────
 -- Finance mengunci daftar bayar periode X mulai tgl 20 (WIB) bulan X.
@@ -240,6 +294,15 @@ do $$ begin
     alter table public.ehc_klaim add constraint ehck_ditransfer_berbatch
       check (ditransfer_pada is null or transfer_batch_id is not null);
   end if;
+  -- EHC cepat yang disetujui = klaimnya diputus sekaligus (status
+  -- 'disetujui', jalur cepat). Kebalikan persis konversi (c) di bagian 4,
+  -- jadi tidak ada baris lama yang melanggar. Menutup putuskan_klaim_cepat
+  -- versi lama di jeda 141→142 (setujui gagal 23514 tanpa mengubah apa pun;
+  -- tolak cepat P2 tetap boleh) dan berlaku permanen sesudahnya.
+  if not exists (select 1 from pg_constraint where conname = 'ehck_cepat_ok_diputus') then
+    alter table public.ehc_klaim add constraint ehck_cepat_ok_diputus
+      check (status <> 'diajukan' or not (coalesce(cepat_minta, false) and coalesce(cepat_ok, false)));
+  end if;
   if not exists (select 1 from pg_constraint where conname = 'tb_periode_bayar_sah') then
     alter table public.transfer_batch add constraint tb_periode_bayar_sah
       check (periode_bayar is null or periode_bayar ~ '^\d{4}-\d{2}$');
@@ -255,7 +318,9 @@ create unique index if not exists tb_ehc_periode_uniq on public.transfer_batch (
 -- ── 6. penjaga ───────────────────────────────────────────────────────────
 -- 6a. Mesin status ehc_klaim. Perpindahan sah: diajukan → disetujui |
 -- ditolak | batal; disetujui → batal hanya bila belum ber-batch; ditolak &
--- batal final. Putusan GM (gm_*) hanya berubah bersama perpindahan dari
+-- batal final. Setujui EHC cepat (cepat_ok jadi true) hanya bersama status
+-- 'disetujui' (pesan jelas untuk layar lama; invarian: ehck_cepat_ok_diputus).
+-- Putusan GM (gm_*) hanya berubah bersama perpindahan dari
 -- diajukan. Batch & ditransfer_pada hanya lewat rhj.batch='on'. Sesudah
 -- keluar dari 'diajukan' semua kolom beku kecuali sales_rep_id
 -- (gabungkan_sales / batalkan_ubah_sales) dan kolom jalur bayar/batal.
@@ -277,6 +342,10 @@ begin
      and not ((old.status = 'diajukan' and new.status in ('disetujui','ditolak','batal'))
               or (old.status = 'disetujui' and new.status = 'batal' and old.transfer_batch_id is null)) then
     raise exception 'Status klaim EHC #% tidak bisa berpindah dari % ke %.', old.id, old.status, new.status
+      using errcode = '42501';
+  end if;
+  if new.cepat_ok is true and old.cepat_ok is distinct from true and new.status = 'diajukan' then
+    raise exception 'Persetujuan EHC cepat klaim #% harus sekaligus memutus klaimnya (putuskan_klaim_cepat_v, berkas 142) — muat ulang halaman.', old.id
       using errcode = '42501';
   end if;
   if (new.gm_oleh, new.gm_pada, new.gm_catatan, new.gm_jalur)
@@ -498,3 +567,26 @@ alter policy ehck_baca on public.ehc_klaim
   using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(id));
 alter policy ecl_baca on public.ehc_cepat_log
   using (public.boleh_lihat_nilai_klaim() or public.klaim_ehc_saya(klaim_id));
+
+-- Rekening tujuan hanya owner/GM/finance dan sales pemilik (setara srr_baca,
+-- prinsip 139k). simpan_klaim_ehc (tidak disentuh) menyalin rekening —
+-- untuk reimburse = rekening pribadi sales — ke kepala ehc_klaim dan, saat
+-- 'ubah', ke ehc_klaim_log.data->'klaim' (to_jsonb), yang terbaca staff &
+-- Lenni. Salinan di log dibuang di sini (nilai asli tetap di audit
+-- zz_audit_ehc_klaim); hak baca kolom rekening di kepala ehc_klaim dicabut
+-- di AKHIR 143 (sesudah ehc_cepat_siap membaca ehc_klaim_tujuan).
+create or replace function public.ehc_log_tanpa_rekening()
+returns trigger language plpgsql security definer set search_path = public as $f$
+begin
+  if jsonb_typeof(new.data -> 'klaim') = 'object' then
+    new.data := jsonb_set(new.data, '{klaim}', (new.data -> 'klaim') - array['bank','no_rekening','atas_nama']);
+  end if;
+  return new;
+end $f$;
+revoke all on function public.ehc_log_tanpa_rekening() from public, anon, authenticated;
+create or replace trigger ekl_tanpa_rekening before insert or update on public.ehc_klaim_log
+  for each row execute function public.ehc_log_tanpa_rekening();
+update public.ehc_klaim_log
+   set data = jsonb_set(data, '{klaim}', (data -> 'klaim') - array['bank','no_rekening','atas_nama'])
+ where jsonb_typeof(data -> 'klaim') = 'object'
+   and (data -> 'klaim') ?| array['bank','no_rekening','atas_nama'];

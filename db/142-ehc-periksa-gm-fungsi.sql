@@ -1,6 +1,12 @@
 -- ═══════════════════════════════════════════════════════════════════════
 -- 142 · EHC tahap 3 (2/3) — FUNGSI & RPC pemeriksaan GM per klaim dan
 --       daftar bayar finance. Jalankan SESUDAH 141, SEBELUM 143.
+--       Jalankan 141 → 142 → 143 berturut-turut (boleh satu transaksi).
+--       Bila 142 gagal, perbaiki lalu jalankan ulang (idempoten). Selama
+--       hanya 141 yang terpasang sistem gagal-tertutup: ajukan_transfer('ehc')
+--       ditolak 0A000, setujui EHC cepat versi lama ditolak mesin status/CHECK,
+--       rekap lama ditolak mesin status. Pra-cek pengajuan tidak diulang di
+--       sini: sesudah 141 pengajuan EHC baru tidak mungkin lahir.
 --
 -- Baru (internal, tidak bisa dipanggil lewat REST):
 --   snapshot_klaim_ehc · siapkan_setuju_klaim_ehc (cek lampiran, SP batal,
@@ -17,12 +23,21 @@
 --   keluarkan_klaim_ehc_batch(p_klaim, p_alasan) — transfer gagal, sebelum
 --     referensi bank diisi.
 --   ehc_daftar_bayar(p_bulan, p_batch) — rekening hanya owner/GM/finance.
+--   putuskan_klaim_cepat_v(p_klaim, p_setuju, p_catatan, p_versi, p_diminta)
+--     — putusan EHC cepat; setuju wajib p_versi = diubah_pada||dibuat_pada
+--     dan p_diminta = cepat_diminta_pada dari fetch yang sama yang
+--     menggambar laci (string apa adanya); 40001 bila klaim diubah atau
+--     permintaan cepatnya diajukan ulang sejak dimuat.
 -- Diganti (dibangun dari definisi DEV hidup, nama & argumen tetap):
 --   ehc_klaim_siap_transfer (status 'disetujui', rekening terkunci, lintas
---   tidak lagi dikecualikan) · putuskan_klaim_cepat · minta_klaim_cepat ·
---   batalkan_klaim_ehc · rekap_ehc_cepat (tanpa membuang baris, WIB) ·
---   ajukan_transfer (HANYA blok 'ehc' diganti penolakan 0A000 lewat
---   pengganti teks di definisi hidup; cabang komisi tidak disentuh).
+--   tidak lagi dikecualikan) · minta_klaim_cepat · batalkan_klaim_ehc ·
+--   rekap_ehc_cepat (tanpa membuang baris, WIB) · putuskan_klaim_cepat
+--   (signature tetap, kini shim: tolak beralasan diteruskan ke
+--   putuskan_klaim_cepat_v; setuju → 0A000 "layar versi lama, muat ulang").
+--   ajukan_transfer (blok 'ehc' → 0A000) kini di 141 bagian 0b.
+-- FE (D2/D5): laci ehc_cepat memanggil /rpc/putuskan_klaim_cepat_v dengan
+--   p_versi & p_diminta (EHC_KOLOM memuat cepat_diminta_pada); 40001 →
+--   muat ulang laci; GALAT_BERKAS: putuskan_klaim_cepat_v → 142.
 -- Tidak disentuh: simpan_klaim_ehc, putuskan_transfer, rekap_transfer,
 --   tarik_pengajuan_transfer, isi_referensi_batch, batalkan_klaim_cepat,
 --   laporan_komisi, ehc_saldo_sp, kas_sales.
@@ -443,11 +458,16 @@ begin
    order by x.keadaan, r.nama, k.id;
 end $$;
 
--- ── 10. EHC cepat: putusan GM (signature tetap) ──────────────────────────
+-- ── 10. EHC cepat: putusan GM (berversi) ─────────────────────────────────
 -- Setuju = putusan GM per klaim jalur cepat (status 'disetujui', rekening
--- dikunci), TANPA syarat lunas, lintas boleh. Tolak (P2) = hanya cepatnya
--- ditolak; klaim tetap diajukan dan diperiksa GM sesudah tgl 18.
-create or replace function public.putuskan_klaim_cepat(p_klaim bigint, p_setuju boolean, p_catatan text default null::text)
+-- dikunci), TANPA syarat lunas, lintas boleh. Setuju terikat versi: p_versi
+-- (= coalesce(diubah_pada, dibuat_pada)) menangkap ubah isi lewat
+-- simpan_klaim_ehc (nominal, alokasi, PIC, cara bayar, lampiran); p_diminta
+-- (= cepat_diminta_pada) menangkap tarik lalu minta ulang. Basi → 40001.
+-- Tolak (P2) = hanya cepatnya ditolak; klaim tetap diajukan dan diperiksa GM
+-- sesudah tgl 18 — tidak butuh versi.
+create or replace function public.putuskan_klaim_cepat_v(p_klaim bigint, p_setuju boolean, p_catatan text default null,
+                                                         p_versi timestamptz default null, p_diminta timestamptz default null)
 returns text language plpgsql security definer set search_path = public as $function$
 declare k public.ehc_klaim; v_cat text; v_sp text; v_pj bigint; v_snap jsonb;
 begin
@@ -470,6 +490,11 @@ begin
   end if;
   if p_setuju is null then
     raise exception 'Pilih setujui atau tolak.' using errcode = '22023';
+  end if;
+  if p_setuju and (p_versi is null or p_versi <> coalesce(k.diubah_pada, k.dibuat_pada)
+                   or p_diminta is null or p_diminta is distinct from k.cepat_diminta_pada) then
+    raise exception 'Klaim EHC #% berubah atau permintaan cepatnya diajukan ulang sejak dimuat — muat ulang lalu periksa lagi.', p_klaim
+      using errcode = '40001';
   end if;
   if not p_setuju and v_cat is null then
     raise exception 'Penolakan wajib beralasan — sales-nya harus bisa menjelaskan ke '
@@ -513,6 +538,22 @@ begin
     else 'Permintaan klaim cepat untuk ' || coalesce(v_sp, '#' || p_klaim) || ' DITOLAK. '
        || 'Klaimnya tetap diajukan dan diperiksa GM sesudah tgl 18 seperti biasa.'
   end;
+end $function$;
+
+-- Signature lama tetap ada (layar lama): tolak beralasan diteruskan;
+-- setuju tanpa versi ditolak supaya GM tidak menyetujui isi yang sudah
+-- ditukar sesudah ia melihatnya.
+create or replace function public.putuskan_klaim_cepat(p_klaim bigint, p_setuju boolean, p_catatan text default null::text)
+returns text language plpgsql security definer set search_path = public as $function$
+begin
+  if not public.boleh_approve() then
+    raise exception 'Hanya GM atau owner yang boleh memutuskan pencairan cepat.' using errcode = '42501';
+  end if;
+  if p_setuju is distinct from false then
+    raise exception 'Layar ini versi lama — muat ulang halaman. Persetujuan EHC cepat kini memeriksa versi klaim.'
+      using errcode = '0A000';
+  end if;
+  return public.putuskan_klaim_cepat_v(p_klaim, false, p_catatan, null, null);
 end $function$;
 
 -- ── 11. EHC cepat: permintaan (dari definisi DEV) ────────────────────────
@@ -704,38 +745,8 @@ begin
                else '' end);
 end $function$;
 
--- ── 14. ajukan_transfer: hanya blok 'ehc' yang diganti ───────────────────
--- Dibangun dari definisi DEV hidup (dipakai bersama alur komisi tgl 25):
--- blok "if p_jenis = 'ehc' and … cutoff … end if;" diganti penolakan 0A000;
--- seluruh teks lain (cabang komisi) tetap byte-identik. Pola harus cocok
--- tepat satu kali.
-do $$
-declare
-  v_def  text;
-  v_pola text := $p$if p_jenis = 'ehc' and public.hari_ini_wib() <= public.cutoff_ehc(p_bulan) then$p$;
-  v_baru text := $b$if p_jenis = 'ehc' then
-    raise exception 'Pembayaran EHC tidak lagi lewat pengajuan transfer (berkas 142): GM memeriksa per klaim sesudah tgl 18, finance mengunci daftar bayar mulai tgl 20 (rekap_ehc_bulanan).'
-      using errcode = '0A000';
-  end if;$b$;
-  v_a integer; v_e integer; v_n integer;
-begin
-  select pg_get_functiondef(p.oid) into v_def
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'ajukan_transfer' and p.prokind = 'f';
-  if v_def is null then raise exception '142: ajukan_transfer tidak ada di DB.'; end if;
-  if strpos(v_def, '(berkas 142)') > 0 then
-    raise notice '142: ajukan_transfer sudah memuat blok 142.';
-    return;
-  end if;
-  v_n := (length(v_def) - length(replace(v_def, v_pola, ''))) / length(v_pola);
-  if v_n <> 1 then
-    raise exception '142: blok EHC ajukan_transfer ditemukan % kali (harus 1) — definisi DEV berubah, periksa manual.', v_n;
-  end if;
-  v_a := strpos(v_def, v_pola);
-  v_e := strpos(substr(v_def, v_a), 'end if;');
-  if v_e = 0 then raise exception '142: akhir blok EHC ajukan_transfer tidak ditemukan.'; end if;
-  execute left(v_def, v_a - 1) || v_baru || substr(v_def, v_a + v_e - 1 + length('end if;'));
-end $$;
+-- ── 14. ajukan_transfer('ehc') ditutup di 141 bagian 0b ──────────────────
+-- (satu transaksi dengan pra-cek pengajuan; hak eksekusinya juga di sana).
 
 -- ── 15. hak eksekusi ─────────────────────────────────────────────────────
 revoke all on function public.snapshot_klaim_ehc(bigint)                    from public, anon, authenticated;
@@ -751,17 +762,17 @@ revoke all on function public.rekap_ehc_bulanan(text)                       from
 revoke all on function public.keluarkan_klaim_ehc_batch(bigint, text)       from public, anon;
 revoke all on function public.ehc_daftar_bayar(text, bigint)                from public, anon;
 revoke all on function public.putuskan_klaim_cepat(bigint, boolean, text)   from public, anon;
+revoke all on function public.putuskan_klaim_cepat_v(bigint, boolean, text, timestamptz, timestamptz) from public, anon;
 revoke all on function public.minta_klaim_cepat(bigint, text)               from public, anon;
 revoke all on function public.batalkan_klaim_ehc(bigint, text)              from public, anon;
 revoke all on function public.rekap_ehc_cepat()                             from public, anon;
-revoke all on function public.ajukan_transfer(text, text, text)             from public, anon;
 grant execute on function public.putuskan_klaim_ehc(bigint, boolean, text, timestamptz) to authenticated;
 grant execute on function public.setujui_klaim_ehc_massal(jsonb)            to authenticated;
 grant execute on function public.rekap_ehc_bulanan(text)                    to authenticated;
 grant execute on function public.keluarkan_klaim_ehc_batch(bigint, text)    to authenticated;
 grant execute on function public.ehc_daftar_bayar(text, bigint)             to authenticated;
 grant execute on function public.putuskan_klaim_cepat(bigint, boolean, text) to authenticated;
+grant execute on function public.putuskan_klaim_cepat_v(bigint, boolean, text, timestamptz, timestamptz) to authenticated;
 grant execute on function public.minta_klaim_cepat(bigint, text)            to authenticated;
 grant execute on function public.batalkan_klaim_ehc(bigint, text)           to authenticated;
 grant execute on function public.rekap_ehc_cepat()                          to authenticated;
-grant execute on function public.ajukan_transfer(text, text, text)          to authenticated;
