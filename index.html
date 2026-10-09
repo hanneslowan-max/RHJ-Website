@@ -12526,7 +12526,9 @@ function bolehIsiRekeningSales(){
    Bentuknya sama persis dengan EHC, dan itu disengaja: dua layar yang
    mengerjakan hal yang sama sebaiknya berperilaku sama, supaya yang
    dipelajari di satu tempat berlaku di tempat lain. */
-var KOMISI_KOLOM = "id,so_id,sales_rep_id,bank,no_rekening,atas_nama,"
+/* Keamanan #1 (berkas 139k, keputusan 6): rekening sales di klaim komisi dibaca dari komisi_klaim_rekening (owner/GM/
+   finance + sales pemilik klaim) — kolom bank/no_rekening/atas_nama komisi_klaim tidak lagi bisa dibaca lewat REST. */
+var KOMISI_KOLOM = "id,so_id,sales_rep_id,komisi_klaim_rekening(bank,no_rekening,atas_nama),"
   + "telat,pct_gm,tanggal,transfer_batch_id,sales_orders(no_sp,kepada,lunas),"
   + "komisi_klaim_nilai(nominal),komisi_klaim_berkas(id,nama_berkas,path,ukuran)";
 
@@ -12646,8 +12648,9 @@ function panelKomisi(){
   } else {
     d = saringLentur(d, H.cari, function(k){
       var so = k.sales_orders;
+      var rk = rekKlaimKomisi(k);   /* 139k */
       return [so ? so.no_sp : "", so ? so.kepada : "", namaRepAlur(k.sales_rep_id),
-              k.bank, k.no_rekening, k.atas_nama]; });
+              rk.bank, rk.no_rekening, rk.atas_nama]; });
   }
 
   var kosongAsli = {
@@ -12702,13 +12705,13 @@ function panelKomisi(){
       +  '<th class="l">Customer</th><th class="l">Sales</th><th class="l">Rekening</th>'
       +  '<th>Nominal</th><th class="l">Lampiran</th><th class="l">Transfer</th></tr></thead><tbody>'
       +  d.map(function(k){
-           var n = nilaiKlaimKomisi(k), so = k.sales_orders, bk = berkasKomisi(k);
+           var n = nilaiKlaimKomisi(k), so = k.sales_orders, bk = berkasKomisi(k), rk = rekKlaimKomisi(k);   /* 139k */
            return '<tr><td class="l">' + esc(so ? so.no_sp : "—") + '</td>'
              + '<td>' + td(k.tanggal) + '</td>'
              + '<td class="l">' + esc(so ? so.kepada || "—" : "—") + '</td>'
              + '<td class="l">' + esc(namaRepAlur(k.sales_rep_id) || "—") + '</td>'
-             + '<td class="l">' + esc([k.bank, k.no_rekening].filter(Boolean).join(" ") || "—")
-             +   (k.atas_nama ? '<br><span class="muted">a.n. ' + esc(k.atas_nama) + '</span>' : '') + '</td>'
+             + '<td class="l">' + esc([rk.bank, rk.no_rekening].filter(Boolean).join(" ") || "—")
+             +   (rk.atas_nama ? '<br><span class="muted">a.n. ' + esc(rk.atas_nama) + '</span>' : '') + '</td>'
              + '<td>' + (n ? rp(n.nominal) : '<span class="muted">—</span>') + '</td>'
              + '<td class="l">' + (bk.length
                  ? bk.map(function(f){ return '<button type="button" class="btn kecil" data-kmunduh="'
@@ -13166,6 +13169,11 @@ function susunRekap(jenis, bulan, sp, klaim){
            jumlahSp: sp.length, jumlahKlaim: nKlaim };
 }
 
+function rekKlaimKomisi(k){   /* 139k: embed satu-satu (objek / larik / kosong bila peran tidak boleh) */
+  var x = k && k.komisi_klaim_rekening;
+  if (Array.isArray(x)) x = x[0];
+  return x || {};
+}
 function nilaiKlaimKomisi(k){
   var n = k.komisi_klaim_nilai;
   if (Array.isArray(n)) n = n[0];

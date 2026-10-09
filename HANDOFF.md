@@ -170,6 +170,14 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   `flatGm`), dan keputusan 8 Okt (telat tanpa Tolak; Setujui telat hanya `gm_pct` + `gm_pada`). Pertahankan ketiganya;
   pembatasan ELSE ke harga/telat + pembuangan cabang ehc_dini dari sesi ini tidak bertentangan. Temuan keamanan #1 di
   sesi itu (klaim komisi/rekening terbaca Vonny dkk.) akan dikoordinasikan sebelum dikerjakan.
+- **`db/139k` (sesi 50–61, sudah di DEV 9 Okt, keputusan Hannes 5a/6/7):** angka komisi di `so_baris_hitung`/`so_ringkas`/
+  `komisi_belum_klaim`/`cash_belum_cocok` disaring per peran; **event trigger `jaga_view_komisi` menolak CREATE/ALTER
+  VIEW keempat view itu tanpa `boleh_lihat_nilai_klaim`** (bawa predikat 139k bila tahap 4/#54 mendefinisikan ulang);
+  kolom `bank/no_rekening/atas_nama` `komisi_klaim` tidak terbaca REST → tabel `komisi_klaim_rekening` (owner/GM/finance +
+  sales pemilik). Layar branch ini sudah disamakan (KOMISI_KOLOM meng-embed `komisi_klaim_rekening`, `rekKlaimKomisi`,
+  teks identik dengan commit 86c00c9 supaya merge bersih). **Untuk tahap 3:** salinan rekening di kepala `ehc_klaim`
+  (reimburse = rekening sales) masih terbaca staff/Lenni — samakan dengan prinsip 139k (rekening hanya owner/GM/finance +
+  sales pemilik) lewat `ehc_klaim_tujuan` / hak per kolom.
 
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
