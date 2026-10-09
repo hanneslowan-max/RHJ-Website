@@ -761,7 +761,9 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    baru; 49 lama tidak berubah). Layar: uji55b 24/24 (baru L: PDF dari HP 390 px = 1366 px & tidak lewat 268,5 mm untuk
    3 spek/5/18/26/12 spek/7 kolom; M: 6/7 kolom tidak digeser di 390/412 px; N: satu baris tinggi tetap di halaman 1 —
    ketiganya GAGAL pada index.html 139y), uji139x 20/20 (baru M2: Kepada lama "·" tidak menghalangi usulan qty; M3:
-   ‐ diterima; M: pesan menyebut U+01C0), uji139w 9/9; regresi lihat log sesi. **Diterima (dicatat):** HP 360 px —
+   ‐ diterima; M: pesan menyebut U+01C0), uji139w 9/9; regresi uji139r 23/23, uji139s 17/17, uji_hitam 16/16,
+   uji_pelanggan 15/15, uji_rek 6/6, uji55 44/44, uji_pengguna 10/10, uji_hp 35/35, uji12 29/29, uji_pnw 31/31, uji60
+   28/28, uji60b 28/28, uji58 25/25, uji59b 16/16, uji_usulan 7/7, uji_set 46/46, uji_komisi 33/33. **Diterima (dicatat):** HP 360 px —
    tabel 6 kolom Spesifikasi masih geser ±14 px, 7 kolom ±18 px (bisa digeser, TOTAL juga di kotak atas laci); · • №
    tetap ditolak untuk sales; jejak teks yang dulu tidak tersimpan (konflik kunci sebelum 139z) tidak bisa dipulihkan
    (DEV: 1 baris jejak). **Cek PROD sebelum rilis 139z:** jalankan sesudah 139y (urutan `sort -t- -k1,1V`); (informasi)
