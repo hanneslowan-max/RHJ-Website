@@ -57,7 +57,9 @@ Tulis ke `rilis/RILIS-<tanggal>.md` (atau ke chat bila Hannes minta singkat) den
 
 ## Rencana mundur
 - Front-end: unggah ulang index.html versi sebelumnya (simpan salinannya sebelum unggah).
-- DB: <per migrasi: cara membalik — create or replace versi fungsi sebelumnya dari db/NNN lama;
+- DB: <per migrasi: cara membalik — create or replace versi fungsi sebelumnya dari db/NNN lama (salin badan
+  fungsinya saja; berkas rantai 138 → 139z menolak dijalankan ulang UTUH sendirian sesudah berkas penyusulnya —
+  menjalankan ulang seluruh rantai: `begin; set local rhj.ulang_rantai = 'on';` … berurutan … `commit;`);
   migrasi yang mengubah data → pulihkan dari tabel cadangan / backup>.
 - Bila ragu: hentikan, jangan lanjut ke migrasi berikutnya, kabari Claude dengan pesan galat persisnya.
 ```

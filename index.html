@@ -268,7 +268,11 @@
   .pk-ttd-nama{font-weight:700;text-decoration:underline}
   @media (max-width:560px){ .pnw-kertas{font-size:12.5px} .pk-isi{padding:18px 5% 4px}
     .pk-tabel td.r,.pk-tabel td.q{white-space:normal}   /* review #55: kolom TOTAL tidak terpotong di HP */
-    .pk-tabel{font-size:11px} .pk-tabel th,.pk-tabel td{padding:2px 4px} }   /* review 55b: muat tanpa memecah angka */
+    /* review 55b: muat tanpa memecah angka; 139z (review 139y no. 7/9): HANYA dokumen di layar (.dok-pnw) — wadah ukur
+       cetak (.ck-cetak) diukur dengan ukuran cetak walau dibuka di HP; kolom Deskripsi/Spesifikasi tanpa lebar minimum */
+    .dok-pnw .pk-tabel{font-size:11px} .dok-pnw .pk-tabel th,.dok-pnw .pk-tabel td{padding:2px 4px}
+    .dok-pnw .pk-tabel td.pk-desk,.dok-pnw .pk-tabel td.pk-spek{min-width:0}
+    .dok-pnw .pk-tabel.pk-rapat{font-size:10px} .dok-pnw .pk-tabel.pk-rapat th,.dok-pnw .pk-tabel.pk-rapat td{padding:2px 3px} }
   .pnw-catat{font-size:12px;color:#5b6770;margin:0 0 6px}
   #cetak-pnw{display:none}
   /* Review #55: ukuran cetak — dipakai #cetak-pnw (cetak) DAN wadah ukur tersembunyi di layar (pemenggalan halaman
@@ -6572,10 +6576,13 @@ function formMintaUbah(jenis, id){
     } else {
       kepala.kepada = wajibIsi("u_kepada", "Kepada");
       /* 139y (review 139w no. 4): Kepada berhuruf/simbol di luar huruf Latin biasa ditolak database untuk selain
-         owner/GM/staff, juga lewat Minta ubah SP */
-      if (["owner","gm","staff"].indexOf(saya.peran) < 0 && adaHurufNonLatin(kepala.kepada)) {
+         owner/GM/staff, juga lewat Minta ubah SP — 139z (review 139y no. 3): hanya bila Kepada DIUBAH (Kepada lama yang
+         ditulis owner/GM/staff tidak menghalangi usulan qty/harga/alamat) */
+      if (["owner","gm","staff"].indexOf(saya.peran) < 0 && adaHurufNonLatin(kepala.kepada)
+          && tanpaFormatTeks(kepala.kepada).trim() !== tanpaFormatTeks(d.kepada || "").trim()) {
         tampilPesan(esc('Kepada "' + kepala.kepada + '" memuat huruf atau simbol khusus di luar huruf Latin biasa (mis. huruf '
-          + 'Kiril/Yunani atau simbol yang mirip huruf). Ketik ulang dengan huruf biasa; bila memang perlu, minta owner/GM/staff.'));
+          + 'Kiril/Yunani atau simbol yang mirip huruf)' + hurufDitolak(kepala.kepada) + '. Ketik ulang dengan huruf biasa; '
+          + 'bila memang perlu, minta owner/GM/staff.'));
         return;
       }
       kepala.up = nilaiForm("u_up") || "";
@@ -8424,8 +8431,9 @@ function simpanSp(khusus){
   /* 139w (review 139r no. 6): Kepada berhuruf di luar huruf Latin biasa ditolak database (so_a_kepada_bersih) untuk
      selain owner/GM/staff — diperiksa SEBELUM nomor SP diambil, supaya nomornya tidak hangus. */
   if (["owner","gm","staff"].indexOf(saya.peran) < 0 && adaHurufNonLatin(f.kepada)) {
-    toast('Kepada "' + f.kepada.trim() + '" memuat huruf di luar huruf Latin biasa (mis. huruf Kiril/Yunani atau huruf '
-          + 'khusus yang mirip). Ketik ulang dengan huruf biasa; bila memang perlu, minta owner/GM/staff membuatkan SP-nya.', true);
+    toast('Kepada "' + f.kepada.trim() + '" memuat huruf atau simbol khusus di luar huruf Latin biasa (mis. huruf Kiril/Yunani '
+          + 'atau simbol yang mirip huruf)' + hurufDitolak(f.kepada) + '. Ketik ulang dengan huruf biasa; bila memang perlu, '
+          + 'minta owner/GM/staff membuatkan SP-nya.', true);
     var elKepada = $("sp-kepada") || $("sp-cust"); if (elKepada) elKepada.focus();
     return;
   }
@@ -8843,15 +8851,33 @@ var RE_BUKAN_ALNUM = (function(){
   try { return new RegExp("[^\\p{L}\\p{Nd}]+", "gu"); }
   catch (e) { return /[^0-9A-Za-z\u00aa\u00b5\u00ba\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u0370-\u03ff\u0400-\u04ff\u1e00-\u1eff]+/g; }  /* perkiraan */
 })();
-/* 139y: daftar izin = ada_huruf_non_latin — ASCII tercetak & spasi, tanda umum, huruf Latin beraksen umum (+ Ơơ Ưư) */
-var RE_LATIN_DITERIMA = /[\s\u0020-\u007e\u00a0\u00a9\u00ae\u00b0\u00b2\u00b3\u00b9\u00bc-\u00be\u2013\u2014\u2018\u2019\u201c\u201d\u2026\u2122\u00aa\u00ba\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u012f\u0132-\u0137\u0139-\u013e\u0141-\u0148\u014a-\u017e\u01a0\u01a1\u01af\u01b0\u1e00-\u1e95\u1ea0-\u1ef9]/g;
+/* 139y/139z: daftar izin = ada_huruf_non_latin — ASCII tercetak, spasi biasa/TAB/baris baru/spasi tak terputus, tanda
+   umum (termasuk tanda hubung ‐ ‑ ‒ −), huruf Latin beraksen umum (+ Ơơ Ưư) */
+var RE_LATIN_DITERIMA = /[\t\n\r\u0020-\u007e\u00a0\u00a9\u00ae\u00b0\u00b2\u00b3\u00b9\u00bc-\u00be\u2010-\u2014\u2018\u2019\u201c\u201d\u2026\u2122\u2212\u00aa\u00ba\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u012f\u0132-\u0137\u0139-\u013e\u0141-\u0148\u014a-\u017e\u01a0\u01a1\u01af\u01b0\u1e00-\u1e95\u1ea0-\u1ef9]/g;
 function normalTeks(s, bentuk){ try { return s.normalize(bentuk); } catch (e) { return s; } }   /* peramban lama */
+var RE_SPASI_KHUSUS = /[\u0085\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/g;   /* 139z: ditulis spasi biasa */
 function tanpaFormatTeks(t){
   return normalTeks(String(t == null ? "" : t).replace(RE_FORMAT_TEKS, "")
-                      .replace(/[\ufb00-\ufb06]/g, function(ch){ return LIGATUR_TEKS[ch]; }), "NFC");
+                      .replace(/[\ufb00-\ufb06]/g, function(ch){ return LIGATUR_TEKS[ch]; })
+                      .replace(RE_SPASI_KHUSUS, " "), "NFC");
 }
 function adaHurufNonLatin(t){
   return tanpaFormatTeks(t).replace(RE_LATIN_DITERIMA, "") !== "";
+}
+/* 139z (review 139y no. 4): karakter yang ditolak disebut, mis. ' — ditolak: "·" (U+00B7)' — sales sering hanya melihat
+   tanda baca biasa (hasil salin dari PDF/Word) */
+function hurufDitolak(t){
+  var sisa = tanpaFormatTeks(t).replace(RE_LATIN_DITERIMA, ""), lihat = {}, daftar = [];
+  for (var i = 0; i < sisa.length && daftar.length < 5; i++) {
+    var ch = sisa.charAt(i), kode = sisa.charCodeAt(i);
+    if (kode >= 0xd800 && kode <= 0xdbff && i + 1 < sisa.length) { ch = sisa.substr(i, 2); i++; }
+    if (lihat[ch]) continue;
+    lihat[ch] = 1;
+    var cp = ch.length > 1 ? (ch.charCodeAt(0) - 0xd800) * 0x400 + (ch.charCodeAt(1) - 0xdc00) + 0x10000 : ch.charCodeAt(0);
+    var hx = cp.toString(16).toUpperCase(); while (hx.length < 4) hx = "0" + hx;
+    daftar.push((cp < 32 || cp === 127 ? "" : '"' + ch + '" ') + "(U+" + hx + ")");
+  }
+  return daftar.length ? " — ditolak: " + daftar.join(", ") : "";
 }
 function kunciNamaPelanggan(t){
   var dari = "аеорсухіјѕкмнтвӏԁԛԝαβεζηικμνορτυχıȷĸ", ke = "aeopcyxijskmhtbldqwabezhikmnoptyxijk";
@@ -11359,7 +11385,10 @@ function halamanPnwHtml(d){
         var bawa = [], akhir = halIni().length ? halIni()[halIni().length - 1] : null;
         /* review 55b: baris terakhir dibawa hanya bila judul + baris + ringkasan muat satu halaman — kalau tidak,
            ringkasan sendiri ke halaman baru (dengan judul tabel), bukan seluruh surat jatuh ke alur cadangan */
-        if (akhir && akhir.jenis === "baris" && hThead + akhir.h + a.h <= batas + 0.5) bawa.push(halIni().pop());
+        /* 139z: …dan hanya bila halaman ini masih punya baris lain — tabel tidak dipindah utuh meninggalkan halaman
+           berisi kepala surat saja */
+        var nBaris = halIni().filter(function(x){ return x.jenis === "baris"; }).length;
+        if (akhir && akhir.jenis === "baris" && nBaris > 1 && hThead + akhir.h + a.h <= batas + 0.5) bawa.push(halIni().pop());
         if (halIni().length && halIni()[halIni().length - 1].jenis === "thead") halIni().pop();
         halBaru(); judulTabel(); bawa.forEach(taruh); taruh(a); return;
       }

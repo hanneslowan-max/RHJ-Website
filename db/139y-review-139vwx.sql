@@ -30,6 +30,20 @@
 -- yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139z (review 139y no. 5): menjalankannya ulang sendirian menurunkan fungsi yang
+--      diperbarui berkas sesudahnya. Menjalankan ulang seluruh rantai 138 → berkas terakhir berurutan dalam satu
+--      transaksi: `begin; set local rhj.ulang_rantai = 'on';` … `commit;`.
+do $$
+declare v text;
+begin
+  if to_regprocedure('public.rhj_rantai_versi()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    execute 'select public.rhj_rantai_versi()' into v;
+    raise exception '139y: berkas ini sudah disusul % — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
+                    '138 → % berurutan dalam satu transaksi sesudah set local rhj.ulang_rantai = ''on'').', v, v;
+  end if;
+end $$;
+
 do $$ begin
   if to_regprocedure('public.usul_lepas_hitam(bigint)') is null
      or to_regprocedure('public.view_komisi_cacat(oid)') is null
@@ -76,7 +90,7 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if not (coalesce(new.blacklist, false) or (tg_op = 'UPDATE' and coalesce(old.blacklist, false))) then return null; end if;
   insert into public.pelanggan_hitam_jejak (customer_id, jenis, nilai, teks)
-  select new.id, x.jenis, x.nilai, x.teks
+  select new.id, x.jenis, x.nilai, coalesce(x.teks, '')
     from (values ('kunci', public.kunci_nama_pelanggan(new.nama), new.nama),
                  ('kunci', public.kunci_nama_pelanggan(new.nama_lama), new.nama_lama),
                  ('hp', new.hp, null::text),
@@ -100,10 +114,10 @@ begin
   select j.customer_id, 'kunci', k.k, j.teks
     from public.pelanggan_hitam_jejak j
     cross join lateral (select public.kunci_nama_pelanggan(j.teks) as k) k
-   where j.jenis = 'kunci' and j.teks is not null and k.k is distinct from j.nilai
+   where j.jenis = 'kunci' and coalesce(j.teks, '') <> '' and k.k is distinct from j.nilai
      and char_length(coalesce(k.k, '')) >= 2 and k.k <> 'tanpa nama'
   on conflict do nothing;
-  execute 'del' || 'ete from public.pelanggan_hitam_jejak j where j.jenis = ''kunci'' and j.teks is not null '
+  execute 'del' || 'ete from public.pelanggan_hitam_jejak j where j.jenis = ''kunci'' and coalesce(j.teks, '''') <> '''' '
        || 'and j.nilai is distinct from public.kunci_nama_pelanggan(j.teks)';
   get diagnostics n = row_count;
   return n;
@@ -130,7 +144,7 @@ returns text language sql immutable as $$
 $$;
 do $$ begin
   execute 'del' || 'ete from public.pelanggan_hitam_jejak j using public.customers c '
-       || 'where j.customer_id = c.id and j.jenis = ''kunci'' and j.teks is null '
+       || 'where j.customer_id = c.id and j.jenis = ''kunci'' and coalesce(j.teks, '''') = '''' '
        || 'and j.nilai in (pg_temp.kunci_139r(c.nama), pg_temp.kunci_139r(c.nama_lama), '
        || 'public.kunci_nama_pelanggan(c.nama), public.kunci_nama_pelanggan(c.nama_lama))';
 end $$;
@@ -481,16 +495,26 @@ begin
   end if;
   -- jejak sesuai kunci sekarang
   if exists (select 1 from public.pelanggan_hitam_jejak j
-              where j.jenis = 'kunci' and j.teks is not null and j.nilai is distinct from public.kunci_nama_pelanggan(j.teks)) then
+              where j.jenis = 'kunci' and coalesce(j.teks, '') <> '' and j.nilai is distinct from public.kunci_nama_pelanggan(j.teks)) then
     raise exception '139y: jejak daftar hitam belum sesuai kunci sekarang.';
   end if;
   -- rinci: SP belum tertaut dengan PO tertaut tetap diperiksa nama-nya sendiri
-  select c.* into c_hitam from public.customers c where c.blacklist order by c.id limit 1;
+  -- (review 139y no. 0) pelanggan daftar hitam yang namanya sah sebagai kunci (bukan "(tanpa nama)" / < 2 huruf);
+  -- tanpa itu diuji lewat No. HP-nya
+  select c.* into c_hitam from public.customers c
+   where c.blacklist and ((char_length(coalesce(public.kunci_nama_pelanggan(c.nama), '')) >= 2
+                           and public.kunci_nama_pelanggan(c.nama) <> 'tanpa nama') or nullif(btrim(c.hp), '') is not null)
+   order by (char_length(coalesce(public.kunci_nama_pelanggan(c.nama), '')) >= 2
+             and public.kunci_nama_pelanggan(c.nama) <> 'tanpa nama') desc, c.id limit 1;
   select p.id into v_po from public.purchase_orders p join public.customers x on x.id = p.customer_id
    where not x.blacklist and public.sp_pelanggan_hitam(x.id, null, null, null) is null order by p.id limit 1;
   if c_hitam.id is not null and v_po is not null
-     and public.sp_pelanggan_hitam(null, v_po, c_hitam.nama, null) is null then
-    raise exception '139y: SP belum tertaut di PO tertaut tidak diperiksa nama-nya sendiri.';
+     and public.sp_pelanggan_hitam(null, v_po,
+           case when char_length(coalesce(public.kunci_nama_pelanggan(c_hitam.nama), '')) >= 2
+                     and public.kunci_nama_pelanggan(c_hitam.nama) <> 'tanpa nama' then c_hitam.nama end,
+           case when char_length(coalesce(public.kunci_nama_pelanggan(c_hitam.nama), '')) >= 2
+                     and public.kunci_nama_pelanggan(c_hitam.nama) <> 'tanpa nama' then null else c_hitam.hp end) is null then
+    raise exception '139y: SP belum tertaut di PO tertaut tidak diperiksa nama/No. HP-nya sendiri.';
   end if;
   -- penjaga view komisi
   perform public.periksa_view_komisi();

@@ -34,6 +34,17 @@
 -- Tidak menyentuh objek EHC/komisi. Tidak ada data yang diubah; tidak ada objek yang dibuang.
 -- ═══════════════════════════════════════════════════════════════════════
 
+-- 00 · berkas ini sudah disusul 139r/139s/139w/139x/139y/139z (review 139y no. 5): menjalankannya ulang sendirian
+--      menurunkan fungsi yang diperbarui berkas sesudahnya. Menjalankan ulang seluruh rantai 138 → berkas terakhir
+--      berurutan dalam satu transaksi: `begin; set local rhj.ulang_rantai = 'on';` … `commit;`.
+do $$ begin
+  if to_regprocedure('public.segarkan_jejak_hitam()') is not null
+     and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
+    raise exception '138: berkas ini sudah disusul berkas sesudahnya — jangan dijalankan ulang sendirian (jalankan ulang '
+                    'seluruh rantai 138 → berkas terakhir berurutan dalam satu transaksi sesudah set local rhj.ulang_rantai = ''on'').';
+  end if;
+end $$;
+
 -- (2) customers_rapi_nama — definisi berkas 100 + sales tidak mengisi nama_lama saat mengubah nama
 create or replace function public.customers_rapi_nama()
 returns trigger language plpgsql set search_path to 'public' as $function$
