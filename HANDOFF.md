@@ -164,6 +164,19 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   EHC tidak lagi lewat `transfer_pengajuan` (komisi tetap jalur lama sampai tahap 4).
 - Urutan: FE prasyarat D1 (formGmPutus ELSE tidak lagi PATCH sales_orders untuk jenis tak dikenal) → 141/142/143 diuji
   rollback lalu diterapkan di DEV → FE D2–D5 + Playwright → ATURAN B + HANDOFF + ALUR-KERJA.
+- **DB tahap 3 SUDAH di DEV (9 Okt):** 141_ehc_periksa_gm_struktur, 142_ehc_periksa_gm_fungsi, 143_ehc_periksa_gm_view.
+  Workflow: penulis → 3 peninjau (bisnis/keamanan/kompat) + verifikasi skeptis (7 temuan terbukti, diperbaiki) → uji
+  rollback DEV **271 skenario/8 skrip lulus** (scratchpad `tahap3/uji/gen3.py` → `uji3-*.sql`; mock lokal PostgreSQL di
+  `tahap3/mock/`). Sesudah diterapkan: 6 sidik (so_ringkas, ehc_saldo_sp, kas_sales, komisi_klaim+nilai, laporan_komisi,
+  antrean_gm non-EHC) **sama** dengan sebelum; Vonny 0 klaim; hak baca kolom rekening kepala `ehc_klaim` dicabut.
+  - **Hak baca `ehc_klaim` kini PER KOLOM** (semua kecuali bank/no_rekening/atas_nama): kolom baru di tahap berikut
+    WAJIB `grant select (kolom) on public.ehc_klaim to authenticated`. Rekening dibaca dari `ehc_klaim_tujuan`
+    (owner/GM/finance + sales pemilik). Layar EHC versi tahap 1 (EHC_KOLOM memuat bank/no_rekening/atas_nama) **error
+    di DEV sampai layar tahap 3 jadi**.
+  - RPC baru: `putuskan_klaim_ehc(p_klaim,p_setuju,p_catatan,p_versi)`, `setujui_klaim_ehc_massal(p_daftar)`,
+    `rekap_ehc_bulanan(p_bulan)`, `keluarkan_klaim_ehc_batch(p_klaim,p_alasan)`, `ehc_daftar_bayar(p_bulan,p_batch)`,
+    `putuskan_klaim_cepat_v(...)` (dengan versi; `putuskan_klaim_cepat` lama tetap untuk layar lama). `ajukan_transfer('ehc')`
+    → 0A000. Antrean GM: 'ehc_periksa' (ref_id = −id klaim), 'ehc_dini' dibuang.
 - Koordinasi 9 Okt: sesi 50–61 tidak mengubah `antrean_gm` selama 141–143 dibangun (definisi DEV sudah membawa
   ubahan 130: `b.perlu_gm`, harga khusus `h.so_id = s.id`). **Merge `formGmPutus`:** branch 50–61 mengubahnya di
   0c9e0f1 (persen keputusan HARGA → `gm_pct_harga`, `gm_pct` khusus telat), 7888154 (sales flat → tanpa persen,
