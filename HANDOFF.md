@@ -164,6 +164,12 @@ Baca dulu `ATURAN.md` (aturan kerja: uji tabrakan dulu, lapor + rekomendasi, Han
   EHC tidak lagi lewat `transfer_pengajuan` (komisi tetap jalur lama sampai tahap 4).
 - Urutan: FE prasyarat D1 (formGmPutus ELSE tidak lagi PATCH sales_orders untuk jenis tak dikenal) → 141/142/143 diuji
   rollback lalu diterapkan di DEV → FE D2–D5 + Playwright → ATURAN B + HANDOFF + ALUR-KERJA.
+- Koordinasi 9 Okt: sesi 50–61 tidak mengubah `antrean_gm` selama 141–143 dibangun (definisi DEV sudah membawa
+  ubahan 130: `b.perlu_gm`, harga khusus `h.so_id = s.id`). **Merge `formGmPutus`:** branch 50–61 mengubahnya di
+  0c9e0f1 (persen keputusan HARGA → `gm_pct_harga`, `gm_pct` khusus telat), 7888154 (sales flat → tanpa persen,
+  `flatGm`), dan keputusan 8 Okt (telat tanpa Tolak; Setujui telat hanya `gm_pct` + `gm_pada`). Pertahankan ketiganya;
+  pembatasan ELSE ke harga/telat + pembuangan cabang ehc_dini dari sesi ini tidak bertentangan. Temuan keamanan #1 di
+  sesi itu (klaim komisi/rekening terbaca Vonny dkk.) akan dikoordinasikan sebelum dikerjakan.
 
 ## Status
 - Revisi 1–28 selesai. 1–27 sudah di `main` (PR #1). #28 + `ATURAN.md` ada di branch `claude/perbaikan-revisi-27`.
