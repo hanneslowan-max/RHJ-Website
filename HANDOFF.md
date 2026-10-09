@@ -103,7 +103,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 | 52 | Muat ulang diam-diam saat pindah tab, klik tab yang sama, jendela kembali dilihat (visibilitychange/focus/pageshow), dan tombol **Muat ulang** di header. Data lama tetap tampil; gambar ulang ditunda saat mengetik / laci terbuka / form PO-SP-penawaran terisi · **7 Okt (keputusan Hannes):** tanpa refresh otomatis berkala, tetapi SETIAP pindah tab / kembali ke jendela data ditarik ulang — jeda per tab (20–120 dtk) dihapus, tinggal 3 dtk penggabung pemicu beruntun; tab Kas Sales ikut terdaftar. Catatan: keluhan "harus refresh terus" terjadi di PROD yang belum memakai #52 | **selesai (FE)**, lihat catatan #52 |
 | 53 | Keputusan Hannes 7 Okt: kelompok baru RHAJA untuk RHJ R & RHJ PP. DEV sudah sejak 1 Sep (Ubah massal oleh Hannes, tidak ada berkas db/) → **berkas 125** membawa daftar DEV yang sama ke PROD (59 produk: RHJ R*, RHJ PP*, RHJ BLACK PP 2", 2" H/R grey rubber, ROLLER PHINOLIQ 1"), dicocokkan per pasangan (kode, kelompok lama) → idempoten; kolom bahan diisi bila kosong (Karet 28, Nylon 2; PP dibiarkan kosong — products_bahan_sah tidak punya "PP"). Merek/kategori/tipe set/price list/komisi tidak berubah | **selesai (DB 125)**; uji DEV rollback: simulasi PROD 59 dipindah, 0 produk lain, ulang = 0 |
 | 54 | → dikerjakan sesi EHC/komisi (dikonfirmasi Hannes 7 Okt; 9 Okt: tahap 1 menunggu Hannes menjalankan 140b di SQL Editor DEV) | sesi EHC |
-| 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | tanya: isi kop/penutup, logo |
+| 55 | Belum ada unduh/cetak penawaran untuk peran apa pun | **selesai 9 Okt (FE + berkas 139p)** — template dari contoh Hannes, tombol Unduh PDF; lihat bagian "#55" |
 | 56 | Dokumen penawaran (pratinjau & detail) kini punya kolom **Spesifikasi** tersendiri (baris baru dipertahankan); isian spesifikasi jadi textarea multi-baris (dulu input 1 baris membuang Enter dari spesifikasi master) | **selesai (FE)** |
 | 57 | Tampilan SET di SP, data tetap per pcs (keputusan Hannes 7 Okt a/b/c). **Berkas 126**: kolom penanda `sales_order_lines.set_grup/set_nama/set_qty/set_isi` + CHECK `sol_set_lengkap`; trigger `sol_set_usul` (BEFORE INSERT, hanya saat `rhj.usul='on'`) membawa penanda ketika putuskan_ubah menyisipkan ulang baris SP — dari nilai_baru (layar baru mengirim kuncinya) atau nilai_lama (usulan dari layar lama); putuskan_ubah sendiri TIDAK diubah (alat MCP menolak SQL yang memuat teks "delete"; sesi EHC sudah diberi tahu). Data lama: SP dari PO ditandai hanya bila barisnya persis hasil pemecahan set (urutan produk komponen + Σ qty), diisi dengan `SET LOCAL session_replication_role = replica` (tanpa trigger → harga_list/status/total/audit tidak tersentuh). FE: judul "N set · nama · 1 set = … · @harga/set" di form SP (qty roda terkunci di SP dari PO), detail SP (+ terkirim x/y pcs, batal), Minta ubah SP (penanda ikut terkirim), Double Check Vonny, Pengiriman bertahap, laci harga GM; "set (sudah diubah)" bila isi tak sesuai; SP manual: set yang diubah susunannya kembali jadi baris biasa; kolom set hanya dikirim bila ada baris set (SP tanpa set tetap jalan sebelum berkas 126) | **selesai (DB 126 + FE)**; uji DEV rollback: pencocokan 5 skenario (2 set inline+master, set diubah, produk kembar, biaya di tengah, SP 155), putuskan_ubah 3 skenario (tanpa kunci / eksplisit / nilai aneh); sidik md5 baris & so_ringkas identik, audit_log tak bertambah; layar 35/35 + regresi 231/231 · **Review adversarial** (3 pemeriksa + verifikator per temuan, 7 terkonfirmasi, semuanya diperbaiki): pengisi data lama dijadikan fungsi `tandai_set_sp_lama()` dengan pencocokan BERJANGKAR (dulu bisa menandai roda lepas yang kebetulan sama) + menyalin penanda ke nilai_lama usulan SP yang masih menunggu, `revoke` kedua fungsi dari public/anon/authenticated (DEV: migrasi `126b_set_di_sp_perbaikan`); harga per set = nett + EHC (= harga set PO, "termasuk EHC"); SP manual: set yang qty-nya salah ketik tampil "sudah diubah" dan baru dilepas saat disimpan, qty semua roda × bulat → jumlah set ikut; laci GM tidak lagi ketumpahan jawaban lambat dari SP lain (juga konteks HPP). Uji DEV rollback 10 skenario pencocokan; layar 46/46 |
 | 58 | Grup pelanggan (usulan 7 Okt; 8 Okt: PO dikirim masing-masing divisi). **Berkas 132**: tabel `customer_groups` (nama, nama_dokumen = induk di dokumen, catatan; RLS baca boleh_baca, tulis hanya lewat RPC), `customers.grup_id` (trigger `customers_jaga_grup`: hanya owner/GM), `quotes.kepada_grup` (judul "<induk> — Divisi <pelanggan>", dihitung trigger `quotes_judul_grup` dari `judul_grup_pelanggan()` — isian bebas REST tidak dipakai; induk sendiri → null), `simpan_penawaran` + `p_kepala.ke_grup`, RPC `daftar_grup_pelanggan` (anggota & pemegang untuk semua peran baca; owner/GM + jumlah SP, penjualan, tahun ini, piutang per anggota), `simpan_grup_pelanggan`, `atur_anggota_grup` (owner/GM; pindah grup = keluarkan dulu). FE: tab Pelanggan › "Grup pelanggan" (kartu per grup, total grup, + Grup baru / Ubah / + Anggota / Keluarkan untuk owner/GM), info grup di laci pelanggan & form penawaran, kotak "Tujukan dokumen ke …" (pratinjau/detail/daftar/salin), GALAT_BERKAS 132 | **selesai (DB 132 + FE)**; uji DEV rollback G1–G9 (owner/sales/Vonny, REST PATCH ditolak, judul dihitung DB); layar 22/22 + regresi 13 berkas · **Review adversarial** (2 pemeriksa + verifikator, 4 terkonfirmasi, diperbaiki): `judul_grup_pelanggan` hanya menjawab peran baca (akun pending/nonaktif dulu bisa membaca nama anggota; DEV `132b_judul_grup_peran`); data grup ditarik segar saat pelanggan dipilih di penawaran, laci pelanggan dibuka, dan muat ulang diam (dulu cache [] menyembunyikan grup yang dibuat belakangan); muat ulang tampilan grup tidak lagi bergantung pada daftar pelanggan; pencarian penawaran ikut judul grup. Layar 25/25 + regresi |
@@ -135,7 +135,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
 ## Jawaban Hannes 7 Okt (daftar konfirmasi)
 - #52: tanpa refresh berkala; SETIAP pindah tab selalu segar → selesai (jeda 3 dtk).
 - #53: kelompok RHAJA → selesai (berkas 125).
-- #55: Hannes mengirim contoh penawaran yang biasa dikirim → menunggu.
+- #55: contoh penawaran diterima 9 Okt → selesai (lihat bagian "#55").
 - #57: setuju (a) set diubah → "set (sudah diubah)", (b) qty roda dalam set dikunci di SP dari PO, (c) SP lama per set bila cocok.
 - #58: masalahnya penawaran dikirim ke SATU pelanggan, padahal grup pelanggan punya banyak perusahaan yang dipegang sales
   berbeda → Hannes bertanya cara menanganinya (usulan dikirim 7 Okt, menunggu jawaban).
@@ -211,7 +211,7 @@ persen saat menyetujui harga (boleh 0, maks 50%).
    setiap perubahan dicatat di audit_log ('migrasi 128'). DEV: 8 SP; sidik so_ringkas, komisi_hitung, komisi_belum_klaim,
    antrean_gm, status sama sebelum-sesudah. **Diterapkan di DEV 8 Okt.** PROD: dijalankan bersama paket rilis.
 6. (19) Pelanggan belum bertuan tetap hanya diklaim lewat PO (dicatat di ATURAN B › Akses).
-7. #55: contoh penawaran menyusul dari Hannes.
+7. #55: contoh penawaran diterima 9 Okt → selesai (lihat bagian "#55").
 8. (18) Sisa #8 "PO menyusul + PO buatan sendiri" → **opsi (b): cek Vonny menahan** → **SELESAI berkas 135 (DEV 8 Okt) + FE**:
    kolom penanda `sales_orders.pelanggan_dari_po` (diisi `tautkan_po_sp` saat pelanggan SP yang kosong terisi dari
    pelanggan PO; dijaga `so_jaga_a_pelanggan` — dipaksa false saat INSERT, tak bisa diubah selain lewat tautkan /
@@ -278,6 +278,32 @@ persen saat menyetujui harga (boleh 0, maks 50%).
   (staff tidak); invoice & pelunasan barang yang sudah keluar tetap boleh.
 - **19**: barang baru lewat Minta ubah SP tetap memakai list tanggal SP. **20**: tanggal/nomor SP tetap UTC.
 - Urutan kerja: #3 → #4 → #2 (+9, 10, 17) → #7 → #1.
+
+## #55 — template penawaran & Unduh PDF (contoh Hannes 9 Okt)
+- Contoh: "040_PENAWARAN_PT_Zioflex_Mandiri_Indonesia.pdf" (Riksa). Kop & kaki = dua gambar JPEG dari PDF contoh (21 KB +
+  30 KB), ditanam sebagai data URI di index.html (CSP img-src data:). Ukuran/posisi dari PDF: kop 210 × 30 mm di atas, kaki
+  202,8 × 22 mm, 4,6 mm dari bawah; teks Calibri 11 pt, margin kiri/kanan 25,4 mm.
+- FE: `docPenawaranHtml(d, cetak)` = satu template untuk pratinjau, detail, dan cetak; `cetakPenawaran(d)` = window.print
+  A4 (@page margin 0 dipasang sementara; kop/kaki `position:fixed` + spasi thead/tfoot → berulang di tiap halaman; baris
+  tabel tidak terpotong; nama berkas "040_PENAWARAN_<perusahaan>"). Tombol **Unduh PDF** di laci detail penawaran.
+  `namaDokProduk` (merek + kode tanpa akhiran H/M/R/B + kata fungsi), `salesDokPnw` (tanda tangan), `tglSurat`.
+  Owner: tab Pengguna › "Data sales di dokumen penawaran". Penanda "di bawah list" hanya di layar.
+- DB berkas 139p: sales_reps.nama_dokumen / hp_dokumen / email_dokumen (owner/GM; dirapikan trigger, CHECK); Riksa diisi
+  dari contoh. Sales lain perlu diisi owner (No. HP & e-mail kantor belum ada di data mana pun).
+- Uji: render contoh → PDF 1 halaman, isi sama dengan contoh (tanggal, nomor, Kepada UP+HP, deskripsi "Hammer 500HPR-CU
+  8\" mati" / "RHJ 03 ER 4\" hidup|mati", total, Note 1–5, rekening, penutup, tanda tangan Riksa); include + TOP 30 hari +
+  diskon + spesifikasi + set inline + usulan + masa berlaku + catatan + tanda tangan tanpa data dokumen; non-PPN tanpa TOP;
+  28 baris → 2 halaman dengan kop/kaki tiap halaman; penanda internal tidak tercetak (uji55 44/44); form owner 4/4; regresi
+  uji_pnw 31/31, uji60 28/28, uji58 25/25 (pemeriksaan disesuaikan ke template baru).
+- **Beda dengan contoh yang menunggu keputusan Hannes** (sekarang mengikuti ATURAN B yang berlaku):
+  (Q23) rupiah tampil sampai sen "Rp 1.451.500,00" — contoh "Rp.1.451.500,-";
+  (Q24) mode Exclude menampilkan TOTAL, PPN 11%, TOTAL + PPN 11% (#42) — contoh hanya TOTAL + catatan "Belum termasuk PPN";
+  (Q25) nomor tetap format sistem "040/PQ/MCE/X/2026" (berkas 93) — contoh "040/PQ/RSG/IX/2026" (kode sales);
+  (Q26) nama barang otomatis "RHJ 03 ER 4\" hidup" (RHJ-TW → RHJ) — mohon konfirmasi aturan penamaannya;
+  (Q27) catatan 3–5 (tidak ada garansi, free delivery Jabodetabek, ekspedisi luar Jabodetabek) & rekening BCA dipakai untuk
+  SEMUA penawaran (termasuk Non-PPN) — mohon konfirmasi.
+- **Rilis PROD:** 139p + index.html bersamaan (layar membaca kolom baru lewat select=*; tanpa 139p tanda tangan memakai nama
+  sales saja dan bagian owner tidak tampil).
 
 ## Temuan keamanan & bug — DIKERJAKAN DI AKHIR (keputusan Hannes 6 Okt)
 Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
