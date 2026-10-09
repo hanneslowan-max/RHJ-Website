@@ -40,6 +40,17 @@ Tulis ke `rilis/RILIS-<tanggal>.md` (atau ke chat bila Hannes minta singkat) den
 2. Pilih waktu sepi (di luar jam input PO/SP). Umumkan ke tim.
 3. Cek keadaan PROD — jalankan di SQL editor PROD, tempel hasilnya ke Claude:
    select version, name from supabase_migrations.schema_migrations order by version desc limit 15;
+4. Cadangan definisi fungsi & view (bahan rencana mundur — banyak fungsi hanya DITAMBAL berjangkar, versi
+   sebelumnya tidak ada utuh di berkas mana pun). Jalankan di PROD, ganti <tgl> (mis. 20261009):
+   create schema if not exists cadangan;
+   revoke all on schema cadangan from public, anon, authenticated;
+   create table cadangan.fungsi_<tgl> as
+     select p.oid::regprocedure::text as fungsi, pg_get_functiondef(p.oid) as definisi
+       from pg_proc p where p.pronamespace = 'public'::regnamespace and p.prokind = 'f';
+   create table cadangan.view_<tgl> as
+     select c.relname as nama, pg_get_viewdef(c.oid) as definisi, c.reloptions as opsi
+       from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'v';
+   select count(*) from cadangan.fungsi_<tgl>;   -- harus > 0
 
 ## Urutan eksekusi
 | # | Berkas | Isi singkat | Ubah data? | Cek sesudahnya |
@@ -57,10 +68,12 @@ Tulis ke `rilis/RILIS-<tanggal>.md` (atau ke chat bila Hannes minta singkat) den
 
 ## Rencana mundur
 - Front-end: unggah ulang index.html versi sebelumnya (simpan salinannya sebelum unggah).
-- DB: <per migrasi: cara membalik — create or replace versi fungsi sebelumnya dari db/NNN lama (salin badan
-  fungsinya saja; berkas rantai 138 → 139z menolak dijalankan ulang UTUH sendirian sesudah berkas penyusulnya —
-  menjalankan ulang seluruh rantai: `begin; set local rhj.ulang_rantai = 'on';` … berurutan … `commit;`);
-  migrasi yang mengubah data → pulihkan dari tabel cadangan / backup>.
+- DB: <per migrasi: cara membalik — fungsi: jalankan `definisi` dari cadangan.fungsi_<tgl> (langkah "Sebelum
+  mulai" no. 4) untuk fungsi yang diubah rilis ini; view: `create or replace view … with (security_invoker = on) as`
+  dari cadangan.view_<tgl>; kolom/tabel baru dibiarkan (tidak dibuang). JANGAN menjalankan ulang berkas db/NNN
+  lama: berkas rantai 138 → 139z menolak dijalankan ulang sendirian sesudah berkas penyusulnya
+  (rhj.ulang_rantai = 'on' melewati penjaga — hanya darurat; menjalankan ulang seluruh rantai tidak teruji).
+  Migrasi yang mengubah data → pulihkan dari tabel cadangan / backup>.
 - Bila ragu: hentikan, jangan lanjut ke migrasi berikutnya, kabari Claude dengan pesan galat persisnya.
 ```
 

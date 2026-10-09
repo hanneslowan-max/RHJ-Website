@@ -32,13 +32,13 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- 00 · berkas ini sudah disusul 139r/139s/139w/139x/139y/139z (review 139y no. 5): menjalankannya ulang sendirian
---      menurunkan fungsi yang diperbarui berkas sesudahnya. Menjalankan ulang seluruh rantai 138 → berkas terakhir
---      berurutan dalam satu transaksi: `begin; set local rhj.ulang_rantai = 'on';` … `commit;`.
+--      menurunkan fungsi yang diperbarui berkas sesudahnya. Untuk mundur: cadangan definisi fungsi
+--      sebelum rilis (skill cto-rilis-prod). rhj.ulang_rantai = 'on' melewati penjaga — darurat saja.
 do $$ begin
   if to_regprocedure('public.segarkan_jejak_hitam()') is not null
      and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
-    raise exception '139: berkas ini sudah disusul berkas sesudahnya — jangan dijalankan ulang sendirian (jalankan ulang '
-                    'seluruh rantai 138 → berkas terakhir berurutan dalam satu transaksi sesudah set local rhj.ulang_rantai = ''on'').';
+    raise exception '139: berkas ini sudah disusul berkas sesudahnya — jangan dijalankan ulang sendirian. '
+                    'Untuk mundur pakai cadangan definisi fungsi yang disimpan sebelum rilis (skill cto-rilis-prod).';
   end if;
 end $$;
 

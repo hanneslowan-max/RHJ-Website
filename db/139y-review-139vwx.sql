@@ -31,16 +31,16 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- 00 · berkas ini sudah disusul 139z (review 139y no. 5): menjalankannya ulang sendirian menurunkan fungsi yang
---      diperbarui berkas sesudahnya. Menjalankan ulang seluruh rantai 138 → berkas terakhir berurutan dalam satu
---      transaksi: `begin; set local rhj.ulang_rantai = 'on';` … `commit;`.
+--      diperbarui berkas sesudahnya. Untuk mundur: cadangan definisi fungsi
+--      sebelum rilis (skill cto-rilis-prod). rhj.ulang_rantai = 'on' melewati penjaga — darurat saja.
 do $$
 declare v text;
 begin
   if to_regprocedure('public.rhj_rantai_versi()') is not null
      and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
     execute 'select public.rhj_rantai_versi()' into v;
-    raise exception '139y: berkas ini sudah disusul % — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
-                    '138 → % berurutan dalam satu transaksi sesudah set local rhj.ulang_rantai = ''on'').', v, v;
+    raise exception '139y: berkas ini sudah disusul % — jangan dijalankan ulang sendirian. '
+                    'Untuk mundur pakai cadangan definisi fungsi yang disimpan sebelum rilis (skill cto-rilis-prod).', v;
   end if;
 end $$;
 
@@ -414,7 +414,7 @@ comment on function public.periksa_view_komisi() is
 do $$
 declare
   t text[];
-  d text; d2 text; n int;
+  d text; d2 text; n int; m text;
   daftar text[] := array[
     ['public.ajukan_ubah(text,bigint,jsonb,text)', $a$  if v_lama is null then$a$,
      $b$  -- 139y (review 139w no. 4): Kepada SP berhuruf/simbol di luar huruf Latin biasa ditolak untuk selain
@@ -459,7 +459,11 @@ declare
 begin
   foreach t slice 1 in array daftar loop
     d := pg_get_functiondef(t[1]::regprocedure);
-    if position(t[3] in d) > 0 then continue; end if;   -- sudah ditambal
+    -- sudah ditambal: teks tambalan utuh, ATAU baris penanda "-- 139y" miliknya ada — berkas sesudahnya boleh menyisipkan
+    -- baris di dalam tambalan ini (review 139z no. 1: jalan-ulang tidak boleh menambal dua kali)
+    m := (select x.l from regexp_split_to_table(t[3], E'\n') with ordinality as x(l, i)
+           where x.l like '%-- 139y%' and position(x.l in t[2]) = 0 order by x.i limit 1);
+    if position(t[3] in d) > 0 or (m is not null and position(m in d) > 0) then continue; end if;
     n := (length(d) - length(replace(d, t[2], ''))) / length(t[2]);
     if n <> t[4]::int then
       raise exception '139y: % — jangkar "%" muncul % kali (harus %).', t[1], left(t[2], 70), n, t[4];
@@ -538,6 +542,18 @@ begin
   end;
   if position('139y' in coalesce(v_tolak, '')) = 0 then
     raise exception '139y: uji diferensial tidak menangkap kolom pembawa angka komisi (hasil: %).', v_tolak;
+  end if;
+  -- tiap tambalan terpasang tepat sekali (review 139z no. 1: jalan-ulang tidak boleh menambal dua kali)
+  if exists (select 1 from (values
+        ('public.ajukan_ubah(text,bigint,jsonb,text)', '-- 139y (review 139w no. 4)'),
+        ('public.putuskan_ubah(bigint,boolean,text)', '-- 139x (review 139s no. 2)'),
+        ('public.putuskan_ubah(bigint,boolean,text)', '-- 139y (review 139w no. 4)'),
+        ('public.putuskan_ubah(bigint,boolean,text)', 'v_lepas := public.usul_lepas_hitam(p_id);'),
+        ('public.cek_kelayakan_vonny(bigint,text,text)', '-- 139x (review 139s no. 6)'),
+        ('public.cek_kelayakan_vonny(bigint,text,text)', '-- 139y (review 139w no. 4)')) as x(f, s)
+        cross join lateral (select pg_get_functiondef(x.f::regprocedure) as d) dd
+       where (length(dd.d) - length(replace(dd.d, x.s, ''))) / length(x.s) <> 1) then
+    raise exception '139y: ada tambalan yang hilang atau terpasang lebih dari sekali (ajukan_ubah/putuskan_ubah/cek_kelayakan_vonny).';
   end if;
   if position('139w' in pg_get_functiondef('public.lengkapi_pelanggan_sp(bigint,text,text,text)'::regprocedure)) = 0
      or position('139y' in pg_get_functiondef('public.ajukan_ubah(text,bigint,jsonb,text)'::regprocedure)) = 0

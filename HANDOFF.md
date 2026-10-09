@@ -402,8 +402,8 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    139k/139t: uji diri kini menerima evtenabled 'A' (jalankan ulang aman). **Diterima (dicatat):** mengganti ISI fungsi
    predikat (`boleh_lihat_nilai_klaim`, `peran_saya`, `sales_rep_saya`) tidak dijaga event trigger — hanya uji perilaku
    periksa_view_komisi(); menjalankan ulang 139k/139t SESUDAH 139v mengembalikan versi lama view_komisi_cacat/periksa →
-   (sejak 139y/139z) berkas lama menolak dijalankan ulang sendirian; jalankan ulang rantai 138 → 139z berurutan dalam
-   satu transaksi sesudah `set local rhj.ulang_rantai = 'on'`. **Sesi EHC / migrasi berikutnya:** kolom baru di ke-4 view → perbarui daftar kolom di
+   (sejak 139y/139z) berkas lama menolak dijalankan ulang sendirian; untuk mundur pakai cadangan definisi fungsi sebelum
+   rilis (skill cto-rilis-prod). **Sesi EHC / migrasi berikutnya:** kolom baru di ke-4 view → perbarui daftar kolom di
    `view_komisi_cacat()` dulu (pesan galat menyebutnya). **Cek PROD sebelum rilis 139v:** sesudah rilis
    `select evtname, evtenabled from pg_event_trigger where evtname like 'jaga_view_komisi%';` → 3 baris 'A'; daftar kolom
    ke-4 view di PROD sama dengan DEV (uji diri gagal keras bila beda).
@@ -706,7 +706,7 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    pct diganti dua kali per cabang tier/cash/flat di subtransaksi yang dibatalkan; sidik kolom lain yang terbaca Vonny
    harus sama). (139v-2) menjalankan ulang 139k sesudah 139v diam-diam menurunkan penjaga → 139y memuat ulang seluruh
    penjaga; berkas 139k/139t/139v/139r/139s/139w/139x menolak dijalankan ulang sendirian sesudah 139y (menjalankan ulang
-   rantai: lihat resep di butir 139z). (139x-8, FE) jawaban `usul_lepas_hitam` yang
+   rantai: lihat butir 139z — mundur lewat cadangan definisi fungsi). (139x-8, FE) jawaban `usul_lepas_hitam` yang
    terlambat menulis tanda merah ke laci usulan lain → diikat ke laci yang memintanya. (#55b-9, sedang) `overflow-wrap:
    anywhere` di `.pk-isi` mematahkan angka rupiah & judul kolom (PDF 6/7 kolom, HP) → hanya teks bebas (paragraf, catatan,
    deskripsi, spesifikasi, tanda tangan); di HP tabel 11 px. (#55b-10) baris terakhir tinggi (±205 mm) menjatuhkan surat
@@ -771,9 +771,23 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    status = 'menunggu' and jenis = 'sp' and ada_huruf_non_latin(nilai_baru->'kepala'->>'kepada');` (DEV 0/0 — usulan
    lama sales ber-Kepada BARU bersimbol akan ditolak saat GM menyetujui; sales diminta mengajukan ulang);
    `select id, nama, kunci_nama_pelanggan(nama) from customers where blacklist order by id;` (pelanggan daftar hitam
-   berkunci "tanpa nama"/< 2 huruf diuji lewat No. HP di uji diri 139y). **Menjalankan ulang rantai** (mis. memulihkan
-   DEV): `begin; set local rhj.ulang_rantai = 'on';` lalu 138 → 139z berurutan, `commit;` — tanpa itu berkas lama menolak
-   dijalankan sendirian.
+   berkunci "tanpa nama"/< 2 huruf diuji lewat No. HP di uji diri 139y). **Mundur:** cadangan definisi fungsi & view
+   sebelum rilis (skill cto-rilis-prod, "Sebelum mulai" no. 4 — diuji di DEV: 329 fungsi, 28 view, pulih OK); berkas lama
+   menolak dijalankan ulang sendirian (`rhj.ulang_rantai = 'on'` melewati penjaga — darurat saja).
+   **Review adversarial 139z** (7 agen; 3 terkonfirmasi, 1 dibantah) → perbaikan di berkas 139x/139y/139z + index.html
+   (DEV 9 Okt): (139z-1/2, sedang→rendah) resep "jalankan ulang seluruh rantai 138 → 139z" yang ditulis 139z tidak bisa
+   selesai (139x menambal putuskan_ubah dua kali → 139y gagal di jangkar), dan menjalankan ulang 139y → 139z dengan
+   izin diam-diam memasang lagi bug 139y-3/8 — penanda "sudah ditambal" mencari teks tambalan utuh, padahal berkas
+   sesudahnya menyisipkan baris di dalamnya → tambalan 139x/139y/139z dianggap terpasang bila baris penanda "-- 139x/
+   139y/139z" miliknya ada; uji diri 139y/139z menghitung tiap tambalan TEPAT sekali; resep jalan-ulang rantai DICABUT
+   dari HANDOFF, skill, dan pesan penjaga — diganti cadangan definisi fungsi sebelum rilis. Uji DEV (rollback): blok
+   tambalan 139x F → 139y E → 139z C dijalankan ulang pada DEV yang sudah lengkap → semua penanda 1×, v_lepas 1×, Iwan
+   usulan qty dengan Kepada lama "·" diterima #98 & GM menerapkan. (139z-3, rendah) tabel 7 kolom di HP 375/390 px
+   masih digeser 9–26 px bila total baris 9–10 digit (judul DESKRIPSI/SPESIFIKASI menahan lebar) → di HP judul kolom
+   0,8 em, tabel 10,5 px, 7 kolom 9 px: geser 0 di 360/375/390/412 untuk 6/7 kolom termasuk total ±174 jt & ±1,45 M (uji
+   M diperluas; angka/judul tetap tidak patah — uji K). Dibantah: membuat SP baru untuk pelanggan master bernama
+   bersimbol (ditulis owner) ditolak untuk sales — sesuai ATURAN B (Kepada SP baru; sales boleh merapikan penulisan
+   nama). Penerimaan "HP 360 px masih geser" di atas tidak berlaku lagi.
 8. **SP ditautkan sales ke pelanggannya sendiri lewat REST** (RLS so_tambah/so_ubah with_check pelanggan_saya): INSERT/PATCH
    customer_id ke pelanggan milik sendiri tanpa HP diterima — melompati aturan HP (berkas 122) dan penautan Vonny (#37).
    → **SELESAI berkas 134 (DEV 8 Okt)**, desain dikoreksi kritik (PATCH po_id, tautkan_po_sp lintas sales, Kepada

@@ -29,13 +29,13 @@
 -- ═══════════════════════════════════════════════════════════════════════
 
 -- 00 · berkas ini sudah disusul 139y: menjalankannya ulang sendirian menurunkan fungsi yang diperbarui berkas sesudahnya
---      (review 139v no. 2). Menjalankan ulang seluruh rantai 138 → berkas terakhir berurutan dalam
---      satu transaksi: `begin; set local rhj.ulang_rantai = 'on';` … `commit;`.
+--      (review 139v no. 2). Untuk mundur: cadangan definisi fungsi
+--      sebelum rilis (skill cto-rilis-prod). rhj.ulang_rantai = 'on' melewati penjaga — darurat saja.
 do $$ begin
   if to_regprocedure('public.segarkan_jejak_hitam()') is not null
      and coalesce(current_setting('rhj.ulang_rantai', true), '') <> 'on' then
-    raise exception '139x: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian (jalankan ulang seluruh rantai '
-                    '138 → berkas terakhir berurutan dalam satu transaksi sesudah set local rhj.ulang_rantai = ''on'').';
+    raise exception '139x: berkas ini sudah disusul 139y — jangan dijalankan ulang sendirian. '
+                    'Untuk mundur pakai cadangan definisi fungsi yang disimpan sebelum rilis (skill cto-rilis-prod).';
   end if;
 end $$;
 
@@ -336,7 +336,7 @@ grant execute on function public.setujui_ubah_lepas_hitam(bigint, text) to authe
 do $$
 declare
   t text[];
-  d text; d2 text; n int;
+  d text; d2 text; n int; m text;
   daftar text[] := array[
     -- (no. 2) putuskan_ubah: pelepasan penahanan hanya lewat setujui_ubah_lepas_hitam; sesudahnya kembali ke cek Vonny
     ['public.putuskan_ubah(bigint,boolean,text)', $a$declare u record; b jsonb; k jsonb; v_beda text;$a$,
@@ -402,7 +402,11 @@ declare
 begin
   foreach t slice 1 in array daftar loop
     d := pg_get_functiondef(t[1]::regprocedure);
-    if position(t[3] in d) > 0 then continue; end if;   -- sudah ditambal
+    -- sudah ditambal: teks tambalan utuh, ATAU baris penanda "-- 139x" miliknya ada — berkas sesudahnya boleh menyisipkan
+    -- baris di dalam tambalan ini (review 139z no. 1: jalan-ulang tidak boleh menambal dua kali)
+    m := (select x.l from regexp_split_to_table(t[3], E'\n') with ordinality as x(l, i)
+           where x.l like '%-- 139x%' and position(x.l in t[2]) = 0 order by x.i limit 1);
+    if position(t[3] in d) > 0 or (m is not null and position(m in d) > 0) then continue; end if;
     n := (length(d) - length(replace(d, t[2], ''))) / length(t[2]);
     if n <> t[4]::int then
       raise exception '139x: % — jangkar "%" muncul % kali (harus %).', t[1], left(t[2], 70), n, t[4];
