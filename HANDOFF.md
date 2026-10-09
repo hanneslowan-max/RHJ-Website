@@ -333,6 +333,27 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    (izin membuat event trigger — bila ditolak, hapus bagian D dan jalankan `periksa_view_komisi()` di akhir setiap migrasi
    view komisi). Sesi EHC: setiap `create or replace view` atas 4 view itu wajib membawa predikat 139k; kolom baru di
    komisi_klaim perlu `grant select (kolom)` ke authenticated bila layar membacanya.
+   **Review adversarial 139k** (5 terkonfirmasi, semuanya rendah/sedang) → **berkas 139t (DEV 9 Okt)**: (3) pct_berlaku
+   tampil bila pemeriksaan hak NULL (sales tanpa tautan) → `WHEN (kv.boleh IS NOT TRUE)`; (2/5) penjaga bisa dilewati
+   `ALTER TABLE … SET/RESET (security_invoker)`, `CREATE RULE "_RETURN"`, rename, atau kata predikat di teks → fungsi
+   `view_komisi_cacat(oid)` (invoker lewat `pg_options_to_table(...)::boolean`, predikat lewat ketergantungan pg_depend
+   ke `boleh_lihat_nilai_klaim()`), `jaga_view_komisi_tertutup` mencari relasi dari objid (rule → ev_class), event
+   trigger kedua `jaga_view_komisi_b` (ALTER TABLE, CREATE RULE); (4) `security_invoker = true`/tanpa nilai/1 kini
+   diterima. `periksa_view_komisi()` (VOLATILE) juga uji perilaku: Vonny 0 angka komisi di 4 view, sales hanya SP-nya &
+   so_ringkas tidak melebar dari sales_orders. Uji DEV rollback: ALTER TABLE off/reset → ditolak; ALTER VIEW off →
+   ditolak; invoker true/tanpa nilai/1 → diterima; predikat diganti kata di teks (CREATE VIEW & CREATE RULE) → ditolak;
+   view palsu bernama cash_belum_cocok di atas view asli yang di-rename → ditolak; ALTER TABLE tabel lain & view lain →
+   tidak terganggu; event trigger dimatikan + invoker off → periksa_view_komisi menangkap; Hendri tanpa tautan sales →
+   pct & pct_berlaku kosong. **Sesi EHC:** view komisi yang dibuat ulang harus MEMANGGIL `boleh_lihat_nilai_klaim()`
+   langsung di definisinya (view pembungkus di atas view lain ditolak) dan tetap boleh menulis `security_invoker = on`
+   atau `= true`. **Cek PROD sebelum rilis 139t:** sama dengan 139k (izin event trigger).
+   **Pertanyaan 29 (baru, review 139k no. 1, menunggu Hannes — objek sesi EHC):** klaim EHC cara "reimburse" menyalin
+   rekening master SALES ke `ehc_klaim` (bank, no_rekening, atas_nama), yang terbaca Vonny, Lie Sian, Ichi, staff, dan
+   Lenni (juga lewat `ehc_cepat_siap` dan snapshot `ehc_klaim_log` untuk staff & Lenni) — padahal keputusan 6 menutup
+   rekening sales untuk selain owner/GM/finance/sales pemiliknya. Belum ada baris reimburse di DEV dan layar cabang ini
+   belum punya pilihannya, tetapi RPC `simpan_klaim_ehc` sudah menerimanya. Rekomendasi: keputusan 6 juga berlaku untuk
+   klaim EHC reimburse — rekening tidak disalin (dibaca dari `sales_rep_rekening` saat dibayar), dikerjakan sesi EHC
+   bersama perubahan layarnya; rekening PIC pelanggan (cara "transfer") tetap seperti sekarang.
 2. **Nama pelanggan ganda**: sales bisa PATCH nama pelanggannya jadi persis nama pelanggan sales lain, dan POST
    `/customers` dengan nama ganda lolos (hanya `buat_pelanggan_baru` yang menolak). Uji: Iwan → "PT Garuda Metalindo".
    → **SELESAI berkas 138 (DEV 9 Okt)** + FE — keputusan 8a, 9, 10a, 17a (menutup juga sisa (1) review 134):
