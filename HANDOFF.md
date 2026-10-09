@@ -287,6 +287,15 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    `/customers` dengan nama ganda lolos (hanya `buat_pelanggan_baru` yang menolak). Uji: Iwan → "PT Garuda Metalindo".
 3. **View `usulan_produk`** (milik postgres, bukan security_invoker): semua sales membaca seluruh usulan, pembuatnya,
    dan customer PO sales lain.
+   → **SELESAI berkas 136 (DEV 9 Okt)** + FE (teks): view `security_invoker = on` (isi/kolom/opsi B sama persis),
+   baris: owner/GM/staff semua, peran lain hanya buatannya / dipakai di PO-SP yang boleh ia lihat; anon tanpa hak,
+   authenticated hanya SELECT. Uji DEV rollback (data A–G): owner/GM A,B(2 customer, q=7),C,E,G (D & F tersembunyi —
+   opsi B); Hendri A; Alfred B(q=3),C; Iwan B(q=4),E,F(0/0),G; Vonny A,B,E,G; staff A,B,C,G(sp=0) — E tersembunyi
+   (keputusan 11); Lie Sian kosong; finance A,B; anon ditolak. Layar uji_usulan 4/4, regresi uji59b 16/16.
+   Disengaja: `products.usulan_teks/dibuat_oleh` tetap terbaca semua sales (#59). Diketahui: usulan buatan sales X yang
+   hanya ada di penawaran sales lain tampil di antrean X dengan 0/0; staff melihat usulan yang hanya dipakai di SP
+   menunggu Vonny dengan Dipakai SP 0. **Verifikator:** usulan_produk wajib security_invoker=on & anon tanpa SELECT;
+   jangan revoke kolom products.dibuat_oleh.
 4. **`quote_lines` tanpa penjaga baris**: INSERT teks bebas (tanpa product/set) lewat REST lolos — `jaga_jenis_baris`
    tidak terpasang (butuh fungsi baru; quote_lines tidak punya kolom jenis).
 5. **Total SP lunas bisa naik**: GM bisa PATCH `sales_order_lines.ehc_item` SP tanpa PO yang sudah ber-invoice/lunas

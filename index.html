@@ -19097,7 +19097,10 @@ function blokUsulanProduk(){
     + 'dengan nama lain, sahkan memakai <b>kode internal RHJ yang sudah dipakai</b>, jangan '
     + 'nama tulisan customer.'
     + '<br>Barang baru yang diusulkan dari <b>penawaran</b> baru tampil di sini setelah dipakai di PO/SP (#59).'
-    + (boleh ? '' : '<br><br>Peran Anda hanya bisa melihat. Yang boleh memutuskan: owner, GM, staff.')
+    /* Keamanan #3 (berkas 136): view usulan_produk ikut hak baca pembacanya — selain owner/GM/staff, yang tampil hanya
+       usulan yang ia buat atau yang dipakai di PO/SP miliknya, dengan customer/qty/hitungan dari dokumennya saja. */
+    + (boleh ? '' : '<br><br>Yang tampil hanya usulan item Anda sendiri — yang Anda usulkan atau yang dipakai di PO/SP Anda; '
+        + 'kolom Customer, Qty, dan jumlah PO/SP hanya dihitung dari dokumen Anda. Yang boleh mengesahkan: owner, GM, staff.')
     + '</div></div>'
     + '<div class="tw"><table><thead><tr><th class="l">Tulisan di PO</th><th class="l">Customer</th>'
     + '<th>Qty diminta</th><th>Dipakai PO</th><th>Dipakai SP</th><th></th></tr></thead><tbody>'
