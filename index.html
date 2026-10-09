@@ -15069,8 +15069,9 @@ function panelGmAntre(){
      GM melihat angka 0 sementara di bawahnya ada barang yang menahan SP —
      angka yang salah lebih buruk daripada tidak ada angka. */
   var nUsulan = USULAN.baris.length;
+  var usulanGagal = USULAN.galat && !nUsulan;   /* review 136: gagal muat → "?" bukan 0 */
   var h = '<h3 class="sec">Angka utama</h3><div class="tiles">'
-    + tile("Menunggu keputusan", G.baris.length + nUsulan, "termasuk usulan item",
+    + tile("Menunggu keputusan", G.baris.length + nUsulan, usulanGagal ? "usulan item belum terhitung" : "termasuk usulan item",
            (G.baris.length + nUsulan) ? "alert" : "", "gm:semua")
     + tile("Harga di bawah / tanpa list", per.harga || 0, "SP tertahan", "", "gm:harga")   /* #33 */
     + tile("Invoice lewat 120 hari", per.telat || 0, "komisi perlu diputuskan", "", "gm:telat")
@@ -15084,7 +15085,8 @@ function panelGmAntre(){
            per.tanpa_po ? "alert" : "", "gm:tanpa_po")
     + tile("EHC minta cair cepat", per.ehc_cepat || 0, "di luar rekap bulanan",
            per.ehc_cepat ? "alert" : "", "gm:ehc_cepat")
-    + tile("Usulan item dari PO", nUsulan, "belum ada di master", nUsulan ? "alert" : "", "gm:usulan")
+    + tile("Usulan item dari PO", usulanGagal ? "?" : nUsulan, usulanGagal ? "gagal dimuat" : "belum ada di master",
+           (nUsulan || usulanGagal) ? "alert" : "", "gm:usulan")
     /* #16: jenis yang ikut dihitung "Menunggu keputusan" tapi dulu tanpa tile */
     + (per.ehc_dini ? tile("Klaim EHC dini", per.ehc_dini, "sebelum SP lunas", "alert", "gm:ehc_dini") : "")
     + (per.rekening ? tile("Ubah rekening PIC", per.rekening, "rekening terkunci mau diganti", "alert", "gm:rekening") : "")
@@ -15952,7 +15954,8 @@ var LAPORAN = {
          + "di sana akan menghitung SP yang sama berkali-kali. Potongan <b>kategori</b> "
          + "(Roda, Pallet Mesh, Hospital, …) sama seperti produk: Grand Total dan Komisi "
          + "kosong, dan SP yang memuat dua kategori terhitung di keduanya pada kolom "
-         + "“Jumlah SP”. Baris SP yang dibatalkan tidak ikut.",   /* #26 */
+         + "“Jumlah SP”. Baris SP yang dibatalkan tidak ikut."   /* #26 */
+         + "<br><br>SP yang masih <b>menunggu cek Vonny</b> hanya terhitung untuk owner, GM, Vonny, dan sales (pemilik/pembuat) SP itu; peran lain baru melihatnya di laporan sesudah dicek Vonny — angkanya bisa berbeda antar peran selama ada SP yang menunggu.",   /* review 136 (berkas 136c): ikut aturan baca SP berkas 83 */
     rpc:   "/rpc/laporan_penjualan",
     tanggal: true,
     dimensi: true,
@@ -15988,7 +15991,8 @@ var LAPORAN = {
          + "beli disesuaikan.<br><br>"
          + "Baris yang HPP-nya belum pernah diisi <b>tidak dianggap nol</b> — qty-nya "
          + "berdiri di kolom “Qty tanpa HPP”. Kalau kolom itu berisi, angka marginnya "
-         + "belum lengkap.",
+         + "belum lengkap."
+         + "<br><br>SP yang masih <b>menunggu cek Vonny</b> hanya terhitung untuk owner, GM, Vonny, dan sales (pemilik/pembuat) SP itu; peran lain baru melihatnya di laporan sesudah dicek Vonny — angkanya bisa berbeda antar peran selama ada SP yang menunggu.",   /* berkas 136c */
     rpc:   "/rpc/laporan_margin_produk",
     tanggal: true,
     peran: function(){ return bolehLaporanMargin(); },
@@ -16013,7 +16017,8 @@ var LAPORAN = {
          + "tapi <b>“kesepakatan mana yang sebenarnya tidak menguntungkan”</b>. Satu SP bisa "
          + "berisi produk bermargin tebal dan tipis sekaligus, dan yang ditandatangani orang "
          + "adalah SP-nya.<br><br>Diurut dari margin paling tipis — itu yang perlu dilihat "
-         + "lebih dulu.",
+         + "lebih dulu."
+         + "<br><br>SP yang masih <b>menunggu cek Vonny</b> hanya terhitung untuk owner, GM, Vonny, dan sales (pemilik/pembuat) SP itu; peran lain baru melihatnya di laporan sesudah dicek Vonny — angkanya bisa berbeda antar peran selama ada SP yang menunggu.",   /* berkas 136c */
     rpc:   "/rpc/laporan_margin_sp",
     tanggal: true,
     peran: function(){ return bolehLaporanMargin(); },
@@ -19137,14 +19142,15 @@ function saringProduk(){
    SKU baru, price list, HPP, dan komisi ikut terpecah untuk barang yang
    sebenarnya satu. Karena itu "Gabungkan" berdiri sejajar dengan
    "Sahkan", bukan disembunyikan di balik satu tombol "Putuskan". */
-var USULAN = { baris: [], dimuat: false, memuat: false };
+var USULAN = { baris: [], dimuat: false, memuat: false, galat: false };
 
 function muatUsulan(){
   if (USULAN.memuat) return Promise.resolve();
   USULAN.memuat = true;
   return api("GET", "/usulan_produk?select=*&order=dibuat_pada.desc")
-    .then(function(r){ USULAN.baris = r || []; USULAN.dimuat = true; USULAN.memuat = false; })
-    .catch(function(){ USULAN.memuat = false; if (!USULAN.dimuat) USULAN.baris = []; USULAN.dimuat = true; });   /* #52: gagal muat ulang → daftar lama tetap */
+    .then(function(r){ USULAN.baris = r || []; USULAN.dimuat = true; USULAN.memuat = false; USULAN.galat = false; })
+    .catch(function(){ USULAN.memuat = false; if (!USULAN.dimuat) USULAN.baris = []; USULAN.dimuat = true;   /* #52: gagal muat ulang → daftar lama tetap */
+                       USULAN.galat = true; });   /* review 136: gagal muat tidak terbaca "0 usulan" */
 }
 
 function blokUsulanProduk(){
@@ -19152,7 +19158,11 @@ function blokUsulanProduk(){
     muatUsulan().then(function(){ if (tabAktif === "gm") panelGmAntre(); });
     return '';
   }
-  if (!USULAN.baris.length) return '';
+  if (!USULAN.baris.length) {
+    /* review 136: daftar usulan gagal dimuat (jaringan / batas waktu) → katakan, jangan diam-diam dianggap kosong */
+    return USULAN.galat ? '<div class="flag" id="gm-usulan"><span class="f-ico">!</span><div>Usulan item dari PO/SP gagal '
+      + 'dimuat — angkanya belum terhitung di ubin. Buka lagi tab ini atau muat ulang halaman.</div></div>' : '';
+  }
   var boleh = bolehUbahProduk();
   var h = '<h3 class="sec" id="gm-usulan">Usulan item dari PO/SP — ' + USULAN.baris.length + ' menunggu</h3>'
     + '<div class="flag"><span class="f-ico">!</span><div>'
@@ -21116,7 +21126,7 @@ window.__alur = {
        "sudah dimuat"; tanpa direset, bagian uji berikutnya memakai isi
        bagian sebelumnya dan yang gagal terlihat gagal karena sebab lain. */
     LANJUT.gm.baris = []; LANJUT.gm.dimuat = false; LANJUT.gm.memuat = false;
-    USULAN.baris = []; USULAN.dimuat = false; USULAN.memuat = false;
+    USULAN.baris = []; USULAN.dimuat = false; USULAN.memuat = false; USULAN.galat = false;
     if (o.produk) { KODEPABRIK = o.kodepabrik || []; hitungProduk(); }
     if (o.order) { ORDER = o.order; BAYAR = o.bayar || []; hitungTurunan(); }
     if (o.dokumen) DOKUMEN = o.dokumen;

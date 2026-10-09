@@ -324,6 +324,24 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    hanya ada di penawaran sales lain tampil di antrean X dengan 0/0; staff melihat usulan yang hanya dipakai di SP
    menunggu Vonny dengan Dipakai SP 0. **Verifikator:** usulan_produk wajib security_invoker=on & anon tanpa SELECT;
    jangan revoke kolom products.dibuat_oleh.
+   **Review adversarial 136** (pemeriksa bocor/fungsi + verifikator; 3 terkonfirmasi, semua di luar view itu sendiri):
+   (a, sedang) **136b**: view invoker memindai po_lines/sales_order_lines/quote_lines tanpa indeks product_id di bawah
+   RLS → indeks `po_lines_product_idx`, `sol_product_idx`, `quote_lines_product_idx` (DEV rollback 20 usulan: owner
+   17 ms, Iwan 21 ms; sebelumnya ±2,5–4 detik) + layar: gagal memuat usulan ditandai ("?" di ubin, catatan di
+   antrean), bukan dianggap 0. **136b WAJIB naik bersama 136 ke PROD.** (b, sedang) **136c**: laporan_penjualan
+   (produk, kategori, sales, pelanggan), laporan_margin_produk, laporan_margin_sp (SECURITY DEFINER) menghitung SP
+   yang menunggu cek Vonny untuk staff/finance/Lie Sian/Ichi/Lenni — melompati aturan baca berkas 83 (finance bahkan
+   melihat nomor SP, Kepada, sales-nya) → fungsi `sp_terbaca(...)` (cermin so_baca, di-inline) ditambahkan pada setiap
+   pemindaian SP (ganti teks definisi hidup dengan pemeriksaan jangkar); (c, rendah) view `harga_khusus_lengkap` (tanpa
+   invoker): no_sp & dipakai_baris dari semua SP → security_invoker = on (isi sama), anon tanpa hak, authenticated
+   SELECT. Uji DEV rollback (usulan di SP 168 menunggu vonny): staff/finance/Lie Sian/Ichi/Lenni → laporan produk,
+   pelanggan, margin tanpa SP itu, sales rep 9: 7 SP (owner 9); sesudah vonny_ok → terlihat; owner/GM/Vonny tidak
+   berubah; harga khusus SP 152: staff/finance/Lenni no_sp kosong & dipakai 0, owner/GM/Vonny 004/MCE/X/2026 & 1.
+   Waktu laporan owner ≤ 90 ms. Layar laporan diberi keterangan. **Untuk Hannes (informasi):** angka laporan
+   staff/finance/Lie Sian/Ichi/Lenni kini lebih kecil daripada owner/GM selama ada SP menunggu cek Vonny — mengikuti
+   aturan berkas 83. Bila finance ingin tetap melihat SP menunggu di laporan margin, itu pengecualian yang perlu
+   diputuskan. **Verifikator:** sp_terbaca wajib sama dengan so_baca; harga_khusus_lengkap wajib security_invoker
+   (berkas 115 membuatnya ulang tanpa klausa itu — jangan dijalankan ulang sesudah 136c).
 4. **`quote_lines` tanpa penjaga baris**: INSERT teks bebas (tanpa product/set) lewat REST lolos — `jaga_jenis_baris`
    tidak terpasang (butuh fungsi baru; quote_lines tidak punya kolom jenis).
    → **SELESAI berkas 137 (DEV 9 Okt)**, desain dikoreksi kritik (cap waktu kepala bisa dipalsukan lewat PATCH quotes;
@@ -344,6 +362,18 @@ Dari uji 50–61 (terbukti di DEV dalam transaksi yang dibatalkan):
    VALIDATE ditunda otomatis (NOTICE), laporkan; (3) index.html PROD yang baru (menyimpan lewat simpan_penawaran)
    naik bersama paket ini — index.html lama yang POST /quote_lines langsung akan ditolak. harga_list baris penawaran
    tetap kiriman klien (hanya tanda "di bawah list" di arsip; tidak dipakai gerbang).
+   **Review adversarial 137** (2 pemeriksa + verifikator; penguncian bertahan di semua serangan — upsert ON CONFLICT,
+   INSERT ke penawaran lama, kepala tanpa baris, fungsi definer lain; 1 terkonfirmasi) → **berkas 137b (DEV 9 Okt)**:
+   nama barang & satuan baris masih kiriman klien — lewat POST /rpc/simpan_penawaran langsung, baris set/produk bisa
+   mencetak nama bebas ("Forklift Toyota 3 ton") dan satuan bebas. `jaga_baris_quote` kini: produk → deskripsi tetap
+   hanya bila sama dengan kode / teks usulan (huruf besar-kecil tidak dihitung), selain itu kode; satuan hanya 'pcs'
+   atau satuan master; set master → nama set & 'set'; set inline → label dari isinya (label_set_inline, sama dengan
+   label layar) & 'set'. Spesifikasi tetap bebas. FE tidak berubah. Uji DEV rollback (Iwan, simpan_penawaran 6 baris):
+   set inline palsu → "Set 05 PU 6" (2 rem + 2 mati)"/set; produk 70 palsu + 'lot' → kode/pcs; set master palsu +
+   'unit' → "Set Uji 137b"/set; produk 69 sah + spesifikasi → tetap; kode huruf kecil → tetap; usulan → teks usulan.
+   **Cek PROD sebelum rilis 137b (informasi):** `select count(*) from quote_lines l join products p on p.id =
+   l.product_id where lower(btrim(l.deskripsi)) not in (lower(btrim(p.kode)), lower(btrim(coalesce(p.usulan_teks,
+   p.kode))));` — baris lama tidak diubah; salinan penawaran lama (#44) akan memakai kode master.
 5. **Total SP lunas bisa naik**: GM bisa PATCH `sales_order_lines.ehc_item` SP tanpa PO yang sudah ber-invoice/lunas
    (SP 150: 1.640.000 → 1.740.000) — `periksa_total_sp` keluar bila SP tanpa PO. (Area #54 — sesi EHC.)
 6. **Klaim EHC/komisi** (area #61 — sesi EHC): owner/GM/staff/finance bisa ubah nominal lewat REST
