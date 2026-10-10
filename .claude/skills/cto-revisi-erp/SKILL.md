@@ -9,9 +9,11 @@ Satu revisi per satu. Jangan lompat langkah; laporkan bila ada langkah yang dile
 
 ## 0. Siapkan konteks
 - Baca `ATURAN.md` (A + B) dan `HANDOFF.md`. Catat nomor migrasi terakhir: `ls db | sort -V | tail -3`.
-- Cari kode terkait: `grep -n "<nama fungsi/tab/RPC>" index.html db/*.sql`. Fungsi DB yang berlaku adalah
-  definisi **terakhir** di migrasi bernomor tertinggi — cek juga langsung di DEV:
-  `select pg_get_functiondef('public.<fungsi>'::regprocedure);`
+- **Hemat token:** buka `PETA-KODE.md` dulu untuk menemukan bagian/fungsi/RPC, lalu baca `index.html` hanya
+  pada rentang barisnya. Jangan membaca `index.html` utuh (±1,1 MB).
+- Definisi DB: `grep -rn "<nama>" db/*.sql db/_snapshot/`. Yang berlaku adalah definisi **terakhir** di migrasi
+  bernomor tertinggi; objek dari migrasi 1–58 ada di `db/_snapshot/`. Query katalog DEV
+  (`pg_get_functiondef`) hanya bila snapshot mungkin basi atau untuk memastikan sebelum mengubah.
 
 ## 1. Uji tabrakan (wajib, sebelum menulis kode)
 Jalankan skill `cto-uji-dampak`. Bila hasilnya **menabrak** → berhenti, lapor ke Hannes, tunggu keputusan.
@@ -56,6 +58,8 @@ Ikuti `references/uji-migrasi.md`. Minimal:
 ## 6. Catat & kirim
 - Aturan bisnis baru/berubah → tambahkan ke `ATURAN.md` B **dalam commit yang sama**.
 - Perbarui tabel di `HANDOFF.md` (revisi, isi, migrasi) dan "Catatan untuk Hannes".
+- Bila `index.html` berubah: `python3 alat/peta-kode.py` (perbarui `PETA-KODE.md`). Bila migrasi baru menyentuh
+  objek yang ada di `db/_snapshot/`, perbarui berkas snapshot-nya (lihat `db/_snapshot/README.md`).
 - Commit per revisi: `feat(#N): <ringkas> (DB NNN + FE)` atau `fix(#N): …`. Tanpa trailer Co-Authored-By.
 - `git push -u origin <branch-sesi>`. PR hanya bila Hannes meminta.
 

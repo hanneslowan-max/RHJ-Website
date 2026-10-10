@@ -15,6 +15,8 @@ Bahasa kerja: **Bahasa Indonesia**, lugas, pakai istilah bisnis (bukan jargon) s
 |---|---|
 | `index.html` | Seluruh front-end ERP (satu berkas, ±19 ribu baris, JS tanpa build). Alamat menentukan database: `admin.palletmeshindonesia.com` → PROD, `dev.palletmeshindonesia.com` → DEV (objek `SITUS`). |
 | `db/NNN-nama.sql` | Migrasi Supabase berurutan (sekarang sampai 115). Setiap berkas diawali blok komentar: nomor, revisi (#..), apa yang berubah, dan "data yang diubah". |
+| `PETA-KODE.md` | Peta `index.html`: bagian + rentang baris, fungsi utama, RPC & tabel per bagian, tab → panel → peran. **Buka ini dulu** sebelum membaca `index.html`; baca hanya rentang barisnya. Dibuat ulang dengan `python3 alat/peta-kode.py`. |
+| `db/_snapshot/` | Definisi objek DB yang hanya ada di DEV (migrasi 1–58): fungsi, view, semua policy & trigger. `grep` di sini sebelum query katalog DEV. |
 | `infodb.md` | Snapshot skema (hanya konteks, bukan untuk dijalankan). |
 | `ATURAN.md` | Aturan kerja (A) dan aturan bisnis yang berlaku (B). **Hukum tertinggi repo ini.** |
 | `HANDOFF.md` | Serah-terima antar sesi: status revisi, migrasi, catatan untuk Hannes, langkah berikut. |
